@@ -841,6 +841,82 @@ impl Database {
         }
         Ok(())
     }
+
+    pub fn ensure_bootstrap_workspace_grant(&self) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let active_grants: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM workspace_grants WHERE revoked_at IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if active_grants > 0 {
+            if active_grants == 1 {
+                let existing: Option<(String, String, String)> = conn
+                    .query_row(
+                        "SELECT id, path, granted_by
+                         FROM workspace_grants
+                         WHERE revoked_at IS NULL
+                         LIMIT 1",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+
+                if let Some((id, path, granted_by)) = existing {
+                    if granted_by == "bootstrap" {
+                        let existing_path = PathBuf::from(path);
+                        let should_promote_parent = existing_path
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .map(|value| value == "src-tauri")
+                            .unwrap_or(false);
+                        if should_promote_parent {
+                            if let Some(parent) = existing_path.parent() {
+                                if parent.join("package.json").is_file() {
+                                    let canonical_parent = parent.canonicalize().map_err(|error| {
+                                        AppError::Policy(format!(
+                                            "Unable to canonicalize promoted workspace path: {}",
+                                            error
+                                        ))
+                                    })?;
+                                    conn.execute(
+                                        "UPDATE workspace_grants SET path = ?1 WHERE id = ?2",
+                                        params![canonical_parent.to_string_lossy(), id],
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        let default_path = default_workspace_candidate()?;
+        if !default_path.is_absolute() || !default_path.exists() || !default_path.is_dir() {
+            return Err(AppError::Policy(format!(
+                "Bootstrap workspace path '{}' is not a valid directory",
+                default_path.to_string_lossy()
+            )));
+        }
+        let canonical = default_path
+            .canonicalize()
+            .map_err(|error| AppError::Policy(format!("Unable to resolve bootstrap workspace path: {}", error)))?;
+
+        conn.execute(
+            "INSERT INTO workspace_grants (id, path, granted_by, granted_at, revoked_at)
+             VALUES (?1, ?2, 'bootstrap', ?3, NULL)",
+            params![
+                Uuid::new_v4().to_string(),
+                canonical.to_string_lossy(),
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 fn parse_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
@@ -948,6 +1024,42 @@ fn merge_json(target: &mut serde_json::Value, update: serde_json::Value) {
     }
 }
 
+fn default_workspace_candidate() -> AppResult<PathBuf> {
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value == "src-tauri")
+            .unwrap_or(false)
+        {
+            if let Some(parent) = cwd.parent() {
+                if parent.join("package.json").is_file() {
+                    return Ok(parent.to_path_buf());
+                }
+            }
+        }
+        return Ok(cwd);
+    }
+
+    #[cfg(unix)]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return Ok(PathBuf::from(home));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            return Ok(PathBuf::from(home));
+        }
+    }
+
+    Err(AppError::Policy(
+        "Unable to determine a default workspace path".to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::Database;
@@ -1005,5 +1117,18 @@ mod tests {
             .expect("profile exists");
         assert_eq!(loaded.id, saved.id);
         assert_eq!(loaded.provider, Provider::Claude);
+    }
+
+    #[test]
+    fn bootstrap_grant_is_created_when_none_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db = Database::new(&db_path).expect("db");
+
+        db.ensure_bootstrap_workspace_grant()
+            .expect("bootstrap grant");
+        let grants = db.list_workspace_grants().expect("list grants");
+        assert!(!grants.is_empty());
+        assert!(grants.iter().any(|grant| grant.revoked_at.is_none()));
     }
 }

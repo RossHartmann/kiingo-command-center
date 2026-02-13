@@ -142,6 +142,10 @@ impl RunnerCore {
             app_data_dir,
         });
 
+        if let Err(error) = this.db.ensure_bootstrap_workspace_grant() {
+            tracing::warn!(error = %error, "failed to create bootstrap workspace grant");
+        }
+
         if let Ok(interrupted) = this.db.mark_orphan_runs_interrupted() {
             if interrupted > 0 {
                 tracing::warn!(count = interrupted, "marked orphaned runs as interrupted on startup");
@@ -492,6 +496,12 @@ impl RunnerCore {
         builder.cwd(&command_spec.cwd);
         for (key, value) in &command_spec.env {
             builder.env(key, value);
+        }
+        if !command_spec.env.contains_key("TERM") {
+            builder.env("TERM", "xterm-256color");
+        }
+        if !command_spec.env.contains_key("COLORTERM") {
+            builder.env("COLORTERM", "truecolor");
         }
 
         let mut child = match pair.slave.spawn_command(builder) {
@@ -1654,6 +1664,19 @@ impl RunnerCore {
         if let Some(progress) = adapter.parse_chunk(stream, &redacted_text) {
             self.emit_event(run_id, "run.progress", progress).await?;
         }
+        if let Some((severity, message)) = detect_diagnostic_line(&redacted_text) {
+            self.emit_event(
+                run_id,
+                "run.progress",
+                json!({
+                    "stage": "stream_diagnostic",
+                    "severity": severity,
+                    "stream": stream,
+                    "message": message
+                }),
+            )
+            .await?;
+        }
 
         Ok(redacted_text)
     }
@@ -1957,6 +1980,23 @@ fn sanitize_terminal_chunk(value: &str) -> String {
     stripped.replace('\r', "")
 }
 
+fn detect_diagnostic_line(line: &str) -> Option<(&'static str, String)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains(" error") || lower.starts_with("error:") || lower.starts_with("fatal:") {
+        return Some(("error", trimmed.to_string()));
+    }
+    if lower.contains(" warn") || lower.starts_with("warning:") || lower.starts_with("warn:") {
+        return Some(("warning", trimmed.to_string()));
+    }
+
+    None
+}
+
 fn render_markdown_export(detail: &RunDetail) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Run {}\n\n", detail.run.id));
@@ -1989,7 +2029,7 @@ fn render_text_export(detail: &RunDetail) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunExecutionPath, RunnerCore};
+    use super::{detect_diagnostic_line, RunExecutionPath, RunnerCore};
     use crate::models::{AppSettings, Provider, RunMode, SaveProfilePayload, StartRunPayload};
     use std::collections::BTreeMap;
 
@@ -2127,5 +2167,19 @@ mod tests {
             std::path::Path::new(&resolved),
             binary.canonicalize().expect("canonical").as_path()
         );
+    }
+
+    #[test]
+    fn detects_warning_and_error_diagnostic_lines() {
+        let warning = detect_diagnostic_line("Warning: model fell back");
+        assert!(warning.is_some());
+        assert_eq!(warning.expect("warning").0, "warning");
+
+        let error = detect_diagnostic_line("ERROR: stream disconnected");
+        assert!(error.is_some());
+        assert_eq!(error.expect("error").0, "error");
+
+        let none = detect_diagnostic_line("regular informational output");
+        assert!(none.is_none());
     }
 }

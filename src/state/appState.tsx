@@ -42,7 +42,7 @@ import type {
   WorkspaceGrant
 } from "../lib/types";
 
-export type Screen = "composer" | "live" | "history" | "profiles" | "settings" | "compatibility" | "queue";
+export type Screen = "chat" | "composer" | "live" | "history" | "profiles" | "settings" | "compatibility" | "queue";
 const MAX_DETAIL_EVENTS = 2000;
 
 interface State {
@@ -75,7 +75,7 @@ type Action =
   | { type: "append_event"; runId: string; run: RunRecord; event: RunEvent };
 
 const initialState: State = {
-  selectedScreen: "composer",
+  selectedScreen: "chat",
   runs: [],
   runDetails: {},
   profiles: [],

@@ -263,6 +263,69 @@ button.primary {
   gap: 0.5rem;
 }
 
+.chat-shell {
+  grid-template-rows: auto 1fr auto;
+  min-height: 70vh;
+}
+
+.chat-toolbar {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  gap: 0.8rem;
+  align-items: end;
+}
+
+.chat-messages {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffef8;
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+  min-height: 420px;
+  max-height: 62vh;
+  overflow: auto;
+}
+
+.chat-empty {
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.chat-bubble {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.chat-bubble header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.chat-bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-bubble.user {
+  background: #edf6ff;
+}
+
+.chat-bubble.assistant {
+  background: #f7f3e8;
+}
+
+.chat-input {
+  display: grid;
+  gap: 0.6rem;
+}
+
 .history-row {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -334,7 +397,8 @@ button.primary {
   .split-grid,
   .composer-grid,
   .toolbar-grid,
-  .meta-grid {
+  .meta-grid,
+  .chat-toolbar {
     grid-template-columns: 1fr;
   }
 
