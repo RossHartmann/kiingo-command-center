@@ -204,6 +204,13 @@ pub fn run() {
             tauri::async_runtime::spawn({
                 let runner = runner.clone();
                 async move {
+                    runner.start_scheduler();
+                }
+            });
+
+            tauri::async_runtime::spawn({
+                let runner = runner.clone();
+                async move {
                     runner.attach_app_handle(handle).await;
                 }
             });

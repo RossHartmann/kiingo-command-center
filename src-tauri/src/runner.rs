@@ -159,9 +159,12 @@ impl RunnerCore {
                 }
             })
         }));
-        scheduler.start();
 
         Ok(this)
+    }
+
+    pub fn start_scheduler(&self) {
+        self.scheduler.start();
     }
 
     pub async fn attach_app_handle(&self, app_handle: AppHandle) {
