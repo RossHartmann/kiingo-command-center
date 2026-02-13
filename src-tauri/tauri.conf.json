@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Local CLI Command Center",
+  "version": "0.1.0",
+  "identifier": "com.kiingo.localcli",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Local CLI Command Center",
+        "width": 1440,
+        "height": 960,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self';"
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": false,
+      "scope": [
+        {
+          "name": "codex",
+          "cmd": "codex",
+          "args": true
+        },
+        {
+          "name": "claude",
+          "cmd": "claude",
+          "args": true
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "nsis"],
+    "createUpdaterArtifacts": false,
+    "category": "DeveloperTool"
+  }
+}

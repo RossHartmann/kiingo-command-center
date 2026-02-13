@@ -1,0 +1,36 @@
+{
+  "codex": [
+    {
+      "minVersion": "0.24.0",
+      "maxVersion": "1.99.99",
+      "supportedFlags": [
+        "--model",
+        "--json",
+        "--output-schema",
+        "--output-last-message",
+        "--sandbox",
+        "--skip-git-repo-check",
+        "--ephemeral"
+      ],
+      "supportsInteractive": true
+    }
+  ],
+  "claude": [
+    {
+      "minVersion": "0.20.0",
+      "maxVersion": "1.99.99",
+      "supportedFlags": [
+        "--output-format",
+        "--input-format",
+        "--json-schema",
+        "--model",
+        "--max-budget-usd",
+        "--no-session-persistence",
+        "--max-turns",
+        "--mcp-config",
+        "--strict-mcp-config"
+      ],
+      "supportsInteractive": true
+    }
+  ]
+}
