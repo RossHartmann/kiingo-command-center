@@ -326,6 +326,133 @@ button.primary {
   gap: 0.6rem;
 }
 
+.shortcut-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fffaf0;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+.shortcut-hint kbd {
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 0.1rem 0.35rem;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.76rem;
+}
+
+.shortcut-hint strong {
+  color: var(--ink-muted);
+  font-size: 0.76rem;
+}
+
+.shortcut-hint.ready {
+  border-color: var(--accent);
+  background: #eaf7f2;
+  color: var(--accent-strong);
+}
+
+.shortcut-hint.ready strong {
+  color: var(--accent-strong);
+}
+
+.harness-loading {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--info-bg);
+  padding: 0.55rem 0.65rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.harness-loading.inline {
+  margin-top: 0.2rem;
+}
+
+.harness-loading-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink-muted);
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+.typing-dots span {
+  width: 0.34rem;
+  height: 0.34rem;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  opacity: 0.3;
+  animation: typing-dot 900ms ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.harness-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: #d6ebe4;
+  overflow: hidden;
+}
+
+.harness-progress span {
+  display: block;
+  width: 36%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7ecab4, var(--accent), #7ecab4);
+  transform: translateX(-110%);
+  animation: harness-progress 1200ms ease-in-out infinite;
+}
+
+@keyframes typing-dot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    transform: translateY(-2px);
+    opacity: 0.95;
+  }
+}
+
+@keyframes harness-progress {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots span,
+  .harness-progress span {
+    animation: none;
+    transform: none;
+    opacity: 0.8;
+  }
+}
+
 .history-row {
   border: 1px solid var(--line);
   border-radius: 10px;

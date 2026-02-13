@@ -212,13 +212,19 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
 
   useEffect(() => {
     let unlisten: Unlisten = null;
+    let disposed = false;
     void onRunEvent((event) => {
       onRunEventUpdate(safeDispatch, runsRef.current, runDetailsRef.current, event);
     }).then((dispose) => {
+      if (disposed) {
+        dispose();
+        return;
+      }
       unlisten = dispose;
     });
 
     return () => {
+      disposed = true;
       if (unlisten) {
         unlisten();
       }

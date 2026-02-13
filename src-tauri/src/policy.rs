@@ -47,6 +47,8 @@ impl PolicyEngine {
             "max-budget-usd",
             "no-session-persistence",
             "max-turns",
+            "resume",
+            "verbose",
         ]
         .into_iter()
         .map(ToString::to_string)
@@ -243,6 +245,9 @@ impl PolicyEngine {
             .collect();
 
         for key in flags.keys() {
+            if is_internal_optional_flag(key) {
+                continue;
+            }
             self.validate_flag_key(
                 key,
                 allowed_base,
@@ -296,6 +301,10 @@ impl PolicyEngine {
 
         Ok(())
     }
+}
+
+fn is_internal_optional_flag(key: &str) -> bool {
+    key.starts_with("__")
 }
 
 fn normalize_path(path: &str) -> AppResult<PathBuf> {
@@ -479,5 +488,54 @@ mod tests {
 
         let result = engine.validate(&payload, &AppSettings::default(), &[grant], &cap);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn ignores_internal_optional_flags() {
+        let engine = PolicyEngine::new();
+        let cwd = std::env::temp_dir().join("policy-internal-flag-test");
+        let _ = std::fs::create_dir_all(&cwd);
+        let path = cwd.to_string_lossy().to_string();
+
+        let mut flags = BTreeMap::new();
+        flags.insert("__resume_session_id".to_string(), serde_json::json!("session-1"));
+
+        let payload = StartRunPayload {
+            provider: Provider::Codex,
+            prompt: "hello".to_string(),
+            model: None,
+            mode: RunMode::NonInteractive,
+            output_format: Some("text".to_string()),
+            cwd: path.clone(),
+            optional_flags: flags,
+            profile_id: None,
+            queue_priority: None,
+            timeout_seconds: None,
+            scheduled_at: None,
+            max_retries: None,
+            retry_backoff_ms: None,
+        };
+
+        let grant = WorkspaceGrant {
+            id: "3".to_string(),
+            path,
+            granted_by: "test".to_string(),
+            granted_at: Utc::now(),
+            revoked_at: None,
+        };
+
+        let cap = CapabilityProfile {
+            provider: Provider::Codex,
+            cli_version: "1.0.0".to_string(),
+            supported: true,
+            degraded: false,
+            blocked: false,
+            supported_flags: vec!["--model".to_string(), "--json".to_string()],
+            supported_modes: vec![RunMode::NonInteractive],
+            disabled_reasons: vec![],
+        };
+
+        let result = engine.validate(&payload, &AppSettings::default(), &[grant], &cap);
+        assert!(result.is_ok());
     }
 }

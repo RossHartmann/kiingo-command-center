@@ -43,6 +43,8 @@ static ANSI_ESCAPE_RE: Lazy<regex::Regex> = Lazy::new(|| {
 
 const MAX_BUFFERED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BUFFERED_OUTPUT_LINES: usize = 4_000;
+const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+const DEFAULT_CLAUDE_MODEL: &str = "sonnet";
 
 #[derive(Default)]
 struct OutputBuffer {
@@ -199,7 +201,8 @@ impl RunnerCore {
         let settings = self.db.get_settings()?;
         self.apply_runtime_settings(&settings).await;
 
-        let effective_payload = self.apply_profile_if_selected(payload)?;
+        let effective_payload =
+            self.normalize_payload_defaults(self.apply_profile_if_selected(payload)?);
 
         let configured_binary = match effective_payload.provider {
             Provider::Codex => settings.codex_path.clone(),
@@ -1308,8 +1311,24 @@ impl RunnerCore {
     }
 
     pub async fn send_session_input(&self, run_id: &str, data: String) -> AppResult<AcceptedResponse> {
-        self.sessions.send_input(run_id, data).await?;
-        Ok(AcceptedResponse { accepted: true })
+        match self.sessions.send_input(run_id, data).await {
+            Ok(()) => Ok(AcceptedResponse { accepted: true }),
+            Err(error) => {
+                tracing::warn!(run_id = %run_id, error = %error, "session input rejected");
+                let _ = self
+                    .emit_event(
+                        run_id,
+                        "run.progress",
+                        json!({
+                            "stage": "session_input_rejected",
+                            "severity": "warning",
+                            "message": error.to_string()
+                        }),
+                    )
+                    .await;
+                Err(error)
+            }
+        }
     }
 
     pub async fn end_session(&self, run_id: &str) -> AppResult<BooleanResponse> {
@@ -1822,6 +1841,34 @@ impl RunnerCore {
         Ok(payload)
     }
 
+    fn normalize_payload_defaults(&self, mut payload: StartRunPayload) -> StartRunPayload {
+        payload.model = payload
+            .model
+            .and_then(|model| {
+                let trimmed = model.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            });
+
+        match payload.provider {
+            Provider::Codex => match payload.model.as_deref() {
+                Some(model) if is_known_bad_codex_model(model) => {
+                    payload.model = Some(DEFAULT_CODEX_MODEL.to_string());
+                }
+                Some(_) => {}
+                None => {
+                    payload.model = Some(DEFAULT_CODEX_MODEL.to_string());
+                }
+            },
+            Provider::Claude => {
+                if payload.model.is_none() {
+                    payload.model = Some(DEFAULT_CLAUDE_MODEL.to_string());
+                }
+            }
+        }
+
+        payload
+    }
+
     fn resolve_binary_path(
         &self,
         provider: Provider,
@@ -1997,6 +2044,13 @@ fn detect_diagnostic_line(line: &str) -> Option<(&'static str, String)> {
     None
 }
 
+fn is_known_bad_codex_model(model: &str) -> bool {
+    matches!(
+        model.trim().to_ascii_lowercase().as_str(),
+        "gpt-5.3-codex" | "gpt-5.3"
+    )
+}
+
 fn render_markdown_export(detail: &RunDetail) -> String {
     let mut out = String::new();
     out.push_str(&format!("# Run {}\n\n", detail.run.id));
@@ -2029,7 +2083,10 @@ fn render_text_export(detail: &RunDetail) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_diagnostic_line, RunExecutionPath, RunnerCore};
+    use super::{
+        detect_diagnostic_line, is_known_bad_codex_model, RunExecutionPath, RunnerCore,
+        DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL,
+    };
     use crate::models::{AppSettings, Provider, RunMode, SaveProfilePayload, StartRunPayload};
     use std::collections::BTreeMap;
 
@@ -2181,5 +2238,30 @@ mod tests {
 
         let none = detect_diagnostic_line("regular informational output");
         assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn payload_defaults_apply_provider_models() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runner = RunnerCore::new(dir.path().to_path_buf()).expect("runner");
+
+        let codex = runner.normalize_payload_defaults(base_payload(Provider::Codex));
+        assert_eq!(codex.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
+
+        let claude = runner.normalize_payload_defaults(base_payload(Provider::Claude));
+        assert_eq!(claude.model.as_deref(), Some(DEFAULT_CLAUDE_MODEL));
+    }
+
+    #[tokio::test]
+    async fn known_bad_codex_model_is_rewritten_to_safe_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runner = RunnerCore::new(dir.path().to_path_buf()).expect("runner");
+        let mut payload = base_payload(Provider::Codex);
+        payload.model = Some("gpt-5.3-codex".to_string());
+
+        let normalized = runner.normalize_payload_defaults(payload);
+        assert_eq!(normalized.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
+        assert!(is_known_bad_codex_model("gpt-5.3-codex"));
+        assert!(!is_known_bad_codex_model("gpt-5-codex"));
     }
 }

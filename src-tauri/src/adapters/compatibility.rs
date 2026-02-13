@@ -152,7 +152,7 @@ fn codex_matrix() -> Vec<MatrixEntry> {
 fn claude_matrix() -> Vec<MatrixEntry> {
     vec![MatrixEntry {
         min_version: "0.20.0",
-        max_version: "1.99.99",
+        max_version: "99.99.99",
         supported_flags: &[
             "--output-format",
             "--input-format",
@@ -161,6 +161,8 @@ fn claude_matrix() -> Vec<MatrixEntry> {
             "--max-budget-usd",
             "--no-session-persistence",
             "--max-turns",
+            "--resume",
+            "--verbose",
             "--mcp-config",
             "--strict-mcp-config",
         ],
@@ -181,5 +183,10 @@ mod tests {
     fn checks_version_range() {
         assert!(version_between("0.30.0", "0.24.0", "1.0.0"));
         assert!(!version_between("0.10.0", "0.24.0", "1.0.0"));
+    }
+
+    #[test]
+    fn accepts_claude_v2_with_expanded_upper_bound() {
+        assert!(version_between("2.1.41", "0.20.0", "99.99.99"));
     }
 }

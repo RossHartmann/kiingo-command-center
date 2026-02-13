@@ -22,6 +22,10 @@ impl Adapter for ClaudeAdapter {
         match payload.mode {
             RunMode::NonInteractive => {
                 args.push("-p".to_string());
+                if let Some(session_id) = resume_session_id(payload) {
+                    args.push("--resume".to_string());
+                    args.push(session_id.to_string());
+                }
                 args.push(payload.prompt.clone());
             }
             RunMode::Interactive => {
@@ -35,13 +39,16 @@ impl Adapter for ClaudeAdapter {
         }
 
         if payload.mode == RunMode::NonInteractive {
-            if let Some(output_format) = &payload.output_format {
-                args.push("--output-format".to_string());
-                args.push(output_format.clone());
-            }
+            // Force structured output to reliably parse the assistant text and session id.
+            args.push("--output-format".to_string());
+            args.push("stream-json".to_string());
+            args.push("--verbose".to_string());
         }
 
         for (key, value) in &payload.optional_flags {
+            if is_internal_optional_flag(key) {
+                continue;
+            }
             match value {
                 serde_json::Value::Bool(true) => args.push(format!("--{}", key)),
                 serde_json::Value::Bool(false) => {}
@@ -101,11 +108,14 @@ impl Adapter for ClaudeAdapter {
     }
 
     fn parse_final(&self, exit_code: Option<i32>, buffered_output: &str) -> serde_json::Value {
-        let summary = buffered_output
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or_default();
+        let summary = extract_claude_result_text(buffered_output).unwrap_or_else(|| {
+            buffered_output
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .to_string()
+        });
         let structured = parse_last_json(buffered_output);
         serde_json::json!({
             "provider": "claude",
@@ -114,6 +124,42 @@ impl Adapter for ClaudeAdapter {
             "structured": structured
         })
     }
+}
+
+fn is_internal_optional_flag(key: &str) -> bool {
+    key.starts_with("__")
+}
+
+fn resume_session_id(payload: &StartRunPayload) -> Option<&str> {
+    payload
+        .optional_flags
+        .get("__resume_session_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn extract_claude_result_text(raw: &str) -> Option<String> {
+    let mut result_text: Option<String> = None;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('{') {
+            continue;
+        }
+        let Some(parsed) = serde_json::from_str::<serde_json::Value>(trimmed).ok() else {
+            continue;
+        };
+        let event_type = parsed.get("type").and_then(|value| value.as_str());
+        if event_type == Some("result") {
+            if let Some(text) = parsed.get("result").and_then(|value| value.as_str()) {
+                let cleaned = text.trim();
+                if !cleaned.is_empty() {
+                    result_text = Some(cleaned.to_string());
+                }
+            }
+        }
+    }
+    result_text
 }
 
 fn parse_first_json(raw: &str) -> Option<serde_json::Value> {
@@ -136,4 +182,86 @@ fn parse_last_json(raw: &str) -> Option<serde_json::Value> {
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_claude_result_text, resume_session_id, ClaudeAdapter};
+    use crate::adapters::Adapter;
+    use crate::models::{CapabilityProfile, Provider, RunMode, StartRunPayload};
+    use std::collections::BTreeMap;
+
+    fn base_payload() -> StartRunPayload {
+        StartRunPayload {
+            provider: Provider::Claude,
+            prompt: "hello".to_string(),
+            model: Some("sonnet".to_string()),
+            mode: RunMode::NonInteractive,
+            output_format: Some("text".to_string()),
+            cwd: "/tmp".to_string(),
+            optional_flags: BTreeMap::new(),
+            profile_id: None,
+            queue_priority: None,
+            timeout_seconds: None,
+            scheduled_at: None,
+            max_retries: None,
+            retry_backoff_ms: None,
+        }
+    }
+
+    fn capability() -> CapabilityProfile {
+        CapabilityProfile {
+            provider: Provider::Claude,
+            cli_version: "2.1.41".to_string(),
+            supported: true,
+            degraded: false,
+            blocked: false,
+            supported_flags: vec![
+                "--output-format".to_string(),
+                "--model".to_string(),
+                "--resume".to_string(),
+                "--verbose".to_string(),
+            ],
+            supported_modes: vec![RunMode::NonInteractive, RunMode::Interactive],
+            disabled_reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn builds_resume_command_with_stream_json_flags() {
+        let adapter = ClaudeAdapter;
+        let mut payload = base_payload();
+        payload
+            .optional_flags
+            .insert("__resume_session_id".to_string(), serde_json::json!("session-abc"));
+
+        let built = adapter
+            .build_command(&payload, &capability(), "claude")
+            .expect("build command");
+        assert!(built.args.contains(&"--resume".to_string()));
+        assert!(built.args.contains(&"session-abc".to_string()));
+        assert!(built.args.contains(&"--output-format".to_string()));
+        assert!(built.args.contains(&"stream-json".to_string()));
+        assert!(built.args.contains(&"--verbose".to_string()));
+    }
+
+    #[test]
+    fn parses_result_text_from_stream_json() {
+        let raw = r#"{"type":"system","subtype":"init","session_id":"abc"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"intermediate"}]}}
+{"type":"result","result":"final answer","session_id":"abc"}"#;
+        assert_eq!(
+            extract_claude_result_text(raw).as_deref(),
+            Some("final answer")
+        );
+    }
+
+    #[test]
+    fn reads_internal_resume_id() {
+        let mut payload = base_payload();
+        payload
+            .optional_flags
+            .insert("__resume_session_id".to_string(), serde_json::json!("  123  "));
+        assert_eq!(resume_session_id(&payload), Some("123"));
+    }
 }
