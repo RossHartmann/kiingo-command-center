@@ -1,6 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { getRun, startRun as startRunDirect } from "../lib/tauriClient";
-import type { Provider, RunDetail, StartRunPayload } from "../lib/types";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getRun } from "../lib/tauriClient";
+import type { Provider, RunDetail, RunRecord, StartRunPayload } from "../lib/types";
 import { useAppActions, useAppState } from "../state/appState";
 
 interface ChatMessage {
@@ -11,8 +11,20 @@ interface ChatMessage {
   kind?: "loading";
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
+const MODEL_OPTIONS: Record<Provider, string[]> = {
+  codex: ["gpt-5.3-codex", "gpt-5-codex", "gpt-5.3", "gpt-5"],
+  claude: ["sonnet", "opus", "haiku"]
+};
+
+const DEFAULT_CHAT_MODEL: Record<Provider, string> = {
+  codex: "gpt-5.3-codex",
+  claude: "sonnet"
+};
+
+type CodexReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh";
+
+function codexModelSupportsXhigh(model: string): boolean {
+  return model.trim().toLowerCase() !== "gpt-5-codex";
 }
 
 function getMessageText(payload: Record<string, unknown>): string | undefined {
@@ -33,62 +45,86 @@ function parseJsonLine(line: string): Record<string, unknown> | undefined {
   }
 }
 
-function extractCodexSessionId(detail: RunDetail): string | undefined {
-  const stdoutEvents = detail.events.filter((event) => event.eventType === "run.chunk.stdout");
-  for (const event of stdoutEvents) {
-    const text = getMessageText(event.payload);
-    if (!text) {
-      continue;
-    }
-    for (const line of text.split("\n")) {
-      const parsed = parseJsonLine(line);
-      if (!parsed || parsed.type !== "thread.started") {
-        continue;
-      }
-      const threadId = parsed.thread_id;
-      if (typeof threadId === "string" && threadId.trim()) {
-        return threadId.trim();
-      }
-    }
+function detectCodexModelWarning(text: string): string | undefined {
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("does not exist or you do not have access") ||
+    (normalized.includes("model") && normalized.includes("does not exist")) ||
+    normalized.includes("you do not have access to it")
+  ) {
+    return "Selected model may not be enabled for this account. Try updating Codex CLI or switch models.";
   }
-
-  const stderrEvents = detail.events.filter((event) => event.eventType === "run.chunk.stderr");
-  for (const event of stderrEvents) {
-    const text = getMessageText(event.payload);
-    if (!text) {
-      continue;
-    }
-    const matched = text.match(/session id:\s*([0-9a-fA-F-]{36})/);
-    if (matched?.[1]) {
-      return matched[1];
-    }
-  }
-
   return undefined;
 }
 
-function extractClaudeSessionId(detail: RunDetail): string | undefined {
-  const stdoutEvents = detail.events.filter((event) => event.eventType === "run.chunk.stdout");
-  for (const event of stdoutEvents) {
-    const text = getMessageText(event.payload);
-    if (!text) {
-      continue;
+function detailTextCorpus(detail: RunDetail): string {
+  const chunks: string[] = [];
+  for (const event of detail.events) {
+    if (typeof event.payload.text === "string") {
+      chunks.push(event.payload.text);
     }
-    for (const line of text.split("\n")) {
-      const parsed = parseJsonLine(line);
-      if (!parsed) {
-        continue;
-      }
-      const sessionId = parsed.session_id;
-      if (typeof sessionId === "string" && sessionId.trim()) {
-        return sessionId.trim();
+    if (typeof event.payload.message === "string") {
+      chunks.push(event.payload.message);
+    }
+    if (event.eventType === "run.semantic" && typeof event.payload.detail === "object" && event.payload.detail) {
+      try {
+        chunks.push(JSON.stringify(event.payload.detail));
+      } catch {
+        // ignore
       }
     }
   }
-  return undefined;
+  return chunks.join("\n");
+}
+
+function codexModelWarningForRun(run: RunRecord, detail?: RunDetail): string | undefined {
+  const summaryWarning = run.errorSummary ? detectCodexModelWarning(run.errorSummary) : undefined;
+  if (summaryWarning) {
+    return summaryWarning;
+  }
+  if (!detail) {
+    return undefined;
+  }
+  return detectCodexModelWarning(detailTextCorpus(detail));
+}
+
+function collapseSemanticAssistantText(detail: RunDetail): string {
+  const semanticEvents = detail.events
+    .filter((event) => event.eventType === "run.semantic")
+    .slice()
+    .sort((a, b) => a.seq - b.seq);
+
+  let lastComplete: string | undefined;
+  let deltaText = "";
+
+  for (const event of semanticEvents) {
+    const type = event.payload.type;
+    const text = event.payload.text;
+    if (typeof text !== "string" || text.length === 0) {
+      continue;
+    }
+    if (type === "text_complete") {
+      lastComplete = text;
+      continue;
+    }
+    if (type === "text_delta") {
+      deltaText += text;
+    }
+  }
+
+  if (typeof lastComplete === "string" && lastComplete.trim().length > 0) {
+    return lastComplete.trim();
+  }
+
+  return deltaText.trim();
 }
 
 function collapseCodexStdout(detail: RunDetail): string {
+  const semanticText = collapseSemanticAssistantText(detail);
+  if (semanticText) {
+    return semanticText;
+  }
+
   const stdoutEvents = detail.events.filter((event) => event.eventType === "run.chunk.stdout");
   const agentMessages: string[] = [];
   for (const event of stdoutEvents) {
@@ -120,49 +156,30 @@ function collapseCodexStdout(detail: RunDetail): string {
   }
 
   const rawChunks = stdoutEvents
-    .map((event) => getMessageText(event.payload)?.trimEnd() ?? "")
+    .map((event) => getMessageText(event.payload) ?? "")
     .filter((text) => text.trim().length > 0);
-  const collapsedLines: string[] = [];
-  let firstLine: string | undefined;
-  let stopAtDuplicatePass = false;
-
-  for (const chunk of rawChunks) {
-    const lines = chunk
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    for (const line of lines) {
-      if (!firstLine) {
-        firstLine = line;
-      }
-      if (collapsedLines.length > 0 && firstLine && line.includes(firstLine) && line !== firstLine) {
-        const markerIndex = line.indexOf(firstLine);
-        if (markerIndex > 0) {
-          const prefix = line.slice(0, markerIndex).trim();
-          if (prefix && !collapsedLines.includes(prefix)) {
-            collapsedLines.push(prefix);
-          }
-        }
-        stopAtDuplicatePass = true;
-        break;
-      }
-      if (line === firstLine && collapsedLines.length > 1) {
-        stopAtDuplicatePass = true;
-        break;
-      }
-      if (!collapsedLines.includes(line)) {
-        collapsedLines.push(line);
-      }
-    }
-    if (stopAtDuplicatePass) {
-      break;
+  if (!rawChunks.length) {
+    return "";
+  }
+  const joined = rawChunks.join("\n");
+  const normalized = joined.replace(/\r/g, "\n").trim();
+  const half = Math.floor(normalized.length / 2);
+  if (half > 100) {
+    const left = normalized.slice(0, half).trim();
+    const right = normalized.slice(half).trim();
+    if (left.length > 0 && left === right) {
+      return left;
     }
   }
-
-  return collapsedLines.join("\n").trim();
+  return normalized;
 }
 
 function collapseClaudeStdout(detail: RunDetail): string {
+  const semanticText = collapseSemanticAssistantText(detail);
+  if (semanticText) {
+    return semanticText;
+  }
+
   const stdoutEvents = detail.events.filter((event) => event.eventType === "run.chunk.stdout");
   let resultText: string | undefined;
   const assistantTexts: string[] = [];
@@ -236,37 +253,119 @@ export function ChatScreen(): JSX.Element {
   const state = useAppState();
   const actions = useAppActions();
   const [provider, setProvider] = useState<Provider>("codex");
-  const [chatBoundaries, setChatBoundaries] = useState<Record<Provider, string | null>>({
-    codex: null,
-    claude: null
-  });
+  const [showArchived, setShowArchived] = useState(false);
   const [draft, setDraft] = useState("");
+  const [modelsByProvider, setModelsByProvider] = useState<Record<Provider, string>>({
+    codex: DEFAULT_CHAT_MODEL.codex,
+    claude: DEFAULT_CHAT_MODEL.claude
+  });
+  const [codexReasoning, setCodexReasoning] = useState<CodexReasoningLevel>("default");
   const [ctrlHeld, setCtrlHeld] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const [codexDetails, setCodexDetails] = useState<Record<string, RunDetail>>({});
   const [claudeDetails, setClaudeDetails] = useState<Record<string, RunDetail>>({});
+  const autoCreateInFlight = useRef<Record<Provider, boolean>>({ codex: false, claude: false });
 
   const grantedWorkspaces = useMemo(() => {
     return state.workspaceGrants.filter((grant) => !grant.revokedAt).map((grant) => grant.path);
   }, [state.workspaceGrants]);
   const workspace = grantedWorkspaces[0] ?? "";
 
-  const chatBoundary = chatBoundaries[provider];
-
-  const providerRuns = useMemo(() => {
-    return state.runs
-      .filter((run) => run.provider === provider && run.mode === "non-interactive")
-      .filter((run) => !chatBoundary || new Date(run.startedAt).valueOf() >= new Date(chatBoundary).valueOf())
+  const conversations = useMemo(() => {
+    return state.conversations
+      .filter((conversation) => conversation.provider === provider)
+      .filter((conversation) => (showArchived ? Boolean(conversation.archivedAt) : !conversation.archivedAt))
       .slice()
-      .sort((a, b) => new Date(a.startedAt).valueOf() - new Date(b.startedAt).valueOf());
-  }, [chatBoundary, provider, state.runs]);
+      .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf());
+  }, [provider, showArchived, state.conversations]);
 
-  const latestRun = providerRuns[providerRuns.length - 1];
+  const selectedConversationId = state.selectedConversationByProvider[provider];
+  const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId);
+  const selectedDetail = selectedConversationId ? state.conversationDetails[selectedConversationId] : undefined;
+  const conversationRuns = selectedDetail?.runs ?? [];
 
+  useEffect(() => {
+    if (selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId)) {
+      return;
+    }
+    const fallback = conversations[0]?.id;
+    if (!fallback && !selectedConversationId) {
+      return;
+    }
+    if (fallback === selectedConversationId) {
+      return;
+    }
+    void actions.selectConversation(provider, fallback);
+  }, [actions, conversations, provider, selectedConversationId]);
+
+  useEffect(() => {
+    if (provider !== "codex") {
+      return;
+    }
+    if (codexReasoning !== "xhigh") {
+      return;
+    }
+    if (codexModelSupportsXhigh(modelsByProvider.codex)) {
+      return;
+    }
+    setCodexReasoning("high");
+  }, [codexReasoning, modelsByProvider.codex, provider]);
+
+  useEffect(() => {
+    if (!state.settings?.conversationThreadsV1) {
+      return;
+    }
+    if (showArchived) {
+      return;
+    }
+    if (selectedConversationId || conversations.length > 0) {
+      return;
+    }
+    if (autoCreateInFlight.current[provider]) {
+      return;
+    }
+    autoCreateInFlight.current[provider] = true;
+    void actions.createConversation(provider).finally(() => {
+      autoCreateInFlight.current[provider] = false;
+    });
+  }, [actions, conversations.length, provider, selectedConversationId, showArchived, state.settings?.conversationThreadsV1]);
+
+  useEffect(() => {
+    if (!selectedConversationId) {
+      return;
+    }
+    if (selectedDetail) {
+      return;
+    }
+    void actions.selectConversation(provider, selectedConversationId);
+  }, [actions, provider, selectedConversationId, selectedDetail]);
+
+  const latestRun = conversationRuns[conversationRuns.length - 1];
   const awaitingHarness = useMemo(() => {
     return Boolean(latestRun && (latestRun.status === "queued" || latestRun.status === "running"));
   }, [latestRun]);
+  const codexModelWarning = useMemo(() => {
+    if (provider !== "codex") {
+      return undefined;
+    }
+    const selectedModel = modelsByProvider.codex.trim().toLowerCase();
+    for (const run of [...conversationRuns].reverse()) {
+      if (run.status !== "failed") {
+        continue;
+      }
+      const runModel = (run.model ?? "").trim().toLowerCase();
+      if (selectedModel && runModel && runModel !== selectedModel) {
+        continue;
+      }
+      const detail = state.runDetails[run.id] ?? codexDetails[run.id];
+      const warning = codexModelWarningForRun(run, detail);
+      if (warning) {
+        return warning;
+      }
+    }
+    return undefined;
+  }, [codexDetails, conversationRuns, modelsByProvider.codex, provider, state.runDetails]);
 
   useEffect(() => {
     if (latestRun && state.selectedRunId !== latestRun.id) {
@@ -275,7 +374,7 @@ export function ChatScreen(): JSX.Element {
   }, [actions, latestRun, state.selectedRunId]);
 
   useEffect(() => {
-    const recent = providerRuns.slice(-20);
+    const recent = conversationRuns.slice(-20);
     const localDetails = provider === "codex" ? codexDetails : claudeDetails;
     const missingIds = recent
       .map((run) => run.id)
@@ -320,13 +419,13 @@ export function ChatScreen(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [claudeDetails, codexDetails, provider, providerRuns, state.runDetails]);
+  }, [claudeDetails, codexDetails, conversationRuns, provider, state.runDetails]);
 
   const messages = useMemo(() => {
     const details = provider === "codex" ? codexDetails : claudeDetails;
     const timeline: ChatMessage[] = [];
 
-    for (const run of providerRuns) {
+    for (const run of conversationRuns) {
       timeline.push({
         id: `prompt-${run.id}`,
         role: "user",
@@ -386,7 +485,7 @@ export function ChatScreen(): JSX.Element {
     }
 
     return timeline;
-  }, [claudeDetails, codexDetails, provider, providerRuns, state.runDetails]);
+  }, [claudeDetails, codexDetails, conversationRuns, provider, state.runDetails]);
 
   const submitCurrentDraft = useCallback(async (): Promise<void> => {
     if (sending) {
@@ -404,38 +503,56 @@ export function ChatScreen(): JSX.Element {
     setSending(true);
     setError(undefined);
     try {
-      const previousRun = providerRuns[providerRuns.length - 1];
-      const details = provider === "codex" ? codexDetails : claudeDetails;
-      const previousDetail = previousRun ? state.runDetails[previousRun.id] ?? details[previousRun.id] : undefined;
-      const resumeSessionId = previousDetail
-        ? provider === "codex"
-          ? extractCodexSessionId(previousDetail)
-          : extractClaudeSessionId(previousDetail)
-        : undefined;
+      let targetConversationId = selectedConversationId;
+      if (!targetConversationId) {
+        const created = await actions.createConversation(provider, text);
+        targetConversationId = created?.id;
+      }
+      if (!targetConversationId) {
+        throw new Error("Unable to create or select a conversation.");
+      }
 
-      const payload: StartRunPayload = {
+      const optionalFlags: Record<string, unknown> = {};
+      if (provider === "codex" && codexReasoning !== "default") {
+        const modelName = modelsByProvider[provider].trim();
+        if (codexReasoning === "xhigh" && !codexModelSupportsXhigh(modelName)) {
+          throw new Error("x high reasoning is not supported by gpt-5-codex. Choose high or switch models.");
+        }
+        optionalFlags["reasoning-effort"] = codexReasoning;
+      }
+
+      const payload = {
         provider,
+        conversationId: targetConversationId,
         prompt: text,
-        model: undefined,
-        mode: "non-interactive",
-        outputFormat: "text",
+        model: modelsByProvider[provider].trim() || undefined,
+        outputFormat: "text" as StartRunPayload["outputFormat"],
         cwd: workspace,
-        optionalFlags: resumeSessionId ? { __resume_session_id: resumeSessionId } : {},
+        optionalFlags,
         queuePriority: 0,
         timeoutSeconds: 300,
         maxRetries: 0,
         retryBackoffMs: 1000
       };
-      const { runId } = await startRunDirect(payload);
-      await actions.refreshAll();
+      const { runId } = await actions.sendConversationMessage(payload);
       await actions.selectRun(runId);
+      await actions.selectConversation(provider, targetConversationId);
       setDraft("");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : String(submitError));
     } finally {
       setSending(false);
     }
-  }, [actions, claudeDetails, codexDetails, draft, provider, providerRuns, sending, state.runDetails, workspace]);
+  }, [
+    actions,
+    codexReasoning,
+    draft,
+    modelsByProvider,
+    provider,
+    selectedConversationId,
+    sending,
+    workspace
+  ]);
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -469,43 +586,102 @@ export function ChatScreen(): JSX.Element {
   }, [submitCurrentDraft]);
 
   async function startNewChat(): Promise<void> {
-    const boundary = nowIso();
-    setChatBoundaries((previous) => ({
-      ...previous,
-      [provider]: boundary
-    }));
     setDraft("");
     setError(undefined);
-    await actions.selectRun(undefined);
+    await actions.createConversation(provider);
+  }
+
+  async function selectConversation(conversationId: string): Promise<void> {
+    await actions.selectConversation(provider, conversationId);
+  }
+
+  async function archiveCurrentConversation(): Promise<void> {
+    if (!selectedConversationId) {
+      return;
+    }
+    await actions.archiveConversation(selectedConversationId, provider, true);
+  }
+
+  async function restoreCurrentConversation(): Promise<void> {
+    if (!selectedConversationId) {
+      return;
+    }
+    await actions.archiveConversation(selectedConversationId, provider, false);
+    setShowArchived(false);
+    await actions.selectConversation(provider, selectedConversationId);
+  }
+
+  async function renameCurrentConversation(): Promise<void> {
+    if (!selectedConversationId) {
+      return;
+    }
+    const next = window.prompt("Rename conversation", selectedConversation?.title ?? "");
+    if (!next || !next.trim()) {
+      return;
+    }
+    await actions.renameConversation(selectedConversationId, next.trim(), provider);
   }
 
   return (
-    <section className="screen">
-      <div className="screen-header">
-        <h2>Chat</h2>
-        <p>Talk directly to Codex or Claude with minimal setup.</p>
-      </div>
+    <section className="screen chat-screen">
+      <aside className="chat-sidebar">
+        <div className="chat-sidebar-header">
+          <strong>Chats</strong>
+          <div className="chat-sidebar-actions">
+            <button type="button" className="new-chat-btn" onClick={() => setShowArchived((value) => !value)}>
+              {showArchived ? "Active" : "Archived"}
+            </button>
+            <button type="button" className="new-chat-btn" onClick={() => void startNewChat()} disabled={showArchived}>
+              New chat
+            </button>
+          </div>
+        </div>
+        <div className="chat-sidebar-list">
+          {conversations.map((conversation) => (
+            <button
+              key={conversation.id}
+              type="button"
+              className={`chat-thread ${conversation.id === selectedConversationId ? "active" : ""}`}
+              onClick={() => void selectConversation(conversation.id)}
+            >
+              <span className="chat-thread-title">{conversation.title}</span>
+              <small>
+                {conversation.archivedAt ? "Archived" : new Date(conversation.updatedAt).toLocaleTimeString()}
+              </small>
+            </button>
+          ))}
+          {!conversations.length && (
+            <p className="settings-hint">{showArchived ? "No archived chats." : "No chats yet."}</p>
+          )}
+        </div>
+      </aside>
 
-      <div className="card chat-shell">
-        <div className="chat-toolbar">
-          <label>
-            Model
-            <select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>
-              <option value="codex">Codex</option>
-              <option value="claude">Claude</option>
-            </select>
-          </label>
-          <label>
-            Workspace
-            <input value={workspace} readOnly />
-          </label>
-          <button type="button" onClick={() => void startNewChat()}>
-            New chat
-          </button>
+      <div className="chat-main">
+        <div className="chat-header-row">
+          <div>
+            <strong>{selectedConversation?.title ?? "New chat"}</strong>
+            {selectedConversation?.providerSessionId && (
+              <span className="workspace-label">session connected</span>
+            )}
+          </div>
+          {selectedConversationId && (
+            <div className="chat-header-actions">
+              <button type="button" onClick={() => void renameCurrentConversation()}>Rename</button>
+              {selectedConversation?.archivedAt ? (
+                <button type="button" onClick={() => void restoreCurrentConversation()}>Restore</button>
+              ) : (
+                <button type="button" onClick={() => void archiveCurrentConversation()}>Archive</button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="chat-messages" aria-live="polite">
-          {!messages.length && <div className="chat-empty">Start by sending a message below.</div>}
+          {!messages.length && (
+            <div className="chat-empty">
+              <p>Send a message to get started.</p>
+            </div>
+          )}
           {messages.map((message) => (
             <article key={message.id} className={`chat-bubble ${message.role}${message.kind ? ` ${message.kind}` : ""}`}>
               <header>
@@ -515,12 +691,12 @@ export function ChatScreen(): JSX.Element {
               {message.kind === "loading" ? (
                 <div className="harness-loading inline" role="status" aria-live="polite">
                   <div className="harness-loading-head">
-                    <strong>Waiting for harness response</strong>
                     <span className="typing-dots" aria-hidden="true">
                       <span />
                       <span />
                       <span />
                     </span>
+                    <span>Thinking...</span>
                   </div>
                   <div className="harness-progress" aria-hidden="true">
                     <span />
@@ -533,37 +709,99 @@ export function ChatScreen(): JSX.Element {
           ))}
         </div>
 
-        <form className="chat-input" onSubmit={(event) => void submit(event)}>
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={() => setCtrlHeld(false)}
-            rows={4}
-            placeholder="Message the model..."
-          />
-          <div className="actions">
-            <div className={`shortcut-hint${ctrlHeld ? " ready" : ""}`} aria-live="polite">
-              <span>Send shortcut</span>
-              <kbd>Ctrl/Cmd</kbd>
-              <span>+</span>
-              <kbd>Enter</kbd>
-              <strong>{ctrlHeld ? "Ready" : "Idle"}</strong>
-            </div>
-            <button type="submit" className="primary" disabled={sending || !workspace || awaitingHarness}>
-              {sending ? "Sending..." : awaitingHarness ? "Awaiting response..." : "Send"}
-            </button>
-          </div>
-        </form>
-
         {error && <div className="banner error">{error}</div>}
         {!workspace && (
-          <div className="banner info">No workspace grant is configured yet. Open Settings and add one.</div>
+          <div className="banner info">No workspace configured. Add one in Settings.</div>
         )}
-        {latestRun && (
-          <small>
-            Run status: <strong>{latestRun.status}</strong>
-          </small>
-        )}
+
+        <form className="chat-input" onSubmit={(event) => void submit(event)}>
+          <div className="chat-input-row">
+            <select
+              className="model-select"
+              value={provider}
+              onChange={(event) => setProvider(event.target.value as Provider)}
+              aria-label="Provider"
+            >
+              <option value="codex">Codex</option>
+              <option value="claude">Claude</option>
+            </select>
+            <input
+              className="model-select model-input"
+              type="text"
+              list={`model-options-${provider}`}
+              value={modelsByProvider[provider]}
+              onChange={(event) =>
+                setModelsByProvider((previous) => ({
+                  ...previous,
+                  [provider]: event.target.value
+                }))
+              }
+              placeholder={DEFAULT_CHAT_MODEL[provider]}
+              aria-label="Model"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {provider === "codex" && codexModelWarning && (
+              <span className="model-warning-sign" title={codexModelWarning} aria-label={codexModelWarning}>
+                ⚠
+              </span>
+            )}
+            <datalist id={`model-options-${provider}`}>
+              {MODEL_OPTIONS[provider].map((modelName) => (
+                <option key={modelName} value={modelName} />
+              ))}
+            </datalist>
+            {provider === "codex" && (
+              <select
+                className="model-select reasoning-select"
+                value={codexReasoning}
+                onChange={(event) => setCodexReasoning(event.target.value as CodexReasoningLevel)}
+                aria-label="Codex reasoning level"
+              >
+                <option value="default">reasoning: default</option>
+                <option value="low">reasoning: low</option>
+                <option value="medium">reasoning: medium</option>
+                <option value="high">reasoning: high</option>
+                <option
+                  value="xhigh"
+                  disabled={!codexModelSupportsXhigh(modelsByProvider.codex)}
+                >
+                  reasoning: x high
+                </option>
+              </select>
+            )}
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                const composing = (event.nativeEvent as { isComposing?: boolean }).isComposing === true;
+                if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.repeat && !composing) {
+                  event.preventDefault();
+                  void submitCurrentDraft();
+                }
+              }}
+              onBlur={() => setCtrlHeld(false)}
+              rows={2}
+              placeholder="Message..."
+            />
+            <button type="submit" className="primary send-btn" disabled={sending || !workspace || awaitingHarness}>
+              {sending ? "..." : awaitingHarness ? "..." : "\u2191"}
+            </button>
+          </div>
+          <div className="chat-input-meta">
+            <span className="workspace-label">model: {modelsByProvider[provider].trim() || "default"}</span>
+            {provider === "codex" && (
+              <span className="workspace-label">
+                reasoning: {codexReasoning === "default" ? "default" : codexReasoning}
+              </span>
+            )}
+            {provider === "codex" && codexModelWarning && (
+              <span className="workspace-label warning-chip">{codexModelWarning}</span>
+            )}
+            <span className="workspace-label">{ctrlHeld ? "Release Ctrl/Cmd to type newline" : "Ctrl/Cmd + Enter sends"}</span>
+            {workspace && <span className="workspace-label">{workspace.split("/").pop()}</span>}
+          </div>
+        </form>
       </div>
     </section>
   );

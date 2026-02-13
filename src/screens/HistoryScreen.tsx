@@ -8,6 +8,7 @@ export function HistoryScreen(): JSX.Element {
   const actions = useAppActions();
   const [provider, setProvider] = useState<Provider | "all">("all");
   const [status, setStatus] = useState<RunStatus | "all">("all");
+  const [conversationId, setConversationId] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -21,6 +22,9 @@ export function HistoryScreen(): JSX.Element {
         return false;
       }
       if (status !== "all" && run.status !== status) {
+        return false;
+      }
+      if (conversationId !== "all" && run.conversationId !== conversationId) {
         return false;
       }
       if (search && !run.prompt.toLowerCase().includes(search.toLowerCase())) {
@@ -37,14 +41,14 @@ export function HistoryScreen(): JSX.Element {
       }
       return true;
     });
-  }, [dateFrom, dateTo, provider, search, state.runs, status]);
+  }, [conversationId, dateFrom, dateTo, provider, search, state.runs, status]);
 
   const visibleRuns = serverFilteredRuns ?? localFilteredRuns;
 
   useEffect(() => {
     setServerFilteredRuns(null);
     setQueryError(undefined);
-  }, [provider, status, search, dateFrom, dateTo]);
+  }, [provider, status, conversationId, search, dateFrom, dateTo]);
 
   async function refreshServerFiltered(): Promise<void> {
     setQuerying(true);
@@ -52,6 +56,7 @@ export function HistoryScreen(): JSX.Element {
       const runs = await listRuns({
         provider: provider === "all" ? undefined : provider,
         status: status === "all" ? undefined : status,
+        conversationId: conversationId === "all" ? undefined : conversationId,
         search: search.trim() || undefined,
         dateFrom: dateFrom ? new Date(dateFrom).toISOString() : undefined,
         dateTo: dateTo ? new Date(`${dateTo}T23:59:59.999Z`).toISOString() : undefined,
@@ -70,6 +75,7 @@ export function HistoryScreen(): JSX.Element {
   function clearFilters(): void {
     setProvider("all");
     setStatus("all");
+    setConversationId("all");
     setSearch("");
     setDateFrom("");
     setDateTo("");
@@ -109,6 +115,17 @@ export function HistoryScreen(): JSX.Element {
           <label>
             Prompt search
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="search prompt text" />
+          </label>
+          <label>
+            Conversation
+            <select value={conversationId} onChange={(event) => setConversationId(event.target.value)}>
+              <option value="all">all</option>
+              {state.conversations.map((conversation) => (
+                <option key={conversation.id} value={conversation.id}>
+                  {conversation.provider}: {conversation.title}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Date from

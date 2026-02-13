@@ -10,19 +10,7 @@ export type RunStatus =
   | "canceled"
   | "interrupted";
 
-export type EventType =
-  | "run.started"
-  | "run.chunk.stdout"
-  | "run.chunk.stderr"
-  | "run.progress"
-  | "run.policy_audit"
-  | "run.completed"
-  | "run.failed"
-  | "run.canceled"
-  | "run.compatibility_warning"
-  | "session.opened"
-  | "session.input_accepted"
-  | "session.closed";
+export type EventType = string;
 
 export interface RunEvent {
   id: string;
@@ -58,6 +46,7 @@ export interface RunRecord {
   profileId?: string;
   capabilitySnapshotId?: string;
   compatibilityWarnings: string[];
+  conversationId?: string;
 }
 
 export interface RunDetail {
@@ -73,13 +62,181 @@ export interface StartRunPayload {
   mode: RunMode;
   outputFormat?: "text" | "json" | "stream-json";
   cwd: string;
-  optionalFlags: Record<string, string | boolean | number>;
+  optionalFlags: Record<string, unknown>;
   profileId?: string;
   queuePriority?: number;
   timeoutSeconds?: number;
   scheduledAt?: string;
   maxRetries?: number;
   retryBackoffMs?: number;
+  harness?: HarnessRequestOptions;
+}
+
+export interface ConversationRecord {
+  id: string;
+  provider: Provider;
+  title: string;
+  providerSessionId?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  provider: Provider;
+  title: string;
+  providerSessionId?: string;
+  updatedAt: string;
+  archivedAt?: string;
+  lastRunId?: string;
+  lastMessagePreview?: string;
+}
+
+export interface ConversationDetail {
+  conversation: ConversationRecord;
+  runs: RunRecord[];
+}
+
+export interface CreateConversationPayload {
+  provider: Provider;
+  title?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ListConversationsFilters {
+  provider?: Provider;
+  includeArchived?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SendConversationMessagePayload {
+  conversationId: string;
+  prompt: string;
+  model?: string;
+  outputFormat?: "text" | "json" | "stream-json";
+  cwd?: string;
+  optionalFlags?: Record<string, unknown>;
+  profileId?: string;
+  queuePriority?: number;
+  timeoutSeconds?: number;
+  scheduledAt?: string;
+  maxRetries?: number;
+  retryBackoffMs?: number;
+  harness?: HarnessRequestOptions;
+}
+
+export type UnifiedTool =
+  | "file_read"
+  | "file_write"
+  | "file_edit"
+  | "file_search"
+  | "content_search"
+  | "shell"
+  | "web_fetch"
+  | "web_search"
+  | "mcp"
+  | "task";
+
+export type SandboxMode = "read-only" | "workspace-write" | "full-access";
+export type ApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
+
+export interface UnifiedPermission {
+  sandboxMode: SandboxMode;
+  autoApprove: boolean;
+  networkAccess: boolean;
+  approvalPolicy?: ApprovalPolicy;
+}
+
+export interface AgentLimits {
+  maxBudgetUsd?: number;
+  maxTurns?: number;
+  timeoutMs?: number;
+  maxToolResultLines?: number;
+}
+
+export interface StructuredOutputConfig {
+  schema: Record<string, unknown>;
+  strict?: boolean;
+}
+
+export interface CliAllowlistEntry {
+  name: string;
+  path: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export type CliAllowlistMode = "shims" | "wrapper";
+
+export interface CliAllowlistConfig {
+  entries: CliAllowlistEntry[];
+  mode?: CliAllowlistMode;
+  wrapperName?: string;
+  binDir?: string;
+  keepBinDir?: boolean;
+}
+
+export interface ShellPreludeConfig {
+  content: string;
+  bashEnv?: boolean;
+  shEnv?: boolean;
+}
+
+export interface McpServerConfig {
+  name: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  type?: "stdio" | "http" | "sse";
+  enabledTools?: string[];
+  disabledTools?: string[];
+  enabled?: boolean;
+}
+
+export interface McpConfig {
+  servers: McpServerConfig[];
+}
+
+export interface ImageAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+}
+
+export interface FileAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+}
+
+export interface HarnessRequestOptions {
+  resumeSessionId?: string;
+  continueSession?: boolean;
+  inputFormat?: "text" | "stream-json";
+  additionalDirectories?: string[];
+  tools?: UnifiedTool[];
+  permissions?: UnifiedPermission;
+  limits?: AgentLimits;
+  mcp?: McpConfig;
+  structuredOutput?: StructuredOutputConfig;
+  systemPrompt?: string;
+  appendSystemPrompt?: string;
+  pipedContent?: string;
+  images?: ImageAttachment[];
+  files?: FileAttachment[];
+  processEnv?: Record<string, string>;
+  cliAllowlist?: CliAllowlistConfig;
+  shellPrelude?: ShellPreludeConfig;
 }
 
 export interface Profile {
@@ -136,6 +293,7 @@ export interface SchedulerJob {
 export interface AppSettings {
   codexPath: string;
   claudePath: string;
+  conversationThreadsV1: boolean;
   retentionDays: number;
   maxStorageMb: number;
   allowAdvancedPolicy: boolean;
@@ -147,6 +305,7 @@ export interface AppSettings {
 export interface ListRunsFilters {
   provider?: Provider;
   status?: RunStatus;
+  conversationId?: string;
   search?: string;
   dateFrom?: string;
   dateTo?: string;

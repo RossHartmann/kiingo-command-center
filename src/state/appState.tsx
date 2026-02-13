@@ -10,11 +10,15 @@ import {
   useRef
 } from "react";
 import {
+  archiveConversation,
   cancelRun,
+  createConversation,
+  getConversation,
   endSession,
   getRun,
   getSettings,
   grantWorkspace,
+  listConversations,
   listCapabilities,
   listProfiles,
   listQueueJobs,
@@ -22,8 +26,10 @@ import {
   listWorkspaceGrants,
   onRunEvent,
   rerun,
+  renameConversation,
   resumeSession,
   saveProfile,
+  sendConversationMessage,
   sendSessionInput,
   startInteractiveSession,
   startRun,
@@ -32,7 +38,10 @@ import {
 import type {
   AppSettings,
   CapabilitySnapshot,
+  ConversationDetail,
+  ConversationSummary,
   Profile,
+  Provider,
   RunDetail,
   RunEvent,
   RunRecord,
@@ -44,11 +53,15 @@ import type {
 
 export type Screen = "chat" | "composer" | "live" | "history" | "profiles" | "settings" | "compatibility" | "queue";
 const MAX_DETAIL_EVENTS = 2000;
+const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 
 interface State {
   selectedScreen: Screen;
   runs: RunRecord[];
   runDetails: Record<string, RunDetail>;
+  conversations: ConversationSummary[];
+  conversationDetails: Record<string, ConversationDetail>;
+  selectedConversationByProvider: Record<Provider, string | undefined>;
   selectedRunId?: string;
   profiles: Profile[];
   capabilities: CapabilitySnapshot[];
@@ -66,6 +79,9 @@ type Action =
   | { type: "set_runs"; runs: RunRecord[] }
   | { type: "upsert_run"; run: RunRecord }
   | { type: "set_detail"; detail: RunDetail }
+  | { type: "set_conversations"; conversations: ConversationSummary[] }
+  | { type: "set_conversation_detail"; detail: ConversationDetail }
+  | { type: "set_selected_conversation"; provider: Provider; conversationId?: string }
   | { type: "select_run"; runId?: string }
   | { type: "set_profiles"; profiles: Profile[] }
   | { type: "set_capabilities"; capabilities: CapabilitySnapshot[] }
@@ -78,6 +94,9 @@ const initialState: State = {
   selectedScreen: "chat",
   runs: [],
   runDetails: {},
+  conversations: [],
+  conversationDetails: {},
+  selectedConversationByProvider: loadConversationSelection(),
   profiles: [],
   capabilities: [],
   queueJobs: [],
@@ -110,6 +129,24 @@ function reducer(state: State, action: Action): State {
           [action.detail.run.id]: action.detail
         }
       };
+    case "set_conversations":
+      return { ...state, conversations: action.conversations };
+    case "set_conversation_detail":
+      return {
+        ...state,
+        conversationDetails: {
+          ...state.conversationDetails,
+          [action.detail.conversation.id]: action.detail
+        }
+      };
+    case "set_selected_conversation": {
+      const next = {
+        ...state.selectedConversationByProvider,
+        [action.provider]: action.conversationId
+      };
+      persistConversationSelection(next);
+      return { ...state, selectedConversationByProvider: next };
+    }
     case "select_run":
       return { ...state, selectedRunId: action.runId };
     case "set_profiles":
@@ -150,6 +187,27 @@ function reducer(state: State, action: Action): State {
 
 interface Actions {
   refreshAll: () => Promise<void>;
+  refreshConversations: (provider?: Provider, includeArchived?: boolean) => Promise<void>;
+  createConversation: (provider: Provider, title?: string) => Promise<ConversationSummary | undefined>;
+  selectConversation: (provider: Provider, conversationId?: string) => Promise<void>;
+  sendConversationMessage: (payload: {
+    provider: Provider;
+    conversationId: string;
+    prompt: string;
+    model?: string;
+    outputFormat?: StartRunPayload["outputFormat"];
+    cwd?: string;
+    optionalFlags?: Record<string, unknown>;
+    profileId?: string;
+    queuePriority?: number;
+    timeoutSeconds?: number;
+    scheduledAt?: string;
+    maxRetries?: number;
+    retryBackoffMs?: number;
+    harness?: StartRunPayload["harness"];
+  }) => Promise<{ runId: string }>;
+  renameConversation: (conversationId: string, title: string, provider: Provider) => Promise<void>;
+  archiveConversation: (conversationId: string, provider: Provider, archived?: boolean) => Promise<void>;
   startRun: (payload: StartRunPayload) => Promise<void>;
   startInteractiveSession: (payload: StartRunPayload) => Promise<void>;
   cancelRun: (runId: string) => Promise<void>;
@@ -171,6 +229,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const runsRef = useRef<RunRecord[]>([]);
   const runDetailsRef = useRef<Record<string, RunDetail>>({});
+  const selectedConversationRef = useRef<Record<Provider, string | undefined>>(initialState.selectedConversationByProvider);
 
   const safeDispatch = useCallback((action: Action) => {
     dispatch(action);
@@ -179,13 +238,15 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   useEffect(() => {
     runsRef.current = state.runs;
     runDetailsRef.current = state.runDetails;
-  }, [state.runs, state.runDetails]);
+    selectedConversationRef.current = state.selectedConversationByProvider;
+  }, [state.runs, state.runDetails, state.selectedConversationByProvider]);
 
   const refreshAll = useCallback(async () => {
     safeDispatch({ type: "loading", value: true });
     try {
-      const [runs, profiles, capabilities, jobs, grants, settings] = await Promise.all([
+      const [runs, conversations, profiles, capabilities, jobs, grants, settings] = await Promise.all([
         listRuns({ limit: 200, offset: 0 }),
+        listConversations({ limit: 200, offset: 0, includeArchived: true }),
         listProfiles(),
         listCapabilities(),
         listQueueJobs(),
@@ -193,6 +254,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         getSettings()
       ]);
       safeDispatch({ type: "set_runs", runs });
+      safeDispatch({ type: "set_conversations", conversations });
       safeDispatch({ type: "set_profiles", profiles });
       safeDispatch({ type: "set_capabilities", capabilities });
       safeDispatch({ type: "set_jobs", jobs });
@@ -214,6 +276,12 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
     let unlisten: Unlisten = null;
     let disposed = false;
     void onRunEvent((event) => {
+      if (event.type.startsWith("conversation.")) {
+        void onConversationEventUpdate(safeDispatch, event, selectedConversationRef.current).catch((error) => {
+          safeDispatch({ type: "error", error: asError(error) });
+        });
+        return;
+      }
       onRunEventUpdate(safeDispatch, runsRef.current, runDetailsRef.current, event);
     }).then((dispose) => {
       if (disposed) {
@@ -234,6 +302,108 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   const actions = useMemo<Actions>(() => {
     return {
       refreshAll,
+      refreshConversations: async (provider, includeArchived = true) => {
+        const conversations = await listConversations({
+          provider,
+          includeArchived,
+          limit: 200,
+          offset: 0
+        });
+        safeDispatch({ type: "set_conversations", conversations });
+      },
+      createConversation: async (provider, title) => {
+        const created = await createConversation({ provider, title });
+        const conversations = await listConversations({
+          provider,
+          includeArchived: true,
+          limit: 200,
+          offset: 0
+        });
+        safeDispatch({ type: "set_conversations", conversations });
+        safeDispatch({ type: "set_selected_conversation", provider, conversationId: created.id });
+        const detail = await getConversation(created.id);
+        if (detail) {
+          safeDispatch({ type: "set_conversation_detail", detail });
+        }
+        return conversations.find((conversation) => conversation.id === created.id);
+      },
+      selectConversation: async (provider, conversationId) => {
+        safeDispatch({ type: "set_selected_conversation", provider, conversationId });
+        if (!conversationId) {
+          return;
+        }
+        const detail = await getConversation(conversationId);
+        if (detail) {
+          safeDispatch({ type: "set_conversation_detail", detail });
+        }
+      },
+      sendConversationMessage: async (payload) => {
+        const result = await sendConversationMessage({
+          conversationId: payload.conversationId,
+          prompt: payload.prompt,
+          model: payload.model,
+          outputFormat: payload.outputFormat,
+          cwd: payload.cwd,
+          optionalFlags: payload.optionalFlags,
+          profileId: payload.profileId,
+          queuePriority: payload.queuePriority,
+          timeoutSeconds: payload.timeoutSeconds,
+          scheduledAt: payload.scheduledAt,
+          maxRetries: payload.maxRetries,
+          retryBackoffMs: payload.retryBackoffMs,
+          harness: payload.harness
+        });
+        await refreshAll();
+        await Promise.all([
+          getConversation(payload.conversationId).then((detail) => {
+            if (detail) {
+              safeDispatch({ type: "set_conversation_detail", detail });
+            }
+          }),
+          getRun(result.runId).then((detail) => {
+            if (detail) {
+              safeDispatch({ type: "set_detail", detail });
+            }
+          })
+        ]);
+        return result;
+      },
+      renameConversation: async (conversationId, title, provider) => {
+        await renameConversation(conversationId, title);
+        const conversations = await listConversations({
+          provider,
+          includeArchived: true,
+          limit: 200,
+          offset: 0
+        });
+        safeDispatch({ type: "set_conversations", conversations });
+        const detail = await getConversation(conversationId);
+        if (detail) {
+          safeDispatch({ type: "set_conversation_detail", detail });
+        }
+      },
+      archiveConversation: async (conversationId, provider, archived = true) => {
+        await archiveConversation(conversationId, archived);
+        const conversations = await listConversations({
+          provider,
+          includeArchived: true,
+          limit: 200,
+          offset: 0
+        });
+        safeDispatch({ type: "set_conversations", conversations });
+        const current = state.selectedConversationByProvider[provider];
+        if (current === conversationId && archived) {
+          const fallback = conversations
+            .filter((conversation) => conversation.provider === provider && !conversation.archivedAt)
+            .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf())[0]
+            ?.id;
+          safeDispatch({
+            type: "set_selected_conversation",
+            provider,
+            conversationId: fallback
+          });
+        }
+      },
       startRun: async (payload) => {
         await startRun(payload);
         await refreshAll();
@@ -288,7 +458,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         safeDispatch({ type: "select_screen", screen });
       }
     };
-  }, [refreshAll, safeDispatch]);
+  }, [refreshAll, safeDispatch, state.selectedConversationByProvider]);
 
   return (
     <StateContext.Provider value={state}>
@@ -350,6 +520,61 @@ function onRunEventUpdate(
   });
 }
 
+async function onConversationEventUpdate(
+  dispatch: Dispatch<Action>,
+  event: StreamEnvelope,
+  selectedByProvider: Record<Provider, string | undefined>
+): Promise<void> {
+  const conversations = await listConversations({
+    includeArchived: true,
+    limit: 200,
+    offset: 0
+  });
+  dispatch({ type: "set_conversations", conversations });
+
+  const conversationId = conversationIdFromPayload(event.payload);
+  if (!conversationId) {
+    return;
+  }
+
+  const detail = await getConversation(conversationId);
+  if (detail) {
+    dispatch({ type: "set_conversation_detail", detail });
+  }
+
+  if (event.type !== "conversation.archived") {
+    return;
+  }
+  const archived = event.payload.archived === true;
+  if (!archived) {
+    return;
+  }
+
+  const provider = providerFromPayload(event.payload) ?? detail?.conversation.provider;
+  if (!provider || selectedByProvider[provider] !== conversationId) {
+    return;
+  }
+
+  const fallback = conversations
+    .filter((conversation) => conversation.provider === provider && !conversation.archivedAt)
+    .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf())[0]
+    ?.id;
+  dispatch({ type: "set_selected_conversation", provider, conversationId: fallback });
+}
+
+function conversationIdFromPayload(payload: Record<string, unknown>): string | undefined {
+  const value = payload.conversationId;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function providerFromPayload(payload: Record<string, unknown>): Provider | undefined {
+  const value = payload.provider;
+  if (value === "codex" || value === "claude") {
+    return value;
+  }
+  return undefined;
+}
+
 type Unlisten = (() => void) | null;
 
 function asError(error: unknown): string {
@@ -357,6 +582,55 @@ function asError(error: unknown): string {
     return error.message;
   }
   return "Unexpected error";
+}
+
+function loadConversationSelection(): Record<Provider, string | undefined> {
+  if (typeof window === "undefined") {
+    return { codex: undefined, claude: undefined };
+  }
+  const storage = getStorage();
+  if (!storage) {
+    return { codex: undefined, claude: undefined };
+  }
+  const raw = storage.getItem(CONVERSATION_SELECTION_KEY);
+  if (!raw) {
+    return { codex: undefined, claude: undefined };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<Provider, string>>;
+    return {
+      codex: parsed.codex,
+      claude: parsed.claude
+    };
+  } catch {
+    return { codex: undefined, claude: undefined };
+  }
+}
+
+function persistConversationSelection(selection: Record<Provider, string | undefined>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+  storage.setItem(CONVERSATION_SELECTION_KEY, JSON.stringify(selection));
+}
+
+function getStorage(): Pick<Storage, "getItem" | "setItem"> | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const storage = window.localStorage as unknown;
+  if (!storage || typeof storage !== "object") {
+    return null;
+  }
+  const maybe = storage as { getItem?: unknown; setItem?: unknown };
+  if (typeof maybe.getItem !== "function" || typeof maybe.setItem !== "function") {
+    return null;
+  }
+  return maybe as Pick<Storage, "getItem" | "setItem">;
 }
 
 export function useAppState(): State {

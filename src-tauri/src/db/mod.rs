@@ -1,7 +1,8 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AppSettings, CapabilitySnapshot, ListRunsFilters, Profile, Provider, RunArtifact, RunDetail, RunEventRecord,
-    RunMode, RunRecord, RunStatus, SaveProfilePayload, SchedulerJob, WorkspaceGrant,
+    AppSettings, CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary,
+    ListConversationsFilters, ListRunsFilters, Profile, Provider, RunArtifact, RunDetail, RunEventRecord, RunMode,
+    RunRecord, RunStatus, SaveProfilePayload, SchedulerJob, WorkspaceGrant,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -95,6 +96,7 @@ impl Database {
             profile_id: profile_id.map(ToString::to_string),
             capability_snapshot_id: capability_snapshot_id.map(ToString::to_string),
             compatibility_warnings: compatibility_warnings.to_vec(),
+            conversation_id: None,
         })
     }
 
@@ -201,7 +203,7 @@ impl Database {
     pub fn list_runs(&self, filters: &ListRunsFilters) -> AppResult<Vec<RunRecord>> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut query = String::from(
-            "SELECT id, provider, status, prompt, model, mode, output_format, cwd, started_at, ended_at, exit_code, error_summary, queue_priority, profile_id, capability_snapshot_id, compatibility_warnings_json
+            "SELECT id, provider, status, prompt, model, mode, output_format, cwd, started_at, ended_at, exit_code, error_summary, queue_priority, profile_id, capability_snapshot_id, compatibility_warnings_json, conversation_id
              FROM runs WHERE 1 = 1",
         );
 
@@ -214,6 +216,10 @@ impl Database {
         if let Some(status) = filters.status {
             query.push_str(" AND status = ?");
             params_vec.push(status.as_str().to_string());
+        }
+        if let Some(conversation_id) = &filters.conversation_id {
+            query.push_str(" AND conversation_id = ?");
+            params_vec.push(conversation_id.clone());
         }
         if let Some(search) = &filters.search {
             query.push_str(" AND prompt LIKE ?");
@@ -253,7 +259,7 @@ impl Database {
     pub fn get_run(&self, run_id: &str) -> AppResult<Option<RunRecord>> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
-            "SELECT id, provider, status, prompt, model, mode, output_format, cwd, started_at, ended_at, exit_code, error_summary, queue_priority, profile_id, capability_snapshot_id, compatibility_warnings_json
+            "SELECT id, provider, status, prompt, model, mode, output_format, cwd, started_at, ended_at, exit_code, error_summary, queue_priority, profile_id, capability_snapshot_id, compatibility_warnings_json, conversation_id
              FROM runs WHERE id = ?1",
             [run_id],
             parse_run_row,
@@ -310,6 +316,254 @@ impl Database {
             events,
             artifacts,
         }))
+    }
+
+    pub fn create_conversation(
+        &self,
+        provider: Provider,
+        title: Option<&str>,
+        metadata: Option<&serde_json::Value>,
+    ) -> AppResult<ConversationRecord> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let title = normalize_conversation_title(title.unwrap_or_default());
+        let metadata = metadata.cloned().unwrap_or_else(|| serde_json::json!({}));
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "INSERT INTO conversations (id, provider, title, provider_session_id, metadata_json, created_at, updated_at, archived_at)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?5, NULL)",
+            params![
+                id,
+                provider.as_str(),
+                title,
+                serde_json::to_string(&metadata)?,
+                now.to_rfc3339()
+            ],
+        )?;
+        Ok(ConversationRecord {
+            id,
+            provider,
+            title,
+            provider_session_id: None,
+            metadata,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        })
+    }
+
+    pub fn list_conversations(&self, filters: &ListConversationsFilters) -> AppResult<Vec<ConversationSummary>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut query = String::from(
+            "SELECT id, provider, title, provider_session_id, updated_at, archived_at
+             FROM conversations WHERE 1 = 1",
+        );
+        let mut params_vec: Vec<String> = Vec::new();
+
+        if let Some(provider) = filters.provider {
+            query.push_str(" AND provider = ?");
+            params_vec.push(provider.as_str().to_string());
+        }
+        if !filters.include_archived.unwrap_or(false) {
+            query.push_str(" AND archived_at IS NULL");
+        }
+        if let Some(search) = &filters.search {
+            query.push_str(" AND title LIKE ?");
+            params_vec.push(format!("%{}%", search));
+        }
+
+        query.push_str(" ORDER BY updated_at DESC");
+        let limit = filters.limit.unwrap_or(100);
+        let offset = filters.offset.unwrap_or(0);
+        query.push_str(" LIMIT ? OFFSET ?");
+
+        let mut statement = conn.prepare(&query)?;
+        let mut dyn_params: Vec<&dyn rusqlite::ToSql> = params_vec
+            .iter()
+            .map(|param| param as &dyn rusqlite::ToSql)
+            .collect();
+        dyn_params.push(&limit);
+        dyn_params.push(&offset);
+
+        let mut rows = statement.query(rusqlite::params_from_iter(dyn_params))?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let provider = parse_provider(&row.get::<_, String>(1)?)?;
+            let title: String = row.get(2)?;
+            let provider_session_id: Option<String> = row.get(3)?;
+            let updated_at = parse_time(&row.get::<_, String>(4)?)?;
+            let archived_at = row
+                .get::<_, Option<String>>(5)?
+                .map(|raw| parse_time(&raw))
+                .transpose()?;
+
+            let (last_run_id, last_message_preview): (Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT r.id, r.prompt
+                     FROM conversation_runs cr
+                     JOIN runs r ON r.id = cr.run_id
+                     WHERE cr.conversation_id = ?1
+                     ORDER BY cr.seq DESC
+                     LIMIT 1",
+                    [&id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((None, None));
+
+            items.push(ConversationSummary {
+                id,
+                provider,
+                title,
+                provider_session_id,
+                updated_at,
+                archived_at,
+                last_run_id,
+                last_message_preview,
+            });
+        }
+        Ok(items)
+    }
+
+    pub fn get_conversation(&self, conversation_id: &str) -> AppResult<Option<ConversationRecord>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id, provider, title, provider_session_id, metadata_json, created_at, updated_at, archived_at
+             FROM conversations WHERE id = ?1",
+            [conversation_id],
+            parse_conversation_row,
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    pub fn get_conversation_detail(&self, conversation_id: &str) -> AppResult<Option<ConversationDetail>> {
+        let Some(conversation) = self.get_conversation(conversation_id)? else {
+            return Ok(None);
+        };
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.provider, r.status, r.prompt, r.model, r.mode, r.output_format, r.cwd,
+                    r.started_at, r.ended_at, r.exit_code, r.error_summary, r.queue_priority,
+                    r.profile_id, r.capability_snapshot_id, r.compatibility_warnings_json, r.conversation_id
+             FROM conversation_runs cr
+             JOIN runs r ON r.id = cr.run_id
+             WHERE cr.conversation_id = ?1
+             ORDER BY cr.seq ASC",
+        )?;
+        let runs = stmt
+            .query_map([conversation_id], parse_run_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(ConversationDetail { conversation, runs }))
+    }
+
+    pub fn rename_conversation(&self, conversation_id: &str, title: &str) -> AppResult<Option<ConversationRecord>> {
+        let normalized = normalize_conversation_title(title);
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute(
+            "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![normalized, now, conversation_id],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        drop(conn);
+        self.get_conversation(conversation_id)
+    }
+
+    pub fn archive_conversation(&self, conversation_id: &str, archived: bool) -> AppResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let archived_at = if archived { Some(now.clone()) } else { None };
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute(
+            "UPDATE conversations SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
+            params![archived_at, now, conversation_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn set_run_conversation_id(&self, run_id: &str, conversation_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE runs SET conversation_id = ?1 WHERE id = ?2",
+            params![conversation_id, run_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn next_conversation_seq(&self, conversation_id: &str) -> AppResult<i64> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let seq: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversation_runs WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )?;
+        Ok(seq)
+    }
+
+    pub fn attach_run_to_conversation(&self, conversation_id: &str, run_id: &str) -> AppResult<()> {
+        let seq = self.next_conversation_seq(conversation_id)?;
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO conversation_runs (id, conversation_id, run_id, seq, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                Uuid::new_v4().to_string(),
+                conversation_id,
+                run_id,
+                seq,
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        drop(conn);
+        self.set_run_conversation_id(run_id, conversation_id)?;
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), conversation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_conversation_session_id(&self, conversation_id: &str, session_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE conversations SET provider_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![session_id, Utc::now().to_rfc3339(), conversation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_conversation_session_id(&self, conversation_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE conversations SET provider_session_id = NULL, updated_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), conversation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn touch_conversation_updated_at(&self, conversation_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), conversation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn find_conversation_id_by_run(&self, run_id: &str) -> AppResult<Option<String>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let result: Option<Option<String>> = conn
+            .query_row(
+            "SELECT conversation_id FROM runs WHERE id = ?1",
+            [run_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+            .optional()?;
+        Ok(result.flatten())
     }
 
     pub fn list_profiles(&self) -> AppResult<Vec<Profile>> {
@@ -810,10 +1064,12 @@ impl Database {
     }
 
     fn ensure_schema_extensions(&self) -> AppResult<()> {
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
         if !column_exists(&conn, "runs", "profile_id")? {
             conn.execute("ALTER TABLE runs ADD COLUMN profile_id TEXT", [])?;
@@ -824,7 +1080,204 @@ impl Database {
                 [],
             )?;
         }
+        if !column_exists(&conn, "runs", "conversation_id")? {
+            conn.execute("ALTER TABLE runs ADD COLUMN conversation_id TEXT", [])?;
+        }
 
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS conversations (
+               id TEXT PRIMARY KEY,
+               provider TEXT NOT NULL,
+               title TEXT NOT NULL,
+               provider_session_id TEXT,
+               metadata_json TEXT NOT NULL DEFAULT '{}',
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               archived_at TEXT
+             );
+             CREATE TABLE IF NOT EXISTS conversation_runs (
+               id TEXT PRIMARY KEY,
+               conversation_id TEXT NOT NULL,
+               run_id TEXT NOT NULL,
+               seq INTEGER NOT NULL,
+               created_at TEXT NOT NULL,
+               FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+               FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+               UNIQUE(conversation_id, run_id),
+               UNIQUE(conversation_id, seq)
+             );
+             CREATE INDEX IF NOT EXISTS idx_runs_conversation_started ON runs(conversation_id, started_at ASC);
+             CREATE INDEX IF NOT EXISTS idx_conversations_provider_updated ON conversations(provider, updated_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_conversations_archived_updated ON conversations(archived_at, updated_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_conversation_runs_conversation_seq ON conversation_runs(conversation_id, seq ASC);
+             CREATE INDEX IF NOT EXISTS idx_conversation_runs_run ON conversation_runs(run_id);",
+        )?;
+
+        self.repair_missing_conversation_links(&conn)?;
+        self.backfill_conversation_threads_if_needed(&mut conn)?;
+        self.repair_missing_conversation_links(&conn)?;
+
+        Ok(())
+    }
+
+    fn backfill_conversation_threads_if_needed(&self, conn: &mut Connection) -> AppResult<()> {
+        const MIGRATION_KEY: &str = "migration:conversation_threads_v1";
+
+        let marker_exists: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM settings WHERE key = ?1",
+            [MIGRATION_KEY],
+            |row| row.get(0),
+        )?;
+        if marker_exists > 0 {
+            return Ok(());
+        }
+
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare(
+            "SELECT id, provider, prompt, started_at
+             FROM runs
+             WHERE conversation_id IS NULL
+             ORDER BY started_at ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        for (run_id, provider_raw, prompt, started_at) in rows {
+            let conversation_id = Uuid::new_v4().to_string();
+            let title = normalize_conversation_title(&prompt);
+            tx.execute(
+                "INSERT INTO conversations (id, provider, title, provider_session_id, metadata_json, created_at, updated_at, archived_at)
+                 VALUES (?1, ?2, ?3, NULL, '{}', ?4, ?4, NULL)",
+                params![conversation_id, provider_raw, title, started_at],
+            )?;
+            tx.execute(
+                "UPDATE runs SET conversation_id = ?1 WHERE id = ?2",
+                params![conversation_id, run_id],
+            )?;
+            tx.execute(
+                "INSERT INTO conversation_runs (id, conversation_id, run_id, seq, created_at)
+                 VALUES (?1, ?2, ?3, 1, ?4)",
+                params![Uuid::new_v4().to_string(), conversation_id, run_id, started_at],
+            )?;
+        }
+
+        tx.execute(
+            "INSERT INTO settings (key, value_json, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+            params![
+                MIGRATION_KEY,
+                serde_json::json!({
+                    "completedAt": Utc::now().to_rfc3339(),
+                    "strategy": "one-run-per-conversation"
+                })
+                .to_string(),
+                Utc::now().to_rfc3339()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn repair_missing_conversation_links(&self, conn: &Connection) -> AppResult<()> {
+        conn.execute(
+            "UPDATE runs
+             SET conversation_id = NULL
+             WHERE conversation_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM conversations c WHERE c.id = runs.conversation_id
+               )",
+            [],
+        )?;
+
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.conversation_id, r.started_at
+             FROM runs r
+             WHERE r.conversation_id IS NOT NULL
+               AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = r.conversation_id)
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM conversation_runs cr
+                 WHERE cr.run_id = r.id
+                   AND cr.conversation_id = r.conversation_id
+               )
+             ORDER BY r.started_at ASC",
+        )?;
+        let missing = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        for (run_id, conversation_id, started_at) in missing {
+            let seq: i64 = conn.query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversation_runs WHERE conversation_id = ?1",
+                [conversation_id.as_str()],
+                |row| row.get(0),
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO conversation_runs (id, conversation_id, run_id, seq, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![Uuid::new_v4().to_string(), conversation_id, run_id, seq, started_at],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn validate_conversation_link_consistency(&self) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+
+        let missing_rows: i64 = conn.query_row(
+            "SELECT COUNT(1)
+             FROM runs r
+             WHERE r.conversation_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM conversation_runs cr
+                 WHERE cr.run_id = r.id
+                   AND cr.conversation_id = r.conversation_id
+               )",
+            [],
+            |row| row.get(0),
+        )?;
+        if missing_rows > 0 {
+            return Err(AppError::Internal(format!(
+                "conversation link invariant violated: {} runs missing conversation_runs row",
+                missing_rows
+            )));
+        }
+
+        let mismatched_rows: i64 = conn.query_row(
+            "SELECT COUNT(1)
+             FROM conversation_runs cr
+             JOIN runs r ON r.id = cr.run_id
+             WHERE r.conversation_id IS NULL OR r.conversation_id != cr.conversation_id",
+            [],
+            |row| row.get(0),
+        )?;
+        if mismatched_rows > 0 {
+            return Err(AppError::Internal(format!(
+                "conversation link invariant violated: {} mismatched rows",
+                mismatched_rows
+            )));
+        }
         Ok(())
     }
 
@@ -941,7 +1394,38 @@ fn parse_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         profile_id: row.get(13)?,
         capability_snapshot_id: row.get(14)?,
         compatibility_warnings: serde_json::from_str::<Vec<String>>(&warnings_raw).unwrap_or_default(),
+        conversation_id: row.get(16)?,
     })
+}
+
+fn parse_conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationRecord> {
+    let metadata_raw: String = row.get(4)?;
+    Ok(ConversationRecord {
+        id: row.get(0)?,
+        provider: parse_provider(&row.get::<_, String>(1)?)?,
+        title: row.get(2)?,
+        provider_session_id: row.get(3)?,
+        metadata: serde_json::from_str::<serde_json::Value>(&metadata_raw).unwrap_or_else(|_| serde_json::json!({})),
+        created_at: parse_time(&row.get::<_, String>(5)?)?,
+        updated_at: parse_time(&row.get::<_, String>(6)?)?,
+        archived_at: row
+            .get::<_, Option<String>>(7)?
+            .map(|raw| parse_time(&raw))
+            .transpose()?,
+    })
+}
+
+fn normalize_conversation_title(raw: &str) -> String {
+    let first_line = raw.lines().next().unwrap_or_default().trim();
+    if first_line.is_empty() {
+        return "New chat".to_string();
+    }
+    let max_chars = 80;
+    if first_line.chars().count() <= max_chars {
+        return first_line.to_string();
+    }
+    let truncated: String = first_line.chars().take(max_chars - 1).collect();
+    format!("{}...", truncated)
 }
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> AppResult<bool> {
@@ -1063,7 +1547,7 @@ fn default_workspace_candidate() -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::Database;
-    use crate::models::{ListRunsFilters, Provider, RunMode, SaveProfilePayload};
+    use crate::models::{ListConversationsFilters, ListRunsFilters, Provider, RunMode, SaveProfilePayload};
 
     #[test]
     fn database_can_insert_and_read_run() {
@@ -1130,5 +1614,134 @@ mod tests {
         let grants = db.list_workspace_grants().expect("list grants");
         assert!(!grants.is_empty());
         assert!(grants.iter().any(|grant| grant.revoked_at.is_none()));
+    }
+
+    #[test]
+    fn conversation_round_trip_and_run_linking_work() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db = Database::new(&db_path).expect("db");
+
+        let conversation = db
+            .create_conversation(Provider::Codex, Some("hello world"), None)
+            .expect("create conversation");
+        assert_eq!(conversation.provider, Provider::Codex);
+
+        db.insert_run(
+            "run-1",
+            Provider::Codex,
+            "prompt",
+            Some("gpt-5.3-codex"),
+            RunMode::NonInteractive,
+            Some("text"),
+            dir.path().to_string_lossy().as_ref(),
+            0,
+            None,
+            None,
+            &[],
+        )
+        .expect("insert run");
+        db.attach_run_to_conversation(&conversation.id, "run-1")
+            .expect("attach run");
+
+        let detail = db
+            .get_conversation_detail(&conversation.id)
+            .expect("get detail")
+            .expect("exists");
+        assert_eq!(detail.runs.len(), 1);
+        assert_eq!(detail.runs[0].id, "run-1");
+        assert_eq!(detail.runs[0].conversation_id.as_deref(), Some(conversation.id.as_str()));
+
+        let filtered = db
+            .list_runs(&ListRunsFilters {
+                conversation_id: Some(conversation.id.clone()),
+                ..ListRunsFilters::default()
+            })
+            .expect("list runs by conversation");
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn conversation_session_and_archive_fields_update() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db = Database::new(&db_path).expect("db");
+
+        let conversation = db
+            .create_conversation(Provider::Claude, Some("session test"), None)
+            .expect("create conversation");
+        db.set_conversation_session_id(&conversation.id, "session-123")
+            .expect("set session");
+        let updated = db
+            .get_conversation(&conversation.id)
+            .expect("get conversation")
+            .expect("exists");
+        assert_eq!(updated.provider_session_id.as_deref(), Some("session-123"));
+
+        let archived = db
+            .archive_conversation(&conversation.id, true)
+            .expect("archive conversation");
+        assert!(archived);
+
+        let active = db
+            .list_conversations(&ListConversationsFilters {
+                provider: Some(Provider::Claude),
+                include_archived: Some(false),
+                ..ListConversationsFilters::default()
+            })
+            .expect("list active");
+        assert!(active.is_empty());
+
+        let all = db
+            .list_conversations(&ListConversationsFilters {
+                provider: Some(Provider::Claude),
+                include_archived: Some(true),
+                ..ListConversationsFilters::default()
+            })
+            .expect("list all");
+        assert_eq!(all.len(), 1);
+        assert!(all[0].archived_at.is_some());
+    }
+
+    #[test]
+    fn repairs_missing_conversation_run_links_and_validates_invariants() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db = Database::new(&db_path).expect("db");
+
+        let conversation = db
+            .create_conversation(Provider::Codex, Some("repair test"), None)
+            .expect("create conversation");
+        db.insert_run(
+            "run-repair",
+            Provider::Codex,
+            "prompt",
+            Some("gpt-5.3-codex"),
+            RunMode::NonInteractive,
+            Some("text"),
+            dir.path().to_string_lossy().as_ref(),
+            0,
+            None,
+            None,
+            &[],
+        )
+        .expect("insert run");
+        db.attach_run_to_conversation(&conversation.id, "run-repair")
+            .expect("attach run");
+
+        {
+            let conn = db.conn.lock().expect("db lock");
+            conn.execute("DELETE FROM conversation_runs WHERE run_id = 'run-repair'", [])
+                .expect("delete conversation_runs row");
+        }
+
+        {
+            let conn = db.conn.lock().expect("db lock");
+            db.repair_missing_conversation_links(&conn)
+                .expect("repair links");
+        }
+
+        db.validate_conversation_link_consistency()
+            .expect("validate invariants");
     }
 }

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { grantWorkspace, listRuns, listWorkspaceGrants, startRun } from "./tauriClient";
+import {
+  createConversation,
+  grantWorkspace,
+  getConversation,
+  listConversations,
+  listRuns,
+  listWorkspaceGrants,
+  sendConversationMessage,
+  startRun
+} from "./tauriClient";
 
 describe("tauriClient mock fallback", () => {
   it("creates queued runs without tauri", async () => {
@@ -46,5 +55,20 @@ describe("tauriClient mock fallback", () => {
     const to = new Date(Date.now() + 60_000).toISOString();
     const filtered = await listRuns({ provider: "claude", dateFrom: from, dateTo: to, limit: 20, offset: 0 });
     expect(filtered.some((run) => run.provider === "claude" && run.prompt === "date-filter")).toBe(true);
+  });
+
+  it("creates conversation and links sent runs in mock mode", async () => {
+    await grantWorkspace("/tmp");
+    const conversation = await createConversation({ provider: "codex", title: "conversation test" });
+    const sent = await sendConversationMessage({
+      conversationId: conversation.id,
+      prompt: "hello from conversation",
+      outputFormat: "text"
+    });
+    const detail = await getConversation(conversation.id);
+    expect(sent.runId).toBeTruthy();
+    expect(detail?.runs.some((run) => run.id === sent.runId)).toBe(true);
+    const listed = await listConversations({ provider: "codex", includeArchived: false, limit: 20, offset: 0 });
+    expect(listed.some((item) => item.id === conversation.id)).toBe(true);
   });
 });

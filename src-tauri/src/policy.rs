@@ -1,5 +1,7 @@
 use crate::errors::{AppError, AppResult};
-use crate::models::{AppSettings, CapabilityProfile, Provider, StartRunPayload, WorkspaceGrant};
+use crate::models::{
+    AppSettings, CapabilityProfile, CliAllowlistMode, Provider, SandboxMode, StartRunPayload, WorkspaceGrant,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -29,9 +31,15 @@ impl PolicyEngine {
         let codex_base_flags = [
             "model",
             "json",
+            "reasoning-effort",
             "output-schema",
             "output-last-message",
+            "ask-for-approval",
             "sandbox",
+            "search",
+            "add-dir",
+            "image",
+            "config",
             "skip-git-repo-check",
             "ephemeral",
         ]
@@ -44,9 +52,19 @@ impl PolicyEngine {
             "input-format",
             "json-schema",
             "model",
+            "fallback-model",
             "max-budget-usd",
             "no-session-persistence",
             "max-turns",
+            "tools",
+            "allowedTools",
+            "permission-mode",
+            "system-prompt",
+            "append-system-prompt",
+            "include-partial-messages",
+            "continue",
+            "agent",
+            "agents",
             "resume",
             "verbose",
         ]
@@ -75,6 +93,7 @@ impl PolicyEngine {
     ) -> AppResult<()> {
         self.validate_workspace(&payload.cwd, workspace_grants)?;
         self.validate_runtime_bounds(payload)?;
+        self.validate_harness(payload)?;
         self.validate_flags(payload.provider, &payload.optional_flags, settings, capability)?;
 
         if capability.blocked {
@@ -138,6 +157,75 @@ impl PolicyEngine {
                     "Retry backoff {}ms is out of allowed range ({}..={})",
                     backoff_ms, MIN_RETRY_BACKOFF_MS, MAX_RETRY_BACKOFF_MS
                 )));
+            }
+        }
+
+        if let Some(harness) = &payload.harness {
+            if let Some(limits) = &harness.limits {
+                if let Some(timeout_ms) = limits.timeout_ms {
+                    if !(5_000..=10_800_000).contains(&timeout_ms) {
+                        return Err(AppError::Policy(format!(
+                            "Harness timeout {}ms is out of allowed range (5000..=10800000)",
+                            timeout_ms
+                        )));
+                    }
+                }
+                if let Some(max_tool_result_lines) = limits.max_tool_result_lines {
+                    if max_tool_result_lines > 20_000 {
+                        return Err(AppError::Policy(format!(
+                            "maxToolResultLines {} exceeds limit 20000",
+                            max_tool_result_lines
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_harness(&self, payload: &StartRunPayload) -> AppResult<()> {
+        let Some(harness) = &payload.harness else {
+            return Ok(());
+        };
+
+        if let Some(permissions) = &harness.permissions {
+            if permissions.auto_approve
+                && permissions.sandbox_mode == SandboxMode::FullAccess
+            {
+                return Err(AppError::Policy(
+                    "autoApprove + full-access sandbox is denied by policy".to_string(),
+                ));
+            }
+        }
+
+        if let Some(allowlist) = &harness.cli_allowlist {
+            if allowlist.entries.is_empty() {
+                return Err(AppError::Policy("cliAllowlist.entries cannot be empty".to_string()));
+            }
+            for entry in &allowlist.entries {
+                if entry.name.trim().is_empty() {
+                    return Err(AppError::Policy("cliAllowlist entry name cannot be empty".to_string()));
+                }
+                if entry.path.trim().is_empty() {
+                    return Err(AppError::Policy(format!(
+                        "cliAllowlist path cannot be empty for '{}'",
+                        entry.name
+                    )));
+                }
+            }
+            if allowlist.mode == Some(CliAllowlistMode::Wrapper)
+                && allowlist.wrapper_name.as_deref().map(str::trim).unwrap_or_default().is_empty()
+            {
+                return Err(AppError::Policy(
+                    "cliAllowlist.wrapperName cannot be empty in wrapper mode".to_string(),
+                ));
+            }
+        }
+
+        if let Some(prelude) = &harness.shell_prelude {
+            if prelude.content.trim().is_empty() {
+                return Err(AppError::Policy("shellPrelude content cannot be empty".to_string()));
             }
         }
 
@@ -347,6 +435,7 @@ mod tests {
             scheduled_at: None,
             max_retries: None,
             retry_backoff_ms: None,
+            harness: None,
         };
 
         let cap = CapabilityProfile {
@@ -388,6 +477,7 @@ mod tests {
             scheduled_at: None,
             max_retries: None,
             retry_backoff_ms: None,
+            harness: None,
         };
 
         let grant = WorkspaceGrant {
@@ -465,6 +555,7 @@ mod tests {
             scheduled_at: None,
             max_retries: Some(11),
             retry_backoff_ms: Some(50),
+            harness: None,
         };
 
         let grant = WorkspaceGrant {
@@ -514,6 +605,7 @@ mod tests {
             scheduled_at: None,
             max_retries: None,
             retry_backoff_ms: None,
+            harness: None,
         };
 
         let grant = WorkspaceGrant {

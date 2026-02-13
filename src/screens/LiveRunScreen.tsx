@@ -161,9 +161,26 @@ function EventPayload(props: { eventType: string; payload: Record<string, unknow
   const text = typeof props.payload.text === "string" ? props.payload.text : undefined;
   const stage = typeof props.payload.stage === "string" ? props.payload.stage : undefined;
   const structured = props.payload.structured;
+  const semanticType = typeof props.payload.type === "string" ? props.payload.type : undefined;
+  const semanticMessage = typeof props.payload.message === "string" ? props.payload.message : undefined;
 
   if (text && props.eventType.startsWith("run.chunk")) {
     return <pre>{text}</pre>;
+  }
+  if (props.eventType === "run.semantic") {
+    return (
+      <pre>
+        {semanticType ?? "semantic"}{semanticMessage ? `: ${semanticMessage}` : ""}
+        {"\n"}
+        {JSON.stringify(props.payload, null, 2)}
+      </pre>
+    );
+  }
+  if (props.eventType === "run.warning" || props.eventType === "run.cli_missing" || props.eventType === "run.cwd_missing") {
+    return <code>{JSON.stringify(props.payload)}</code>;
+  }
+  if (props.eventType === "run.runner_metrics") {
+    return <pre>{JSON.stringify(props.payload, null, 2)}</pre>;
   }
   if (structured && typeof structured === "object") {
     return <pre>{JSON.stringify(structured, null, 2)}</pre>;

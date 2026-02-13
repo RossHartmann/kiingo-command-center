@@ -49,6 +49,181 @@ impl RunStatus {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum UnifiedTool {
+    #[serde(rename = "file_read")]
+    FileRead,
+    #[serde(rename = "file_write")]
+    FileWrite,
+    #[serde(rename = "file_edit")]
+    FileEdit,
+    #[serde(rename = "file_search")]
+    FileSearch,
+    #[serde(rename = "content_search")]
+    ContentSearch,
+    #[serde(rename = "shell")]
+    Shell,
+    #[serde(rename = "web_fetch")]
+    WebFetch,
+    #[serde(rename = "web_search")]
+    WebSearch,
+    #[serde(rename = "mcp")]
+    Mcp,
+    #[serde(rename = "task")]
+    Task,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    ReadOnly,
+    WorkspaceWrite,
+    FullAccess,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalPolicy {
+    Untrusted,
+    OnFailure,
+    OnRequest,
+    Never,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnifiedPermission {
+    pub sandbox_mode: SandboxMode,
+    pub auto_approve: bool,
+    pub network_access: bool,
+    pub approval_policy: Option<ApprovalPolicy>,
+}
+
+impl Default for UnifiedPermission {
+    fn default() -> Self {
+        Self {
+            sandbox_mode: SandboxMode::ReadOnly,
+            auto_approve: false,
+            network_access: false,
+            approval_policy: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLimits {
+    pub max_budget_usd: Option<f64>,
+    pub max_turns: Option<u32>,
+    pub timeout_ms: Option<u64>,
+    pub max_tool_result_lines: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredOutputConfig {
+    pub schema: serde_json::Value,
+    pub strict: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliAllowlistEntry {
+    pub name: String,
+    pub path: String,
+    pub args: Option<Vec<String>>,
+    pub env: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CliAllowlistMode {
+    Shims,
+    Wrapper,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliAllowlistConfig {
+    pub entries: Vec<CliAllowlistEntry>,
+    pub mode: Option<CliAllowlistMode>,
+    pub wrapper_name: Option<String>,
+    pub bin_dir: Option<String>,
+    pub keep_bin_dir: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPreludeConfig {
+    pub content: String,
+    pub bash_env: Option<bool>,
+    pub sh_env: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub env: Option<BTreeMap<String, String>>,
+    pub url: Option<String>,
+    pub headers: Option<BTreeMap<String, String>>,
+    pub r#type: Option<String>,
+    pub enabled_tools: Option<Vec<String>>,
+    pub disabled_tools: Option<Vec<String>>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct McpConfig {
+    pub servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageAttachment {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAttachment {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessRequestOptions {
+    pub resume_session_id: Option<String>,
+    pub continue_session: Option<bool>,
+    pub input_format: Option<String>,
+    pub additional_directories: Option<Vec<String>>,
+    pub tools: Option<Vec<UnifiedTool>>,
+    pub permissions: Option<UnifiedPermission>,
+    pub limits: Option<AgentLimits>,
+    pub mcp: Option<McpConfig>,
+    pub structured_output: Option<StructuredOutputConfig>,
+    pub system_prompt: Option<String>,
+    pub append_system_prompt: Option<String>,
+    pub piped_content: Option<String>,
+    pub images: Option<Vec<ImageAttachment>>,
+    pub files: Option<Vec<FileAttachment>>,
+    pub process_env: Option<BTreeMap<String, String>>,
+    pub cli_allowlist: Option<CliAllowlistConfig>,
+    pub shell_prelude: Option<ShellPreludeConfig>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRunPayload {
@@ -65,6 +240,91 @@ pub struct StartRunPayload {
     pub scheduled_at: Option<DateTime<Utc>>,
     pub max_retries: Option<u32>,
     pub retry_backoff_ms: Option<u64>,
+    #[serde(default)]
+    pub harness: Option<HarnessRequestOptions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationRecord {
+    pub id: String,
+    pub provider: Provider,
+    pub title: String,
+    pub provider_session_id: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub id: String,
+    pub provider: Provider,
+    pub title: String,
+    pub provider_session_id: Option<String>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+    pub last_run_id: Option<String>,
+    pub last_message_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationDetail {
+    pub conversation: ConversationRecord,
+    pub runs: Vec<RunRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateConversationPayload {
+    pub provider: Provider,
+    pub title: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConversationsFilters {
+    pub provider: Option<Provider>,
+    pub include_archived: Option<bool>,
+    pub search: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendConversationMessagePayload {
+    pub conversation_id: String,
+    pub prompt: String,
+    pub model: Option<String>,
+    pub output_format: Option<String>,
+    pub cwd: Option<String>,
+    pub optional_flags: Option<BTreeMap<String, serde_json::Value>>,
+    pub profile_id: Option<String>,
+    pub queue_priority: Option<i32>,
+    pub timeout_seconds: Option<u64>,
+    pub scheduled_at: Option<DateTime<Utc>>,
+    pub max_retries: Option<u32>,
+    pub retry_backoff_ms: Option<u64>,
+    pub harness: Option<HarnessRequestOptions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameConversationPayload {
+    pub conversation_id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationPayload {
+    pub conversation_id: String,
+    pub archived: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +346,7 @@ pub struct RunRecord {
     pub profile_id: Option<String>,
     pub capability_snapshot_id: Option<String>,
     pub compatibility_warnings: Vec<String>,
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +383,7 @@ pub struct RunDetail {
 pub struct ListRunsFilters {
     pub provider: Option<Provider>,
     pub status: Option<RunStatus>,
+    pub conversation_id: Option<String>,
     pub search: Option<String>,
     pub date_from: Option<DateTime<Utc>>,
     pub date_to: Option<DateTime<Utc>>,
@@ -200,10 +462,11 @@ pub struct SchedulerJob {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
     pub codex_path: String,
     pub claude_path: String,
+    pub conversation_threads_v1: bool,
     pub retention_days: u32,
     pub max_storage_mb: u32,
     pub allow_advanced_policy: bool,
@@ -217,6 +480,7 @@ impl Default for AppSettings {
         Self {
             codex_path: "codex".to_string(),
             claude_path: "claude".to_string(),
+            conversation_threads_v1: cfg!(debug_assertions),
             retention_days: 90,
             max_storage_mb: 1024,
             allow_advanced_policy: false,

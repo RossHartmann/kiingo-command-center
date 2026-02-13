@@ -8,9 +8,17 @@ use crate::adapters::compatibility::CompatibilityRegistry;
 use crate::adapters::Adapter;
 use crate::db::Database;
 use crate::errors::{AppError, AppResult};
+use crate::harness::capability_adjuster::apply_harness_capabilities;
+use crate::harness::cli_allowlist::prepare_cli_allowlist;
+use crate::harness::cli_missing::build_cli_missing_payload;
+use crate::harness::line_buffer::LineBuffer;
+use crate::harness::shell_prelude::prepare_shell_prelude;
+use crate::harness::structured_output::{resolve_structured_output, validate_structured_output};
 use crate::models::{
-    AcceptedResponse, AppSettings, BooleanResponse, CapabilitySnapshot, ExportResponse, ListRunsFilters, Profile,
-    Provider, RerunResponse, RunDetail, RunMode, RunStatus, SaveProfilePayload, SchedulerJob, StartInteractiveSessionResponse,
+    AcceptedResponse, AppSettings, ArchiveConversationPayload, BooleanResponse, CapabilitySnapshot,
+    ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload, ExportResponse,
+    ListConversationsFilters, ListRunsFilters, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
+    RunMode, RunStatus, SaveProfilePayload, SchedulerJob, SendConversationMessagePayload, StartInteractiveSessionResponse,
     StartRunPayload, StartRunResponse, StreamEnvelope, WorkspaceGrant,
 };
 use crate::policy::PolicyEngine;
@@ -25,13 +33,13 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_shell::process::{CommandChild as ShellCommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::{timeout, Duration};
@@ -43,7 +51,9 @@ static ANSI_ESCAPE_RE: Lazy<regex::Regex> = Lazy::new(|| {
 
 const MAX_BUFFERED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BUFFERED_OUTPUT_LINES: usize = 4_000;
-const DEFAULT_CODEX_MODEL: &str = "gpt-5-codex";
+const MAX_RUNNER_LINE_LENGTH: usize = 100_000;
+const MAX_STREAM_BUFFER_BYTES: usize = 2_000_000;
+const DEFAULT_CODEX_MODEL: &str = "gpt-5.3-codex";
 const DEFAULT_CLAUDE_MODEL: &str = "sonnet";
 
 #[derive(Default)]
@@ -84,6 +94,7 @@ struct PendingRun {
     binary_path: String,
     execution_path: RunExecutionPath,
     session_input: Option<tokio::sync::mpsc::Receiver<String>>,
+    harness_warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,8 +108,32 @@ struct ActiveChild {
     canceled: Arc<AtomicBool>,
 }
 
+#[derive(Default)]
+struct SemanticStats {
+    event_count: AtomicU64,
+    tool_event_count: AtomicU64,
+}
+
+struct SemanticStateGuard {
+    adapter: Arc<dyn Adapter>,
+    run_id: String,
+}
+
+impl SemanticStateGuard {
+    fn new(adapter: Arc<dyn Adapter>, run_id: String) -> Self {
+        Self { adapter, run_id }
+    }
+}
+
+impl Drop for SemanticStateGuard {
+    fn drop(&mut self) {
+        self.adapter.clear_semantic_state(&self.run_id);
+    }
+}
+
 enum ActiveProcess {
     Tokio(Arc<Mutex<Child>>),
+    #[allow(dead_code)]
     Shell(Arc<Mutex<Option<ShellCommandChild>>>),
     Pty(Arc<StdMutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>>),
 }
@@ -201,7 +236,7 @@ impl RunnerCore {
         let settings = self.db.get_settings()?;
         self.apply_runtime_settings(&settings).await;
 
-        let effective_payload =
+        let mut effective_payload =
             self.normalize_payload_defaults(self.apply_profile_if_selected(payload)?);
 
         let configured_binary = match effective_payload.provider {
@@ -215,6 +250,9 @@ impl RunnerCore {
             .compatibility
             .detect_profile(effective_payload.provider, &binary_path)
             .await;
+
+        let adjustment = apply_harness_capabilities(effective_payload.harness.clone(), &capability);
+        effective_payload.harness = adjustment.harness;
 
         let snapshot = CapabilitySnapshot {
             id: Uuid::new_v4().to_string(),
@@ -238,7 +276,8 @@ impl RunnerCore {
         }
 
         let run_id = Uuid::new_v4().to_string();
-        let warnings = capability.disabled_reasons.clone();
+        let mut warnings = capability.disabled_reasons.clone();
+        warnings.extend(adjustment.warnings.clone());
         let queue_priority = effective_payload.queue_priority.unwrap_or_default();
         let scheduled_at = effective_payload.scheduled_at.unwrap_or_else(Utc::now);
         let max_retries = effective_payload.max_retries.unwrap_or(0);
@@ -283,6 +322,7 @@ impl RunnerCore {
             binary_path,
             execution_path,
             session_input,
+            harness_warnings: warnings,
         };
         self.pending_runs.lock().await.insert(run_id.clone(), pending);
 
@@ -333,7 +373,7 @@ impl RunnerCore {
             .emit_event(&run_id, "run.progress", json!({ "stage": "spawn_preparing" }))
             .await;
 
-        for warning in &pending.capability.disabled_reasons {
+        for warning in &pending.harness_warnings {
             let _ = self.db.add_compatibility_warning(&run_id, warning);
             let _ = self
                 .emit_event(
@@ -363,7 +403,7 @@ impl RunnerCore {
         };
 
         let adapter = self.adapter_for(pending.payload.provider);
-        let command_spec = match adapter.build_command(
+        let mut command_spec = match adapter.build_command(
             &pending.payload,
             &pending.capability,
             &pending.binary_path,
@@ -384,6 +424,94 @@ impl RunnerCore {
                 return true;
             }
         };
+
+        let mut runtime_cleanup_paths = Vec::<String>::new();
+        if let Some(harness) = &pending.payload.harness {
+            if let Some(allowlist) = &harness.cli_allowlist {
+                let runtime_dir = self.app_data_dir.join("runtime");
+                match prepare_cli_allowlist(allowlist, &runtime_dir) {
+                    Ok(prepared) => {
+                        command_spec.env.extend(prepared.env);
+                        if pending.payload.provider == Provider::Codex {
+                            let bin_dir = prepared.bin_dir.to_string_lossy().to_string();
+                            let already_added = command_spec
+                                .args
+                                .windows(2)
+                                .any(|window| window[0] == "--add-dir" && window[1] == bin_dir);
+                            if !already_added {
+                                command_spec.args.push("--add-dir".to_string());
+                                command_spec.args.push(bin_dir);
+                            }
+                        }
+                        runtime_cleanup_paths.extend(
+                            prepared
+                                .cleanup_paths
+                                .iter()
+                                .map(|path| path.to_string_lossy().to_string()),
+                        );
+                        let _ = self
+                            .emit_event(
+                                &run_id,
+                                "run.progress",
+                                json!({
+                                    "stage": "cli_allowlist_prepared",
+                                    "binDir": prepared.bin_dir.to_string_lossy(),
+                                    "commands": prepared.exposed_commands
+                                }),
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        let message = format!("Failed to prepare CLI allowlist: {}", error);
+                        let _ = self
+                            .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                            .await;
+                        return true;
+                    }
+                }
+            }
+
+            if let Some(shell_prelude) = &harness.shell_prelude {
+                let runtime_dir = self.app_data_dir.join("runtime");
+                match prepare_shell_prelude(shell_prelude, &runtime_dir) {
+                    Ok(prepared) => {
+                        command_spec.env.extend(prepared.env);
+                        runtime_cleanup_paths.extend(
+                            prepared
+                                .cleanup_paths
+                                .iter()
+                                .map(|path| path.to_string_lossy().to_string()),
+                        );
+                        let _ = self
+                            .emit_event(
+                                &run_id,
+                                "run.progress",
+                                json!({
+                                    "stage": "shell_prelude_prepared",
+                                    "path": prepared.path.to_string_lossy()
+                                }),
+                            )
+                            .await;
+                    }
+                    Err(error) => {
+                        let message = format!("Failed to prepare shell prelude: {}", error);
+                        let _ = self
+                            .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                            .await;
+                        return true;
+                    }
+                }
+            }
+
+            if let Some(process_env) = &harness.process_env {
+                command_spec.env.extend(process_env.clone());
+            }
+        }
+
+        command_spec
+            .meta
+            .cleanup_paths
+            .extend(runtime_cleanup_paths);
 
         let audited_flags = match self.policy.validate_resolved_args(
             pending.payload.provider,
@@ -427,30 +555,16 @@ impl RunnerCore {
                 .await;
         }
 
-        let execution = match pending.execution_path {
-            RunExecutionPath::ScopedShellAlias => {
-                self.execute_noninteractive_shell_run(
-                    run_id.clone(),
-                    &pending,
-                    &settings,
-                    adapter.clone(),
-                    &command_spec,
-                )
-                .await
-                .map_err(|error| format!("Shell execution failed: {}", error))
-            }
-            RunExecutionPath::VerifiedAbsolutePath => {
-                self.execute_noninteractive_tokio_run(
-                    run_id.clone(),
-                    &pending,
-                    &settings,
-                    adapter.clone(),
-                    &command_spec,
-                )
-                .await
-                .map_err(|error| format!("Absolute-path execution failed: {}", error))
-            }
-        };
+        let execution = self
+            .execute_noninteractive_tokio_run(
+                run_id.clone(),
+                &pending,
+                &settings,
+                adapter.clone(),
+                &command_spec,
+            )
+            .await
+            .map_err(|error| format!("Non-interactive execution failed: {}", error));
 
         match execution {
             Ok(result) => result,
@@ -478,6 +592,14 @@ impl RunnerCore {
         adapter: Arc<dyn Adapter>,
         command_spec: ValidatedCommand,
     ) -> bool {
+        let _semantic_guard = SemanticStateGuard::new(adapter.clone(), run_id.clone());
+        let max_tool_result_lines = pending
+            .payload
+            .harness
+            .as_ref()
+            .and_then(|harness| harness.limits.as_ref())
+            .and_then(|limits| limits.max_tool_result_lines);
+
         let pty_system = native_pty_system();
         let pair = match pty_system.openpty(PtySize {
             rows: 30,
@@ -604,6 +726,8 @@ impl RunnerCore {
                                     text,
                                     adapter.as_ref(),
                                     "stdout",
+                                    max_tool_result_lines,
+                                    None,
                                 )
                                 .await
                             {
@@ -765,6 +889,7 @@ impl RunnerCore {
             let _ = self
                 .emit_event(&run_id, "run.canceled", json!({ "exit_code": exit_code }))
                 .await;
+            let _ = self.touch_conversation_for_run(&run_id).await;
             let _ = self.emit_event(&run_id, "session.closed", json!({})).await;
             self.sessions.close_session(&run_id).await;
             return false;
@@ -778,11 +903,19 @@ impl RunnerCore {
             let _ = self
                 .emit_event(&run_id, "run.completed", json!({ "exit_code": exit_code }))
                 .await;
+            let _ = self.touch_conversation_for_run(&run_id).await;
             let _ = self.emit_event(&run_id, "session.closed", json!({})).await;
             self.sessions.close_session(&run_id).await;
             false
         } else {
             let error_message = format!("Process exited with {:?}", exit_code);
+            if self
+                .maybe_retry_without_resume(&run_id, &pending, &buffered_text, &error_message)
+                .await
+                .unwrap_or(false)
+            {
+                return false;
+            }
             let _ = self
                 .fail_run(&run_id, exit_code, &error_message, true)
                 .await;
@@ -790,6 +923,7 @@ impl RunnerCore {
         }
     }
 
+    #[allow(dead_code)]
     async fn execute_noninteractive_shell_run(
         &self,
         run_id: String,
@@ -798,6 +932,14 @@ impl RunnerCore {
         adapter: Arc<dyn Adapter>,
         command_spec: &ValidatedCommand,
     ) -> AppResult<bool> {
+        let _semantic_guard = SemanticStateGuard::new(adapter.clone(), run_id.clone());
+        let max_tool_result_lines = pending
+            .payload
+            .harness
+            .as_ref()
+            .and_then(|harness| harness.limits.as_ref())
+            .and_then(|limits| limits.max_tool_result_lines);
+
         let app_handle = self
             .app_handle
             .read()
@@ -867,6 +1009,8 @@ impl RunnerCore {
                                 text,
                                 adapter.as_ref(),
                                 "stdout",
+                                max_tool_result_lines,
+                                None,
                             )
                             .await
                         {
@@ -884,6 +1028,8 @@ impl RunnerCore {
                                 text,
                                 adapter.as_ref(),
                                 "stderr",
+                                max_tool_result_lines,
+                                None,
                             )
                             .await
                         {
@@ -948,6 +1094,7 @@ impl RunnerCore {
             let _ = self
                 .emit_event(&run_id, "run.canceled", json!({ "exit_code": exit_code }))
                 .await;
+            let _ = self.touch_conversation_for_run(&run_id).await;
             return Ok(false);
         }
 
@@ -959,9 +1106,17 @@ impl RunnerCore {
             let _ = self
                 .emit_event(&run_id, "run.completed", json!({ "exit_code": exit_code }))
                 .await;
+            let _ = self.touch_conversation_for_run(&run_id).await;
             Ok(false)
         } else {
             let error_message = format!("Process exited with {:?}", exit_code);
+            if self
+                .maybe_retry_without_resume(&run_id, pending, &buffered_text, &error_message)
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(false);
+            }
             if self
                 .schedule_retry_if_eligible(&run_id, pending, &error_message)
                 .await
@@ -985,26 +1140,102 @@ impl RunnerCore {
         adapter: Arc<dyn Adapter>,
         command_spec: &ValidatedCommand,
     ) -> AppResult<bool> {
-        let mut command = Command::new(&command_spec.program);
-        command
-            .args(command_spec.args.clone())
-            .current_dir(command_spec.cwd.clone())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (key, value) in &command_spec.env {
-            command.env(key, value);
+        let _semantic_guard = SemanticStateGuard::new(adapter.clone(), run_id.clone());
+        let max_tool_result_lines = pending
+            .payload
+            .harness
+            .as_ref()
+            .and_then(|harness| harness.limits.as_ref())
+            .and_then(|limits| limits.max_tool_result_lines);
+        let semantic_stats = Arc::new(SemanticStats::default());
+        let run_started_at = tokio::time::Instant::now();
+
+        let mut spawn_attempt = 0_u32;
+        let mut child = loop {
+            spawn_attempt = spawn_attempt.saturating_add(1);
+            let mut command = Command::new(&command_spec.program);
+            command
+                .args(command_spec.args.clone())
+                .current_dir(command_spec.cwd.clone())
+                .stdin(if command_spec.stdin.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            for (key, value) in &command_spec.env {
+                command.env(key, value);
+            }
+
+            match command.spawn() {
+                Ok(child) => break child,
+                Err(error) => {
+                    let retryable = matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied)
+                        && spawn_attempt < 3;
+                    if retryable {
+                        let delay_ms = 200_u64.saturating_mul(2_u64.saturating_pow(spawn_attempt.saturating_sub(1)));
+                        let _ = self
+                            .emit_event(
+                                &run_id,
+                                "run.warning",
+                                json!({
+                                    "code": "SPAWN_RETRY",
+                                    "attempt": spawn_attempt,
+                                    "delayMs": delay_ms,
+                                    "message": format!("Spawn failed ({}). Retrying...", error),
+                                }),
+                            )
+                            .await;
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        continue;
+                    }
+
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        if !Path::new(&command_spec.cwd).exists() {
+                            let _ = self
+                                .emit_event(
+                                    &run_id,
+                                    "run.cwd_missing",
+                                    json!({
+                                        "path": command_spec.cwd,
+                                        "message": format!("Working directory not found: {}", command_spec.cwd)
+                                    }),
+                                )
+                                .await;
+                        } else if let Some(payload) =
+                            build_cli_missing_payload(&error.to_string(), pending.payload.provider)
+                        {
+                            let _ = self.emit_event(&run_id, "run.cli_missing", payload).await;
+                        }
+                    }
+
+                    return Err(AppError::Io(format!("failed to spawn process: {}", error)));
+                }
+            }
+        };
+
+        if let Some(stdin_payload) = command_spec.stdin.clone() {
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin
+                    .write_all(stdin_payload.as_bytes())
+                    .await
+                    .map_err(|error| AppError::Io(format!("failed to write stdin: {}", error)))?;
+                let _ = stdin.shutdown().await;
+            }
         }
 
-        let mut child = command
-            .spawn()
-            .map_err(|error| AppError::Io(format!("failed to spawn process: {}", error)))?;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
         let child_handle = Arc::new(Mutex::new(child));
         let buffered_output = Arc::new(Mutex::new(OutputBuffer::default()));
         let canceled = Arc::new(AtomicBool::new(false));
+        let stdout_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stderr_bytes = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stdout_lines = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stderr_lines = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         self.active_children.lock().await.insert(
             run_id.clone(),
@@ -1019,29 +1250,72 @@ impl RunnerCore {
             let core = self.clone();
             let adapter = adapter.clone();
             let buffered_output = buffered_output.clone();
+            let stdout_bytes = stdout_bytes.clone();
+            let stdout_lines = stdout_lines.clone();
+            let semantic_stats = semantic_stats.clone();
+            let max_tool_result_lines = max_tool_result_lines;
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stream).lines();
+                use tokio::io::AsyncReadExt;
+                let mut reader = BufReader::new(stream);
+                let mut chunk = vec![0_u8; 4096];
+                let mut line_buffer = LineBuffer::new(Some(MAX_STREAM_BUFFER_BYTES));
                 loop {
-                    match lines.next_line().await {
-                        Ok(Some(line)) => {
-                            let text = sanitize_terminal_chunk(&line);
-                            if text.is_empty() {
-                                continue;
+                    match reader.read(&mut chunk).await {
+                        Ok(0) => break,
+                        Ok(size) => {
+                            stdout_bytes.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
+                            let text = String::from_utf8_lossy(&chunk[..size]).to_string();
+                            let lines = line_buffer.push(&text);
+                            let overflowed = line_buffer.consume_overflowed_bytes();
+                            if overflowed > 0 {
+                                let _ = core
+                                    .emit_event(
+                                        &run_id,
+                                        "run.warning",
+                                        json!({
+                                            "code": "BUFFER_TRIMMED",
+                                            "stream": "stdout",
+                                            "bytes": overflowed
+                                        }),
+                                    )
+                                    .await;
                             }
-                            if let Ok(redacted) = core
-                                .emit_redacted_stream(
-                                    &run_id,
-                                    "run.chunk.stdout",
-                                    text,
-                                    adapter.as_ref(),
-                                    "stdout",
-                                )
-                                .await
-                            {
-                                buffered_output.lock().await.push(redacted);
+                            for line in lines {
+                                stdout_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let mut sanitized = sanitize_terminal_chunk(&line);
+                                if sanitized.len() > MAX_RUNNER_LINE_LENGTH {
+                                    sanitized.truncate(MAX_RUNNER_LINE_LENGTH);
+                                    let _ = core
+                                        .emit_event(
+                                            &run_id,
+                                            "run.warning",
+                                            json!({
+                                                "code": "LINE_TRUNCATED",
+                                                "stream": "stdout",
+                                                "maxLineLength": MAX_RUNNER_LINE_LENGTH
+                                            }),
+                                        )
+                                        .await;
+                                }
+                                if sanitized.is_empty() {
+                                    continue;
+                                }
+                                if let Ok(redacted) = core
+                                    .emit_redacted_stream(
+                                        &run_id,
+                                        "run.chunk.stdout",
+                                        sanitized,
+                                        adapter.as_ref(),
+                                        "stdout",
+                                        max_tool_result_lines,
+                                        Some(semantic_stats.clone()),
+                                    )
+                                    .await
+                                {
+                                    buffered_output.lock().await.push(redacted);
+                                }
                             }
                         }
-                        Ok(None) => break,
                         Err(error) => {
                             let _ = core
                                 .emit_event(
@@ -1054,6 +1328,23 @@ impl RunnerCore {
                         }
                     }
                 }
+                let mut leftover = line_buffer.flush();
+                if !leftover.trim().is_empty() {
+                    if leftover.len() > MAX_RUNNER_LINE_LENGTH {
+                        leftover.truncate(MAX_RUNNER_LINE_LENGTH);
+                    }
+                    let _ = core
+                        .emit_redacted_stream(
+                            &run_id,
+                            "run.chunk.stdout",
+                            sanitize_terminal_chunk(&leftover),
+                            adapter.as_ref(),
+                            "stdout",
+                            max_tool_result_lines,
+                            Some(semantic_stats.clone()),
+                        )
+                        .await;
+                }
             })
         });
 
@@ -1062,29 +1353,72 @@ impl RunnerCore {
             let core = self.clone();
             let adapter = adapter.clone();
             let buffered_output = buffered_output.clone();
+            let stderr_bytes = stderr_bytes.clone();
+            let stderr_lines = stderr_lines.clone();
+            let semantic_stats = semantic_stats.clone();
+            let max_tool_result_lines = max_tool_result_lines;
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stream).lines();
+                use tokio::io::AsyncReadExt;
+                let mut reader = BufReader::new(stream);
+                let mut chunk = vec![0_u8; 4096];
+                let mut line_buffer = LineBuffer::new(Some(MAX_STREAM_BUFFER_BYTES));
                 loop {
-                    match lines.next_line().await {
-                        Ok(Some(line)) => {
-                            let text = sanitize_terminal_chunk(&line);
-                            if text.is_empty() {
-                                continue;
+                    match reader.read(&mut chunk).await {
+                        Ok(0) => break,
+                        Ok(size) => {
+                            stderr_bytes.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
+                            let text = String::from_utf8_lossy(&chunk[..size]).to_string();
+                            let lines = line_buffer.push(&text);
+                            let overflowed = line_buffer.consume_overflowed_bytes();
+                            if overflowed > 0 {
+                                let _ = core
+                                    .emit_event(
+                                        &run_id,
+                                        "run.warning",
+                                        json!({
+                                            "code": "BUFFER_TRIMMED",
+                                            "stream": "stderr",
+                                            "bytes": overflowed
+                                        }),
+                                    )
+                                    .await;
                             }
-                            if let Ok(redacted) = core
-                                .emit_redacted_stream(
-                                    &run_id,
-                                    "run.chunk.stderr",
-                                    text,
-                                    adapter.as_ref(),
-                                    "stderr",
-                                )
-                                .await
-                            {
-                                buffered_output.lock().await.push(redacted);
+                            for line in lines {
+                                stderr_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let mut sanitized = sanitize_terminal_chunk(&line);
+                                if sanitized.len() > MAX_RUNNER_LINE_LENGTH {
+                                    sanitized.truncate(MAX_RUNNER_LINE_LENGTH);
+                                    let _ = core
+                                        .emit_event(
+                                            &run_id,
+                                            "run.warning",
+                                            json!({
+                                                "code": "LINE_TRUNCATED",
+                                                "stream": "stderr",
+                                                "maxLineLength": MAX_RUNNER_LINE_LENGTH
+                                            }),
+                                        )
+                                        .await;
+                                }
+                                if sanitized.is_empty() {
+                                    continue;
+                                }
+                                if let Ok(redacted) = core
+                                    .emit_redacted_stream(
+                                        &run_id,
+                                        "run.chunk.stderr",
+                                        sanitized,
+                                        adapter.as_ref(),
+                                        "stderr",
+                                        max_tool_result_lines,
+                                        Some(semantic_stats.clone()),
+                                    )
+                                    .await
+                                {
+                                    buffered_output.lock().await.push(redacted);
+                                }
                             }
                         }
-                        Ok(None) => break,
                         Err(error) => {
                             let _ = core
                                 .emit_event(
@@ -1096,6 +1430,23 @@ impl RunnerCore {
                             break;
                         }
                     }
+                }
+                let mut leftover = line_buffer.flush();
+                if !leftover.trim().is_empty() {
+                    if leftover.len() > MAX_RUNNER_LINE_LENGTH {
+                        leftover.truncate(MAX_RUNNER_LINE_LENGTH);
+                    }
+                    let _ = core
+                        .emit_redacted_stream(
+                            &run_id,
+                            "run.chunk.stderr",
+                            sanitize_terminal_chunk(&leftover),
+                            adapter.as_ref(),
+                            "stderr",
+                            max_tool_result_lines,
+                            Some(semantic_stats.clone()),
+                        )
+                        .await;
                 }
             })
         });
@@ -1149,6 +1500,92 @@ impl RunnerCore {
         let _ = self
             .db
             .insert_artifact(&run_id, "parsed_summary", "", &summary);
+
+        if command_spec.meta.structured_output_schema.is_some() {
+            let content = command_spec
+                .meta
+                .structured_output_path
+                .as_ref()
+                .and_then(|path| std::fs::read_to_string(path).ok());
+            let fallback_text = summary
+                .get("summary")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let value = resolve_structured_output(content.as_deref(), Some(&fallback_text));
+            let validation = validate_structured_output(
+                value,
+                command_spec.meta.structured_output_schema.as_ref(),
+            );
+            match (validation.error, validation.value) {
+                (None, Some(value)) => {
+                    let _ = self
+                        .emit_event(
+                            &run_id,
+                            "run.structured_output",
+                            json!({ "result": value }),
+                        )
+                        .await;
+                }
+                (Some(error), value) => {
+                    let _ = self
+                        .emit_event(
+                            &run_id,
+                            "run.structured_output_invalid",
+                            json!({
+                                "message": error,
+                                "errors": validation.errors,
+                                "value": value
+                            }),
+                        )
+                        .await;
+                }
+                _ => {}
+            }
+        }
+
+        if buffered_text.trim().is_empty() {
+            let _ = self
+                .emit_event(
+                    &run_id,
+                    "run.warning",
+                    json!({
+                        "code": "NO_TEXT_EMITTED",
+                        "message": "CLI produced no text output."
+                    }),
+                )
+                .await;
+        }
+
+        let duration_ms = run_started_at.elapsed().as_millis() as u64;
+        let _ = self
+            .emit_event(
+                &run_id,
+                "run.runner_metrics",
+                json!({
+                    "stdoutBytes": stdout_bytes.load(std::sync::atomic::Ordering::Relaxed),
+                    "stderrBytes": stderr_bytes.load(std::sync::atomic::Ordering::Relaxed),
+                    "stdoutLines": stdout_lines.load(std::sync::atomic::Ordering::Relaxed),
+                    "stderrLines": stderr_lines.load(std::sync::atomic::Ordering::Relaxed),
+                    "eventCount": semantic_stats.event_count.load(std::sync::atomic::Ordering::Relaxed),
+                    "toolCalls": semantic_stats.tool_event_count.load(std::sync::atomic::Ordering::Relaxed),
+                    "durationMs": duration_ms,
+                }),
+            )
+            .await;
+        let _ = self
+            .emit_event(
+                &run_id,
+                "run.cli_exit",
+                json!({
+                    "code": exit_code,
+                    "signal": serde_json::Value::Null,
+                    "durationMs": duration_ms
+                }),
+            )
+            .await;
+
+        self.cleanup_runtime_paths(&command_spec.meta.cleanup_paths);
         if settings.store_encrypted_raw_artifacts {
             let _ = self
                 .persist_encrypted_raw_artifact(&run_id, &buffered_text)
@@ -1163,6 +1600,7 @@ impl RunnerCore {
             let _ = self
                 .emit_event(&run_id, "run.canceled", json!({ "exit_code": exit_code }))
                 .await;
+            let _ = self.touch_conversation_for_run(&run_id).await;
             return Ok(false);
         }
 
@@ -1174,9 +1612,17 @@ impl RunnerCore {
             let _ = self
                 .emit_event(&run_id, "run.completed", json!({ "exit_code": exit_code }))
                 .await;
+            let _ = self.touch_conversation_for_run(&run_id).await;
             Ok(false)
         } else {
             let error_message = format!("Process exited with {:?}", exit_code);
+            if self
+                .maybe_retry_without_resume(&run_id, pending, &buffered_text, &error_message)
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(false);
+            }
             if self
                 .schedule_retry_if_eligible(&run_id, pending, &error_message)
                 .await
@@ -1199,6 +1645,7 @@ impl RunnerCore {
             self.db.mark_job_finished(run_id, false)?;
             self.emit_event(run_id, "run.canceled", json!({ "queued": true }))
                 .await?;
+            let _ = self.touch_conversation_for_run(run_id).await;
             return Ok(BooleanResponse { success: true });
         }
 
@@ -1212,6 +1659,7 @@ impl RunnerCore {
             self.db.mark_job_finished(run_id, false)?;
             self.emit_event(run_id, "run.canceled", json!({ "queued": false }))
                 .await?;
+            let _ = self.touch_conversation_for_run(run_id).await;
             self.sessions.close_session(run_id).await;
             return Ok(BooleanResponse { success: true });
         }
@@ -1297,6 +1745,7 @@ impl RunnerCore {
                 scheduled_at: None,
                 max_retries: Some(0),
                 retry_backoff_ms: Some(1_000),
+            harness: None,
             }
         };
 
@@ -1418,6 +1867,119 @@ impl RunnerCore {
 
     pub fn list_runs(&self, filters: ListRunsFilters) -> AppResult<Vec<crate::models::RunRecord>> {
         self.db.list_runs(&filters)
+    }
+
+    pub fn create_conversation(&self, payload: CreateConversationPayload) -> AppResult<ConversationRecord> {
+        let created = self
+            .db
+            .create_conversation(payload.provider, payload.title.as_deref(), payload.metadata.as_ref())?;
+        let _ = self.emit_app_event(
+            "conversation.created",
+            json!({
+                "conversationId": created.id,
+                "provider": created.provider,
+                "title": created.title,
+                "updatedAt": created.updated_at
+            }),
+        );
+        Ok(created)
+    }
+
+    pub fn list_conversations(&self, filters: ListConversationsFilters) -> AppResult<Vec<ConversationSummary>> {
+        self.db.list_conversations(&filters)
+    }
+
+    pub fn get_conversation(&self, conversation_id: &str) -> AppResult<Option<ConversationDetail>> {
+        self.db.get_conversation_detail(conversation_id)
+    }
+
+    pub fn rename_conversation(&self, payload: RenameConversationPayload) -> AppResult<Option<ConversationRecord>> {
+        let renamed = self
+            .db
+            .rename_conversation(&payload.conversation_id, &payload.title)?;
+        if let Some(conversation) = &renamed {
+            let _ = self.emit_app_event(
+                "conversation.renamed",
+                json!({
+                    "conversationId": conversation.id,
+                    "provider": conversation.provider,
+                    "title": conversation.title,
+                    "updatedAt": conversation.updated_at
+                }),
+            );
+        }
+        Ok(renamed)
+    }
+
+    pub fn archive_conversation(&self, payload: ArchiveConversationPayload) -> AppResult<BooleanResponse> {
+        let archived = payload.archived.unwrap_or(true);
+        let success = self
+            .db
+            .archive_conversation(&payload.conversation_id, archived)?;
+        if success {
+            let details = self.db.get_conversation(&payload.conversation_id)?;
+            let _ = self.emit_app_event(
+                "conversation.archived",
+                json!({
+                    "conversationId": payload.conversation_id,
+                    "archived": archived,
+                    "provider": details.as_ref().map(|item| item.provider),
+                    "updatedAt": details.as_ref().map(|item| item.updated_at),
+                    "archivedAt": details.and_then(|item| item.archived_at)
+                }),
+            );
+        }
+        Ok(BooleanResponse { success })
+    }
+
+    pub async fn send_conversation_message(
+        &self,
+        payload: SendConversationMessagePayload,
+    ) -> AppResult<StartRunResponse> {
+        let conversation = self
+            .db
+            .get_conversation(&payload.conversation_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Conversation {} not found", payload.conversation_id)))?;
+        if conversation.archived_at.is_some() {
+            return Err(AppError::Policy("Cannot send message to archived conversation".to_string()));
+        }
+
+        let cwd = self.resolve_conversation_cwd(payload.cwd)?;
+        let mut harness = payload.harness.unwrap_or_default();
+        harness.resume_session_id = conversation.provider_session_id.clone();
+        if harness.resume_session_id.is_none() {
+            harness.continue_session = None;
+        }
+
+        let start_payload = StartRunPayload {
+            provider: conversation.provider,
+            prompt: payload.prompt,
+            model: payload.model,
+            mode: RunMode::NonInteractive,
+            output_format: payload.output_format,
+            cwd,
+            optional_flags: payload.optional_flags.unwrap_or_default(),
+            profile_id: payload.profile_id,
+            queue_priority: payload.queue_priority,
+            timeout_seconds: payload.timeout_seconds,
+            scheduled_at: payload.scheduled_at,
+            max_retries: payload.max_retries,
+            retry_backoff_ms: payload.retry_backoff_ms,
+            harness: Some(harness),
+        };
+
+        let run_id = self.queue_run(start_payload, false).await?.0;
+        self.db
+            .attach_run_to_conversation(&conversation.id, &run_id)?;
+        let _ = self.emit_app_event(
+            "conversation.message_sent",
+            json!({
+                "conversationId": conversation.id,
+                "runId": run_id,
+                "provider": conversation.provider
+            }),
+        );
+        Ok(StartRunResponse { run_id })
     }
 
     pub fn list_profiles(&self) -> AppResult<Vec<Profile>> {
@@ -1547,6 +2109,106 @@ impl RunnerCore {
         }
     }
 
+    async fn maybe_retry_without_resume(
+        &self,
+        run_id: &str,
+        pending: &PendingRun,
+        buffered_text: &str,
+        error_message: &str,
+    ) -> AppResult<bool> {
+        if pending.payload.mode != RunMode::NonInteractive {
+            return Ok(false);
+        }
+        if !payload_has_resume_request(&pending.payload) {
+            return Ok(false);
+        }
+        let Some(conversation_id) = self.db.find_conversation_id_by_run(run_id)? else {
+            return Ok(false);
+        };
+
+        let corpus = format!("{}\n{}", error_message, buffered_text).to_ascii_lowercase();
+        if !is_resume_invalid_failure(&corpus) {
+            return Ok(false);
+        }
+
+        let Some(job) = self.db.get_queue_job(run_id)? else {
+            return Ok(false);
+        };
+        if job.attempts > 1 {
+            return Ok(false);
+        }
+
+        let mut retried_payload = pending.payload.clone();
+        if let Some(harness) = retried_payload.harness.as_mut() {
+            harness.resume_session_id = None;
+            harness.continue_session = None;
+        }
+
+        self.db.clear_conversation_session_id(&conversation_id)?;
+        let _ = self.emit_event(
+            run_id,
+            "run.warning",
+            json!({
+                "code": "session_resume_invalid",
+                "message": "Stored session id was invalid. Retrying once without resume.",
+                "conversationId": conversation_id
+            }),
+        )
+        .await;
+        let _ = self.emit_app_event(
+            "conversation.session_updated",
+            json!({
+                "conversationId": conversation_id,
+                "sessionId": serde_json::Value::Null
+            }),
+        );
+
+        let retry_message = "retrying once without resume session id";
+        let next_run_at = Utc::now() + chrono::Duration::milliseconds(100);
+        self.db.mark_job_retry(run_id, next_run_at, retry_message)?;
+        self.db
+            .update_run_status(run_id, RunStatus::Queued, None, Some(retry_message))?;
+
+        self.pending_runs.lock().await.insert(
+            run_id.to_string(),
+            PendingRun {
+                payload: retried_payload,
+                capability: pending.capability.clone(),
+                binary_path: pending.binary_path.clone(),
+                execution_path: pending.execution_path,
+                session_input: None,
+                harness_warnings: pending.harness_warnings.clone(),
+            },
+        );
+
+        if let Err(error) = self
+            .scheduler
+            .enqueue(ScheduledRun {
+                run_id: run_id.to_string(),
+                provider: pending.payload.provider,
+                priority: pending.payload.queue_priority.unwrap_or_default(),
+                queued_at: Utc::now(),
+                not_before: next_run_at,
+            })
+            .await
+        {
+            self.pending_runs.lock().await.remove(run_id);
+            return Err(AppError::Policy(error));
+        }
+
+        self.emit_event(
+            run_id,
+            "run.progress",
+            json!({
+                "stage": "retry_scheduled",
+                "reason": "session_resume_invalid",
+                "nextRunAt": next_run_at
+            }),
+        )
+        .await?;
+        Ok(true)
+    }
+
     async fn schedule_retry_if_eligible(
         &self,
         run_id: &str,
@@ -1597,6 +2259,7 @@ impl RunnerCore {
                 binary_path: pending.binary_path.clone(),
                 execution_path: pending.execution_path,
                 session_input: None,
+                harness_warnings: pending.harness_warnings.clone(),
             },
         );
 
@@ -1647,6 +2310,7 @@ impl RunnerCore {
             json!({ "exit_code": exit_code, "message": message }),
         )
         .await?;
+        let _ = self.touch_conversation_for_run(run_id).await;
         if close_session {
             self.emit_event(run_id, "session.closed", json!({})).await?;
             self.sessions.close_session(run_id).await;
@@ -1668,6 +2332,8 @@ impl RunnerCore {
         raw_line: String,
         adapter: &dyn Adapter,
         stream: &str,
+        max_tool_result_lines: Option<u32>,
+        semantic_stats: Option<Arc<SemanticStats>>,
     ) -> AppResult<String> {
         let redactor = self.redactor.read().await;
         let redacted = redactor.redact(&raw_line);
@@ -1682,6 +2348,18 @@ impl RunnerCore {
 
         if let Some(progress) = adapter.parse_chunk(stream, &redacted_text) {
             self.emit_event(run_id, "run.progress", progress).await?;
+        }
+        let semantic_events = adapter.parse_semantic_events(run_id, stream, &redacted_text);
+        for semantic in semantic_events {
+            let normalized = trim_semantic_tool_result(semantic, max_tool_result_lines);
+            self.handle_conversation_semantic(run_id, &normalized).await?;
+            if let Some(stats) = &semantic_stats {
+                stats.event_count.fetch_add(1, Ordering::Relaxed);
+                if is_tool_semantic_event(&normalized) {
+                    stats.tool_event_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            self.emit_event(run_id, "run.semantic", normalized).await?;
         }
         if let Some((severity, message)) = detect_diagnostic_line(&redacted_text) {
             self.emit_event(
@@ -1718,6 +2396,86 @@ impl RunnerCore {
         }
 
         Ok(())
+    }
+
+    fn emit_app_event(&self, event_type: &str, payload: serde_json::Value) -> AppResult<()> {
+        let event_id = Uuid::new_v4().to_string();
+        let envelope = StreamEnvelope {
+            run_id: String::new(),
+            r#type: event_type.to_string(),
+            payload,
+            timestamp: Utc::now(),
+            event_id,
+            seq: 0,
+        };
+        if let Ok(handle_opt) = self.app_handle.try_read() {
+            if let Some(handle) = handle_opt.as_ref() {
+                let _ = handle.emit("run_event", envelope);
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_conversation_semantic(&self, run_id: &str, semantic: &serde_json::Value) -> AppResult<()> {
+        let event_type = semantic.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+        if event_type != "session_complete" {
+            return Ok(());
+        }
+        let session_id = semantic
+            .get("sessionId")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        let Some(conversation_id) = self.db.find_conversation_id_by_run(run_id)? else {
+            return Ok(());
+        };
+        self.db
+            .set_conversation_session_id(&conversation_id, &session_id)?;
+        self.db.touch_conversation_updated_at(&conversation_id)?;
+        let _ = self.emit_app_event(
+            "conversation.session_updated",
+            json!({
+                "conversationId": conversation_id,
+                "sessionId": session_id
+            }),
+        );
+        Ok(())
+    }
+
+    async fn touch_conversation_for_run(&self, run_id: &str) -> AppResult<()> {
+        let Some(conversation_id) = self.db.find_conversation_id_by_run(run_id)? else {
+            return Ok(());
+        };
+        self.db.touch_conversation_updated_at(&conversation_id)?;
+        let provider = self
+            .db
+            .get_conversation(&conversation_id)?
+            .map(|conversation| conversation.provider);
+        let _ = self.emit_app_event(
+            "conversation.updated",
+            json!({
+                "conversationId": conversation_id,
+                "provider": provider,
+                "updatedAt": Utc::now()
+            }),
+        );
+        Ok(())
+    }
+
+    fn resolve_conversation_cwd(&self, requested: Option<String>) -> AppResult<String> {
+        if let Some(cwd) = requested.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+            return Ok(cwd);
+        }
+        let grants = self.db.list_workspace_grants()?;
+        let active = grants
+            .into_iter()
+            .find(|grant| grant.revoked_at.is_none())
+            .map(|grant| grant.path);
+        active.ok_or_else(|| AppError::Policy("No workspace grant found. Configure one in Settings.".to_string()))
     }
 
     async fn apply_runtime_settings(&self, settings: &AppSettings) {
@@ -1808,6 +2566,17 @@ impl RunnerCore {
             }),
         )?;
         Ok(())
+    }
+
+    fn cleanup_runtime_paths(&self, paths: &[String]) {
+        for path in paths {
+            let candidate = Path::new(path);
+            if candidate.is_dir() {
+                let _ = std::fs::remove_dir_all(candidate);
+            } else {
+                let _ = std::fs::remove_file(candidate);
+            }
+        }
     }
 
     fn apply_profile_if_selected(&self, payload: StartRunPayload) -> AppResult<StartRunPayload> {
@@ -2044,11 +2813,98 @@ fn detect_diagnostic_line(line: &str) -> Option<(&'static str, String)> {
     None
 }
 
-fn is_known_bad_codex_model(model: &str) -> bool {
-    matches!(
-        model.trim().to_ascii_lowercase().as_str(),
-        "gpt-5.3-codex" | "gpt-5.3"
+fn trim_tool_result(result: &str, max_lines: Option<u32>) -> String {
+    let Some(max_lines) = max_lines else {
+        return result.to_string();
+    };
+    if max_lines == 0 {
+        return result.to_string();
+    }
+    let max_lines = max_lines as usize;
+    let lines = result.split('\n').collect::<Vec<_>>();
+    if lines.len() <= max_lines {
+        return result.to_string();
+    }
+    let trimmed = lines[..max_lines].join("\n");
+    format!(
+        "{}\n... ({} more lines trimmed)",
+        trimmed,
+        lines.len().saturating_sub(max_lines)
     )
+}
+
+fn trim_semantic_tool_result(
+    mut semantic: serde_json::Value,
+    max_lines: Option<u32>,
+) -> serde_json::Value {
+    let event_type = semantic
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if event_type != "tool_result" && event_type != "tool_result_delta" {
+        return semantic;
+    }
+
+    if let Some(result) = semantic
+        .get("result")
+        .and_then(|value| value.as_str())
+        .map(|value| trim_tool_result(value, max_lines))
+    {
+        if let Some(obj) = semantic.as_object_mut() {
+            obj.insert("result".to_string(), serde_json::Value::String(result));
+        }
+    } else if let Some(delta) = semantic
+        .get("delta")
+        .and_then(|value| value.as_str())
+        .map(|value| trim_tool_result(value, max_lines))
+    {
+        if let Some(obj) = semantic.as_object_mut() {
+            obj.insert("delta".to_string(), serde_json::Value::String(delta));
+        }
+    }
+
+    semantic
+}
+
+fn is_tool_semantic_event(semantic: &serde_json::Value) -> bool {
+    matches!(
+        semantic.get("type").and_then(|value| value.as_str()),
+        Some("tool_start" | "tool_result" | "tool_result_delta")
+    )
+}
+
+fn is_known_bad_codex_model(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    normalized.is_empty()
+}
+
+fn payload_has_resume_request(payload: &StartRunPayload) -> bool {
+    payload
+        .harness
+        .as_ref()
+        .map(|harness| {
+            harness
+                .resume_session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some()
+                || harness.continue_session == Some(true)
+        })
+        .unwrap_or(false)
+}
+
+fn is_resume_invalid_failure(text_lowercase: &str) -> bool {
+    const MATCHERS: [&str; 7] = [
+        "not_found: no active session for run",
+        "no active session",
+        "thread not found",
+        "invalid session id",
+        "could not resume",
+        "session not found",
+        "no active session for run",
+    ];
+    MATCHERS.iter().any(|matcher| text_lowercase.contains(matcher))
 }
 
 fn render_markdown_export(detail: &RunDetail) -> String {
@@ -2084,10 +2940,14 @@ fn render_text_export(detail: &RunDetail) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_diagnostic_line, is_known_bad_codex_model, RunExecutionPath, RunnerCore,
+        detect_diagnostic_line, is_known_bad_codex_model, is_resume_invalid_failure, payload_has_resume_request,
+        RunExecutionPath, RunnerCore,
         DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL,
     };
-    use crate::models::{AppSettings, Provider, RunMode, SaveProfilePayload, StartRunPayload};
+    use crate::models::{
+        AppSettings, CreateConversationPayload, HarnessRequestOptions, Provider, RunMode, SaveProfilePayload,
+        SendConversationMessagePayload, StartRunPayload,
+    };
     use std::collections::BTreeMap;
 
     fn base_payload(provider: Provider) -> StartRunPayload {
@@ -2105,6 +2965,7 @@ mod tests {
             scheduled_at: None,
             max_retries: Some(0),
             retry_backoff_ms: Some(1_000),
+            harness: None,
         }
     }
 
@@ -2253,15 +3114,152 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn known_bad_codex_model_is_rewritten_to_safe_default() {
+    async fn explicit_codex_model_is_preserved() {
         let dir = tempfile::tempdir().expect("tempdir");
         let runner = RunnerCore::new(dir.path().to_path_buf()).expect("runner");
         let mut payload = base_payload(Provider::Codex);
         payload.model = Some("gpt-5.3-codex".to_string());
 
         let normalized = runner.normalize_payload_defaults(payload);
-        assert_eq!(normalized.model.as_deref(), Some(DEFAULT_CODEX_MODEL));
-        assert!(is_known_bad_codex_model("gpt-5.3-codex"));
+        assert_eq!(normalized.model.as_deref(), Some("gpt-5.3-codex"));
+        assert!(!is_known_bad_codex_model("gpt-5.3-codex"));
         assert!(!is_known_bad_codex_model("gpt-5-codex"));
+        assert!(is_known_bad_codex_model("   "));
+    }
+
+    #[tokio::test]
+    async fn send_conversation_message_links_run_and_applies_stored_resume_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runner = RunnerCore::new(dir.path().to_path_buf()).expect("runner");
+        let cwd = dir.path().to_string_lossy().to_string();
+        runner.grant_workspace(&cwd).expect("grant workspace");
+
+        let conversation = runner
+            .create_conversation(CreateConversationPayload {
+                provider: Provider::Codex,
+                title: Some("session continuity".to_string()),
+                metadata: None,
+            })
+            .expect("create conversation");
+        runner
+            .db
+            .set_conversation_session_id(&conversation.id, "thread-123")
+            .expect("set session");
+
+        let started = runner
+            .send_conversation_message(SendConversationMessagePayload {
+                conversation_id: conversation.id.clone(),
+                prompt: "continue".to_string(),
+                model: Some("gpt-5.3-codex".to_string()),
+                output_format: Some("text".to_string()),
+                cwd: Some(cwd),
+                optional_flags: None,
+                profile_id: None,
+                queue_priority: Some(0),
+                timeout_seconds: Some(120),
+                scheduled_at: None,
+                max_retries: Some(0),
+                retry_backoff_ms: Some(500),
+                harness: Some(HarnessRequestOptions {
+                    continue_session: Some(true),
+                    ..Default::default()
+                }),
+            })
+            .await
+            .expect("send message");
+
+        let detail = runner
+            .get_run(&started.run_id)
+            .expect("get run")
+            .expect("run exists");
+        assert_eq!(detail.run.provider, Provider::Codex);
+        assert_eq!(
+            detail.run.conversation_id.as_deref(),
+            Some(conversation.id.as_str())
+        );
+
+        let pending = runner.pending_runs.lock().await;
+        let queued = pending.get(&started.run_id).expect("pending run");
+        let resume_from_harness = queued
+            .payload
+            .harness
+            .as_ref()
+            .and_then(|harness| harness.resume_session_id.clone());
+        let resume_warning = queued
+            .harness_warnings
+            .iter()
+            .any(|warning| warning.to_ascii_lowercase().contains("resume"));
+        assert!(
+            resume_from_harness.as_deref() == Some("thread-123") || resume_warning,
+            "expected resume session id to be forwarded or downgraded with an explicit warning"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_conversation_message_rejects_archived_conversations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runner = RunnerCore::new(dir.path().to_path_buf()).expect("runner");
+        let cwd = dir.path().to_string_lossy().to_string();
+        runner.grant_workspace(&cwd).expect("grant workspace");
+
+        let conversation = runner
+            .create_conversation(CreateConversationPayload {
+                provider: Provider::Claude,
+                title: Some("archived".to_string()),
+                metadata: None,
+            })
+            .expect("create conversation");
+        runner
+            .archive_conversation(crate::models::ArchiveConversationPayload {
+                conversation_id: conversation.id.clone(),
+                archived: Some(true),
+            })
+            .expect("archive");
+
+        let result = runner
+            .send_conversation_message(SendConversationMessagePayload {
+                conversation_id: conversation.id,
+                prompt: "should fail".to_string(),
+                model: Some("sonnet".to_string()),
+                output_format: Some("text".to_string()),
+                cwd: Some(cwd),
+                optional_flags: None,
+                profile_id: None,
+                queue_priority: Some(0),
+                timeout_seconds: Some(60),
+                scheduled_at: None,
+                max_retries: Some(0),
+                retry_backoff_ms: Some(500),
+                harness: None,
+            })
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn detects_resume_invalid_failure_messages() {
+        assert!(is_resume_invalid_failure("not_found: no active session for run abc"));
+        assert!(is_resume_invalid_failure("invalid session id supplied"));
+        assert!(is_resume_invalid_failure("thread not found"));
+        assert!(!is_resume_invalid_failure("rate limit exceeded"));
+    }
+
+    #[test]
+    fn detects_payload_resume_requests() {
+        let mut payload = base_payload(Provider::Codex);
+        assert!(!payload_has_resume_request(&payload));
+
+        payload.harness = Some(crate::models::HarnessRequestOptions {
+            resume_session_id: Some("abc".to_string()),
+            ..Default::default()
+        });
+        assert!(payload_has_resume_request(&payload));
+
+        payload.harness = Some(crate::models::HarnessRequestOptions {
+            continue_session: Some(true),
+            ..Default::default()
+        });
+        assert!(payload_has_resume_request(&payload));
     }
 }

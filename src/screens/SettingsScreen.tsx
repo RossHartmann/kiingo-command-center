@@ -1,8 +1,22 @@
 import { FormEvent, useEffect, useState } from "react";
 import { clearProviderToken, hasProviderToken, saveProviderToken } from "../lib/tauriClient";
 import { useAppActions, useAppState } from "../state/appState";
+import type { Screen } from "../state/appState";
 
-export function SettingsScreen(): JSX.Element {
+interface SettingsScreenProps {
+  onNavigate?: (screen: Screen) => void;
+}
+
+const ADVANCED_SCREENS: Array<{ key: Screen; label: string }> = [
+  { key: "composer", label: "Composer" },
+  { key: "live", label: "Live Run" },
+  { key: "history", label: "History" },
+  { key: "profiles", label: "Profiles" },
+  { key: "compatibility", label: "Compatibility" },
+  { key: "queue", label: "Queue" }
+];
+
+export function SettingsScreen({ onNavigate }: SettingsScreenProps): JSX.Element {
   const state = useAppState();
   const actions = useAppActions();
   const [workspacePath, setWorkspacePath] = useState("");
@@ -13,11 +27,19 @@ export function SettingsScreen(): JSX.Element {
     claude: false
   });
   const [tokenMessage, setTokenMessage] = useState<string>();
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const [codex, claude] = await Promise.all([hasProviderToken("codex"), hasProviderToken("claude")]);
+      setTokenStatus({ codex: codex.success, claude: claude.success });
+    })();
+  }, []);
 
   if (!state.settings) {
     return (
-      <section className="screen">
-        <div className="banner info">Settings are loading...</div>
+      <section className="settings-content">
+        <div className="banner info">Loading settings...</div>
       </section>
     );
   }
@@ -31,18 +53,11 @@ export function SettingsScreen(): JSX.Element {
     setWorkspacePath("");
   }
 
-  useEffect(() => {
-    void (async () => {
-      const [codex, claude] = await Promise.all([hasProviderToken("codex"), hasProviderToken("claude")]);
-      setTokenStatus({ codex: codex.success, claude: claude.success });
-    })();
-  }, []);
-
   async function persistToken(provider: "codex" | "claude"): Promise<void> {
     const token = provider === "codex" ? codexToken : claudeToken;
     const result = await saveProviderToken(provider, token);
     if (result.success) {
-      setTokenMessage(`${provider} token saved to keyring.`);
+      setTokenMessage(`${provider} token saved.`);
       setTokenStatus((prev) => ({ ...prev, [provider]: true }));
       if (provider === "codex") {
         setCodexToken("");
@@ -55,147 +70,181 @@ export function SettingsScreen(): JSX.Element {
   async function removeToken(provider: "codex" | "claude"): Promise<void> {
     const result = await clearProviderToken(provider);
     if (result.success) {
-      setTokenMessage(`${provider} token removed from keyring.`);
+      setTokenMessage(`${provider} token removed.`);
       setTokenStatus((prev) => ({ ...prev, [provider]: false }));
     }
   }
 
   return (
-    <section className="screen">
-      <div className="screen-header">
-        <h2>Settings</h2>
-        <p>Provider binaries (scoped alias by default, verified absolute path in advanced mode), retention, telemetry, and workspace grants.</p>
+    <section className="settings-content">
+      <h2 className="settings-title">Settings</h2>
+
+      {/* Workspace */}
+      <div className="settings-section">
+        <h3>Workspace</h3>
+        <form className="grant-form" onSubmit={(event) => void submit(event)}>
+          <input
+            placeholder="/path/to/project"
+            value={workspacePath}
+            onChange={(event) => setWorkspacePath(event.target.value)}
+          />
+          <button type="submit">Add</button>
+        </form>
+        {state.workspaceGrants.filter((g) => !g.revokedAt).map((grant) => (
+          <div key={grant.id} className="settings-row">
+            <span>{grant.path}</span>
+          </div>
+        ))}
+        {!state.workspaceGrants.filter((g) => !g.revokedAt).length && (
+          <p className="settings-hint">No workspace configured yet.</p>
+        )}
       </div>
 
-      <div className="split-grid">
-        <div className="card">
+      {/* Tokens */}
+      <div className="settings-section">
+        <h3>API Tokens</h3>
+        <div className="settings-token-row">
           <label>
-            Codex binary path
-            <input
-              value={state.settings.codexPath}
-              onChange={(event) => void actions.updateSettings({ codexPath: event.target.value })}
-            />
-            <small>Use `codex` by default. Absolute paths require advanced policy mode.</small>
-          </label>
-          <label>
-            Claude binary path
-            <input
-              value={state.settings.claudePath}
-              onChange={(event) => void actions.updateSettings({ claudePath: event.target.value })}
-            />
-            <small>Use `claude` by default. Absolute paths require advanced policy mode.</small>
-          </label>
-          <label>
-            Retention days
-            <input
-              type="number"
-              min={1}
-              max={365}
-              value={state.settings.retentionDays}
-              onChange={(event) => void actions.updateSettings({ retentionDays: Number(event.target.value) })}
-            />
-          </label>
-          <label>
-            Storage cap (MB)
-            <input
-              type="number"
-              min={128}
-              max={10240}
-              value={state.settings.maxStorageMb}
-              onChange={(event) => void actions.updateSettings({ maxStorageMb: Number(event.target.value) })}
-            />
-          </label>
-
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={state.settings.allowAdvancedPolicy}
-              onChange={(event) => void actions.updateSettings({ allowAdvancedPolicy: event.target.checked })}
-            />
-            Enable advanced policy mode (admin guarded)
-          </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={state.settings.remoteTelemetryOptIn}
-              onChange={(event) => void actions.updateSettings({ remoteTelemetryOptIn: event.target.checked })}
-            />
-            Remote telemetry opt-in
-          </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={state.settings.redactAggressive}
-              onChange={(event) => void actions.updateSettings({ redactAggressive: event.target.checked })}
-            />
-            Aggressive redaction
-          </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={state.settings.storeEncryptedRawArtifacts}
-              onChange={(event) => void actions.updateSettings({ storeEncryptedRawArtifacts: event.target.checked })}
-            />
-            Store encrypted raw artifacts
-          </label>
-          <div className="card">
-            <h3>Provider Tokens (Keyring)</h3>
-            <label>
-              Codex token
+            Codex
+            <div className="settings-inline">
               <input
                 type="password"
                 value={codexToken}
                 onChange={(event) => setCodexToken(event.target.value)}
-                placeholder="Optional token saved to OS keyring"
+                placeholder={tokenStatus.codex ? "Saved in keyring" : "Paste token"}
               />
-            </label>
-            <div className="actions">
-              <button type="button" onClick={() => void persistToken("codex")}>Save Codex token</button>
-              <button type="button" onClick={() => void removeToken("codex")}>Clear</button>
-              <small>{tokenStatus.codex ? "Stored" : "Not stored"}</small>
+              <button type="button" onClick={() => void persistToken("codex")}>Save</button>
+              {tokenStatus.codex && <button type="button" onClick={() => void removeToken("codex")}>Clear</button>}
             </div>
-            <label>
-              Claude token
+          </label>
+          <label>
+            Claude
+            <div className="settings-inline">
               <input
                 type="password"
                 value={claudeToken}
                 onChange={(event) => setClaudeToken(event.target.value)}
-                placeholder="Optional token saved to OS keyring"
+                placeholder={tokenStatus.claude ? "Saved in keyring" : "Paste token"}
               />
-            </label>
-            <div className="actions">
-              <button type="button" onClick={() => void persistToken("claude")}>Save Claude token</button>
-              <button type="button" onClick={() => void removeToken("claude")}>Clear</button>
-              <small>{tokenStatus.claude ? "Stored" : "Not stored"}</small>
+              <button type="button" onClick={() => void persistToken("claude")}>Save</button>
+              {tokenStatus.claude && <button type="button" onClick={() => void removeToken("claude")}>Clear</button>}
             </div>
-            {tokenMessage && <div className="banner info">{tokenMessage}</div>}
-          </div>
+          </label>
         </div>
+        {tokenMessage && <div className="banner info">{tokenMessage}</div>}
+      </div>
 
-        <div className="card">
-          <h3>Workspace grants</h3>
-          <form className="grant-form" onSubmit={(event) => void submit(event)}>
-            <input
-              placeholder="/absolute/path"
-              value={workspacePath}
-              onChange={(event) => setWorkspacePath(event.target.value)}
-            />
-            <button type="submit">Grant workspace</button>
-          </form>
+      {/* Advanced toggle */}
+      <div className="settings-section">
+        <button
+          type="button"
+          className="settings-advanced-toggle"
+          onClick={() => setShowAdvanced((v) => !v)}
+        >
+          {showAdvanced ? "Hide advanced" : "Show advanced options"}
+        </button>
 
-          <div className="grant-list">
-            {state.workspaceGrants.map((grant) => (
-              <article key={grant.id} className="grant-item">
-                <strong>{grant.path}</strong>
-                <small>
-                  granted by {grant.grantedBy} on {new Date(grant.grantedAt).toLocaleString()}
-                </small>
-                {grant.revokedAt && <small>revoked {new Date(grant.revokedAt).toLocaleString()}</small>}
-              </article>
-            ))}
-            {!state.workspaceGrants.length && <div className="banner info">No workspace grants configured.</div>}
+        {showAdvanced && (
+          <div className="settings-advanced">
+            <div className="settings-grid">
+              <label>
+                Codex binary
+                <input
+                  value={state.settings.codexPath}
+                  onChange={(event) => void actions.updateSettings({ codexPath: event.target.value })}
+                />
+              </label>
+              <label>
+                Claude binary
+                <input
+                  value={state.settings.claudePath}
+                  onChange={(event) => void actions.updateSettings({ claudePath: event.target.value })}
+                />
+              </label>
+              <label>
+                Retention (days)
+                <input
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={state.settings.retentionDays}
+                  onChange={(event) => void actions.updateSettings({ retentionDays: Number(event.target.value) })}
+                />
+              </label>
+              <label>
+                Storage cap (MB)
+                <input
+                  type="number"
+                  min={128}
+                  max={10240}
+                  value={state.settings.maxStorageMb}
+                  onChange={(event) => void actions.updateSettings({ maxStorageMb: Number(event.target.value) })}
+                />
+              </label>
+            </div>
+
+            <div className="settings-checks">
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={state.settings.conversationThreadsV1}
+                  onChange={(event) => void actions.updateSettings({ conversationThreadsV1: event.target.checked })}
+                />
+                Conversation threads v1
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={state.settings.allowAdvancedPolicy}
+                  onChange={(event) => void actions.updateSettings({ allowAdvancedPolicy: event.target.checked })}
+                />
+                Advanced policy mode
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={state.settings.remoteTelemetryOptIn}
+                  onChange={(event) => void actions.updateSettings({ remoteTelemetryOptIn: event.target.checked })}
+                />
+                Telemetry opt-in
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={state.settings.redactAggressive}
+                  onChange={(event) => void actions.updateSettings({ redactAggressive: event.target.checked })}
+                />
+                Aggressive redaction
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={state.settings.storeEncryptedRawArtifacts}
+                  onChange={(event) => void actions.updateSettings({ storeEncryptedRawArtifacts: event.target.checked })}
+                />
+                Store encrypted artifacts
+              </label>
+            </div>
+
+            {onNavigate && (
+              <div className="settings-advanced-nav">
+                <p className="settings-hint">Developer tools</p>
+                <div className="settings-nav-grid">
+                  {ADVANCED_SCREENS.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className="settings-nav-btn"
+                      onClick={() => onNavigate(item.key)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </div>
     </section>
   );

@@ -3,8 +3,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettings,
   CapabilitySnapshot,
+  ConversationDetail,
+  ConversationRecord,
+  ConversationSummary,
+  CreateConversationPayload,
+  ListConversationsFilters,
   ListRunsFilters,
   Profile,
+  SendConversationMessagePayload,
   RunDetail,
   RunRecord,
   SchedulerJob,
@@ -18,6 +24,7 @@ const LOCAL_STORAGE_KEY = "local-cli-control-center-mock";
 
 interface MockStore {
   runs: RunRecord[];
+  conversations: ConversationRecord[];
   profiles: Profile[];
   grants: WorkspaceGrant[];
   jobs: SchedulerJob[];
@@ -28,6 +35,7 @@ interface MockStore {
 const defaultSettings: AppSettings = {
   codexPath: "codex",
   claudePath: "claude",
+  conversationThreadsV1: true,
   retentionDays: 90,
   maxStorageMb: 1024,
   allowAdvancedPolicy: false,
@@ -51,6 +59,7 @@ function loadMockStore(): MockStore {
   if (!storage) {
     return {
       runs: [],
+      conversations: [],
       profiles: [],
       grants: [],
       jobs: [],
@@ -62,6 +71,7 @@ function loadMockStore(): MockStore {
   if (!raw) {
     return {
       runs: [],
+      conversations: [],
       profiles: [],
       grants: [],
       jobs: [],
@@ -70,10 +80,20 @@ function loadMockStore(): MockStore {
     };
   }
   try {
-    return JSON.parse(raw) as MockStore;
+    const parsed = JSON.parse(raw) as Partial<MockStore>;
+    return {
+      runs: parsed.runs ?? [],
+      conversations: parsed.conversations ?? [],
+      profiles: parsed.profiles ?? [],
+      grants: parsed.grants ?? [],
+      jobs: parsed.jobs ?? [],
+      capabilities: parsed.capabilities ?? [],
+      settings: { ...defaultSettings, ...(parsed.settings ?? {}) }
+    };
   } catch {
     return {
       runs: [],
+      conversations: [],
       profiles: [],
       grants: [],
       jobs: [],
@@ -110,6 +130,32 @@ async function tauriInvoke<T>(command: string, payload?: Record<string, unknown>
   return invoke<T>(command, payload);
 }
 
+function normalizeConversationTitle(raw?: string): string {
+  const firstLine = (raw ?? "").split("\n")[0]?.trim() ?? "";
+  if (!firstLine) {
+    return "New chat";
+  }
+  const max = 80;
+  return firstLine.length <= max ? firstLine : `${firstLine.slice(0, max - 3)}...`;
+}
+
+function toConversationSummary(conversation: ConversationRecord): ConversationSummary {
+  const runs = mockStore.runs
+    .filter((run) => run.conversationId === conversation.id)
+    .sort((a, b) => new Date(a.startedAt).valueOf() - new Date(b.startedAt).valueOf());
+  const last = runs[runs.length - 1];
+  return {
+    id: conversation.id,
+    provider: conversation.provider,
+    title: conversation.title,
+    providerSessionId: conversation.providerSessionId,
+    updatedAt: conversation.updatedAt,
+    archivedAt: conversation.archivedAt,
+    lastRunId: last?.id,
+    lastMessagePreview: last?.prompt
+  };
+}
+
 export async function startRun(payload: StartRunPayload): Promise<{ runId: string }> {
   if (IS_TAURI) {
     return tauriInvoke("start_run", { payload });
@@ -128,7 +174,8 @@ export async function startRun(payload: StartRunPayload): Promise<{ runId: strin
     startedAt,
     queuePriority: payload.queuePriority ?? 0,
     profileId: payload.profileId,
-    compatibilityWarnings: []
+    compatibilityWarnings: [],
+    conversationId: undefined
   };
   mockStore.runs.unshift(run);
   mockStore.jobs.unshift({
@@ -198,6 +245,9 @@ export async function listRuns(filters: ListRunsFilters = {}): Promise<RunRecord
   if (filters.status) {
     runs = runs.filter((run) => run.status === filters.status);
   }
+  if (filters.conversationId) {
+    runs = runs.filter((run) => run.conversationId === filters.conversationId);
+  }
   if (filters.search) {
     const needle = filters.search.toLowerCase();
     runs = runs.filter((run) => run.prompt.toLowerCase().includes(needle));
@@ -212,6 +262,148 @@ export async function listRuns(filters: ListRunsFilters = {}): Promise<RunRecord
   const offset = filters.offset ?? 0;
   const limit = filters.limit ?? 100;
   return runs.slice(offset, offset + limit);
+}
+
+export async function createConversation(payload: CreateConversationPayload): Promise<ConversationRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("create_conversation", { payload });
+  }
+  const now = nowIso();
+  const conversation: ConversationRecord = {
+    id: uid("conv"),
+    provider: payload.provider,
+    title: normalizeConversationTitle(payload.title),
+    providerSessionId: undefined,
+    metadata: payload.metadata ?? {},
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: undefined
+  };
+  mockStore.conversations.unshift(conversation);
+  persistMockStore();
+  return conversation;
+}
+
+export async function listConversations(
+  filters: ListConversationsFilters = {}
+): Promise<ConversationSummary[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("list_conversations", { filters });
+  }
+  let items = [...mockStore.conversations];
+  if (filters.provider) {
+    items = items.filter((conversation) => conversation.provider === filters.provider);
+  }
+  if (!filters.includeArchived) {
+    items = items.filter((conversation) => !conversation.archivedAt);
+  }
+  if (filters.search) {
+    const needle = filters.search.toLowerCase();
+    items = items.filter((conversation) => conversation.title.toLowerCase().includes(needle));
+  }
+  items.sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf());
+  const offset = filters.offset ?? 0;
+  const limit = filters.limit ?? 100;
+  return items.slice(offset, offset + limit).map((conversation) => toConversationSummary(conversation));
+}
+
+export async function getConversation(conversationId: string): Promise<ConversationDetail | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("get_conversation", { conversationId });
+  }
+  const conversation = mockStore.conversations.find((item) => item.id === conversationId);
+  if (!conversation) {
+    return null;
+  }
+  const runs = mockStore.runs
+    .filter((run) => run.conversationId === conversationId)
+    .slice()
+    .sort((a, b) => new Date(a.startedAt).valueOf() - new Date(b.startedAt).valueOf());
+  return {
+    conversation,
+    runs
+  };
+}
+
+export async function sendConversationMessage(payload: SendConversationMessagePayload): Promise<{ runId: string }> {
+  if (IS_TAURI) {
+    return tauriInvoke("send_conversation_message", { payload });
+  }
+  const conversation = mockStore.conversations.find((item) => item.id === payload.conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation not found: ${payload.conversationId}`);
+  }
+  if (conversation.archivedAt) {
+    throw new Error("Cannot send message to archived conversation");
+  }
+  const activeWorkspace = mockStore.grants.find((grant) => !grant.revokedAt)?.path;
+  const run = await startRun({
+    provider: conversation.provider,
+    prompt: payload.prompt,
+    model: payload.model,
+    mode: "non-interactive",
+    outputFormat: payload.outputFormat ?? "text",
+    cwd: payload.cwd ?? activeWorkspace ?? "",
+    optionalFlags: payload.optionalFlags ?? {},
+    profileId: payload.profileId,
+    queuePriority: payload.queuePriority ?? 0,
+    timeoutSeconds: payload.timeoutSeconds,
+    scheduledAt: payload.scheduledAt,
+    maxRetries: payload.maxRetries,
+    retryBackoffMs: payload.retryBackoffMs,
+    harness: {
+      ...(payload.harness ?? {}),
+      resumeSessionId: conversation.providerSessionId
+    }
+  });
+  const created = mockStore.runs.find((entry) => entry.id === run.runId);
+  if (created) {
+    created.conversationId = conversation.id;
+  }
+  if (conversation.title === "New chat") {
+    conversation.title = normalizeConversationTitle(payload.prompt);
+  }
+  conversation.updatedAt = nowIso();
+  persistMockStore();
+  return run;
+}
+
+export async function renameConversation(
+  conversationId: string,
+  title: string
+): Promise<ConversationRecord | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("rename_conversation", {
+      payload: { conversationId, title }
+    });
+  }
+  const conversation = mockStore.conversations.find((item) => item.id === conversationId);
+  if (!conversation) {
+    return null;
+  }
+  conversation.title = normalizeConversationTitle(title);
+  conversation.updatedAt = nowIso();
+  persistMockStore();
+  return conversation;
+}
+
+export async function archiveConversation(
+  conversationId: string,
+  archived = true
+): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("archive_conversation", {
+      payload: { conversationId, archived }
+    });
+  }
+  const conversation = mockStore.conversations.find((item) => item.id === conversationId);
+  if (!conversation) {
+    return { success: false };
+  }
+  conversation.archivedAt = archived ? nowIso() : undefined;
+  conversation.updatedAt = nowIso();
+  persistMockStore();
+  return { success: true };
 }
 
 export async function getRun(runId: string): Promise<RunDetail | null> {

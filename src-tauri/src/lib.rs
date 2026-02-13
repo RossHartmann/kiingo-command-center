@@ -1,6 +1,7 @@
 mod adapters;
 mod db;
 mod errors;
+mod harness;
 mod models;
 mod policy;
 mod redaction;
@@ -9,9 +10,11 @@ mod scheduler;
 mod session;
 
 use crate::models::{
-    AcceptedResponse, AppSettings, BooleanResponse, CapabilitySnapshot, ExportResponse, ListRunsFilters, Profile,
-    Provider, RerunResponse, RunDetail, SaveProfilePayload, SchedulerJob, StartInteractiveSessionResponse, StartRunPayload,
-    StartRunResponse, WorkspaceGrant,
+    AcceptedResponse, AppSettings, ArchiveConversationPayload, BooleanResponse, CapabilitySnapshot, ConversationDetail,
+    ConversationRecord, ConversationSummary, CreateConversationPayload, ExportResponse, ListConversationsFilters,
+    ListRunsFilters, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveProfilePayload,
+    SchedulerJob, SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
+    WorkspaceGrant,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -29,6 +32,70 @@ struct AppState {
 #[tauri::command]
 async fn start_run(state: tauri::State<'_, AppState>, payload: StartRunPayload) -> Result<StartRunResponse, String> {
     state.runner.start_run(payload).await.map_err(to_client_error)
+}
+
+#[tauri::command]
+fn create_conversation(
+    state: tauri::State<'_, AppState>,
+    payload: CreateConversationPayload,
+) -> Result<ConversationRecord, String> {
+    state.runner.create_conversation(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn list_conversations(
+    state: tauri::State<'_, AppState>,
+    filters: ListConversationsFilters,
+) -> Result<Vec<ConversationSummary>, String> {
+    state
+        .runner
+        .list_conversations(filters)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn get_conversation(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<ConversationDetail>, String> {
+    state
+        .runner
+        .get_conversation(&conversation_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+async fn send_conversation_message(
+    state: tauri::State<'_, AppState>,
+    payload: SendConversationMessagePayload,
+) -> Result<StartRunResponse, String> {
+    state
+        .runner
+        .send_conversation_message(payload)
+        .await
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn rename_conversation(
+    state: tauri::State<'_, AppState>,
+    payload: RenameConversationPayload,
+) -> Result<Option<ConversationRecord>, String> {
+    state
+        .runner
+        .rename_conversation(payload)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn archive_conversation(
+    state: tauri::State<'_, AppState>,
+    payload: ArchiveConversationPayload,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .archive_conversation(payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -242,6 +309,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_run,
+            create_conversation,
+            list_conversations,
+            get_conversation,
+            send_conversation_message,
+            rename_conversation,
+            archive_conversation,
             cancel_run,
             get_run,
             list_runs,

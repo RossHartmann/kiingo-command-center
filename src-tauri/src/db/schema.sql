@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS runs (
   queue_priority INTEGER NOT NULL DEFAULT 0,
   profile_id TEXT,
   capability_snapshot_id TEXT,
-  compatibility_warnings_json TEXT NOT NULL DEFAULT '[]'
+  compatibility_warnings_json TEXT NOT NULL DEFAULT '[]',
+  conversation_id TEXT,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS run_events (
@@ -96,9 +98,36 @@ CREATE TABLE IF NOT EXISTS retention_policies (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  title TEXT NOT NULL,
+  provider_session_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS conversation_runs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+  UNIQUE(conversation_id, run_id),
+  UNIQUE(conversation_id, seq)
+);
+
 CREATE INDEX IF NOT EXISTS idx_runs_status_started ON runs(status, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_provider_started ON runs(provider, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_state_priority ON scheduler_jobs(state, priority DESC, queued_at ASC);
 CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_next_run ON scheduler_jobs(state, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_capability_snapshots_provider_detected ON capability_snapshots(provider, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_provider_updated ON conversations(provider, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_archived_updated ON conversations(archived_at, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_runs_conversation_seq ON conversation_runs(conversation_id, seq ASC);
+CREATE INDEX IF NOT EXISTS idx_conversation_runs_run ON conversation_runs(run_id);

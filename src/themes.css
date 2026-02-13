@@ -1,0 +1,782 @@
+/* ===================================================================
+   THEME SWITCHER
+   =================================================================== */
+
+.theme-switcher {
+  position: fixed;
+  bottom: 1.2rem;
+  right: 1.2rem;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.theme-switcher-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid rgba(128, 128, 128, 0.3);
+  background: rgba(30, 30, 30, 0.85);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: transform 200ms ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.theme-switcher-toggle:hover {
+  transform: scale(1.08);
+}
+
+.theme-switcher-panel {
+  background: rgba(20, 20, 24, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.2rem;
+  min-width: 180px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  animation: theme-panel-in 150ms ease-out;
+}
+
+.theme-switcher-panel button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+.theme-switcher-panel button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.theme-switcher-panel button.active-theme {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.theme-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  flex-shrink: 0;
+}
+
+.theme-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.theme-label span:first-child {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.theme-label span:last-child {
+  font-size: 0.68rem;
+  opacity: 0.5;
+}
+
+@keyframes theme-panel-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+
+/* ===================================================================
+   THEME 1: OBSIDIAN
+   Dark, professional. Full-width content.
+   Sans-serif. Subtle blue accents.
+   =================================================================== */
+
+[data-theme="obsidian"] {
+  --bg: #0f1117;
+  --panel: #181a23;
+  --ink: #e4e6ed;
+  --ink-muted: #8b8fa3;
+  --line: #2a2d3a;
+  --accent: #5b8af5;
+  --accent-strong: #4070e8;
+  --danger: #ef5b5b;
+  --danger-bg: rgba(239, 91, 91, 0.12);
+  --info-bg: rgba(91, 138, 245, 0.08);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="obsidian"] body {
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+[data-theme="obsidian"] h1,
+[data-theme="obsidian"] h2,
+[data-theme="obsidian"] h3 { font-family: inherit; font-weight: 600; letter-spacing: -0.02em; }
+
+[data-theme="obsidian"] p,
+[data-theme="obsidian"] small,
+[data-theme="obsidian"] label,
+[data-theme="obsidian"] button,
+[data-theme="obsidian"] input,
+[data-theme="obsidian"] textarea,
+[data-theme="obsidian"] select,
+[data-theme="obsidian"] span,
+[data-theme="obsidian"] strong,
+[data-theme="obsidian"] li { font-family: inherit; }
+
+[data-theme="obsidian"] code { font-family: "JetBrains Mono", "Fira Code", "Menlo", monospace; }
+
+/* Layout: full-width, no max-width cap */
+[data-theme="obsidian"] .content-panel { max-width: 100%; padding: 1.5rem 2rem; }
+
+/* Topbar: slim, dark, blurred */
+[data-theme="obsidian"] .topbar {
+  background: rgba(24, 26, 35, 0.9);
+  border-bottom-color: var(--line);
+  backdrop-filter: blur(16px);
+  padding: 0.5rem 1.5rem;
+}
+
+[data-theme="obsidian"] .topbar-icon-btn { color: var(--ink-muted); }
+[data-theme="obsidian"] .topbar-icon-btn:hover { background: rgba(255, 255, 255, 0.05); color: var(--ink); }
+[data-theme="obsidian"] .topbar-icon-btn.active { background: rgba(91, 138, 245, 0.1); color: var(--accent); border-color: rgba(91, 138, 245, 0.2); }
+[data-theme="obsidian"] .topbar-back { border-color: var(--line); color: var(--ink-muted); }
+[data-theme="obsidian"] .topbar-back:hover { color: var(--ink); border-color: var(--ink-muted); }
+
+/* Settings drawer */
+[data-theme="obsidian"] .settings-drawer { background: rgba(24, 26, 35, 0.98); border-bottom-color: var(--line); }
+[data-theme="obsidian"] .settings-section h3 { color: var(--ink-muted); }
+[data-theme="obsidian"] .settings-hint { color: var(--ink-muted); }
+[data-theme="obsidian"] .settings-advanced-toggle { color: var(--ink-muted); }
+[data-theme="obsidian"] .settings-advanced-toggle:hover { color: var(--ink); }
+[data-theme="obsidian"] .settings-nav-btn { border-color: var(--line); color: var(--ink-muted); }
+[data-theme="obsidian"] .settings-nav-btn:hover { color: var(--ink); border-color: var(--ink-muted); }
+[data-theme="obsidian"] .settings-advanced-nav { border-top-color: var(--line); }
+
+/* Cards & inputs */
+[data-theme="obsidian"] .card { background: var(--panel); border-color: var(--line); border-radius: 12px; }
+[data-theme="obsidian"] input,
+[data-theme="obsidian"] select,
+[data-theme="obsidian"] textarea { background: var(--bg); border-color: var(--line); color: var(--ink); }
+[data-theme="obsidian"] input:focus,
+[data-theme="obsidian"] select:focus,
+[data-theme="obsidian"] textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px rgba(91, 138, 245, 0.15); }
+[data-theme="obsidian"] button { background: var(--panel); border-color: var(--line); color: var(--ink); }
+[data-theme="obsidian"] button.primary { background: var(--accent); border-color: var(--accent-strong); color: #fff; }
+
+/* Chat sidebar */
+[data-theme="obsidian"] .chat-sidebar { background: var(--panel); border-color: var(--line); }
+[data-theme="obsidian"] .chat-sidebar-header { border-bottom-color: var(--line); }
+[data-theme="obsidian"] .chat-thread { border-color: var(--line); }
+[data-theme="obsidian"] .chat-thread.active { background: rgba(91, 138, 245, 0.08); border-color: var(--accent); }
+[data-theme="obsidian"] .chat-header-actions button { background: var(--panel); border-color: var(--line); color: var(--ink-muted); }
+[data-theme="obsidian"] .chat-header-actions button:hover { color: var(--ink); }
+
+/* Chat */
+[data-theme="obsidian"] .chat-messages { border-bottom-color: var(--line); }
+[data-theme="obsidian"] .chat-bubble.user { background: rgba(91, 138, 245, 0.1); }
+[data-theme="obsidian"] .chat-bubble.assistant { background: rgba(139, 92, 246, 0.08); }
+[data-theme="obsidian"] .chat-empty { color: var(--ink-muted); }
+[data-theme="obsidian"] .model-select { background: var(--bg); border-color: var(--line); color: var(--ink); }
+[data-theme="obsidian"] .new-chat-btn { border-color: var(--line); color: var(--ink-muted); }
+[data-theme="obsidian"] .new-chat-btn:hover { color: var(--ink); }
+[data-theme="obsidian"] .send-btn { border-radius: 8px; }
+
+/* Terminal & misc */
+[data-theme="obsidian"] .terminal-panel { background: #0a0b10; border: 1px solid var(--line); }
+[data-theme="obsidian"] .banner.info { background: var(--info-bg); border-color: rgba(91, 138, 245, 0.15); }
+[data-theme="obsidian"] .banner.error { background: var(--danger-bg); border-color: rgba(239, 91, 91, 0.2); color: var(--danger); }
+[data-theme="obsidian"] .harness-progress { background: rgba(91, 138, 245, 0.1); }
+[data-theme="obsidian"] .harness-progress span { background: var(--accent); }
+[data-theme="obsidian"] .typing-dots span { background: var(--accent); }
+[data-theme="obsidian"] .history-row,
+[data-theme="obsidian"] .profile-item,
+[data-theme="obsidian"] .grant-item,
+[data-theme="obsidian"] .compat-card,
+[data-theme="obsidian"] .queue-row { background: var(--panel); border-color: var(--line); }
+
+
+/* ===================================================================
+   THEME 2: AURORA
+   Centered narrow chat. Soft gradients. iMessage-like bubbles.
+   Very consumer-friendly.
+   =================================================================== */
+
+[data-theme="aurora"] {
+  --bg: #f7f8fc;
+  --panel: #ffffff;
+  --ink: #1a1c2e;
+  --ink-muted: #6b6f8a;
+  --line: #e4e6f0;
+  --accent: #6c5ce7;
+  --accent-strong: #5a47d6;
+  --danger: #e74c3c;
+  --danger-bg: #fef0ef;
+  --info-bg: #f0edff;
+  --shadow: 0 2px 12px rgba(108, 92, 231, 0.06);
+}
+
+[data-theme="aurora"] body {
+  background: linear-gradient(180deg, #f0edff 0%, #f7f8fc 30%, #fdf8f5 100%);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+[data-theme="aurora"] h1,
+[data-theme="aurora"] h2,
+[data-theme="aurora"] h3 {
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+[data-theme="aurora"] p,
+[data-theme="aurora"] small,
+[data-theme="aurora"] label,
+[data-theme="aurora"] button,
+[data-theme="aurora"] input,
+[data-theme="aurora"] textarea,
+[data-theme="aurora"] select,
+[data-theme="aurora"] span,
+[data-theme="aurora"] strong,
+[data-theme="aurora"] li { font-family: inherit; }
+
+[data-theme="aurora"] code { font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace; }
+
+/* Layout: narrow centered, generous padding */
+[data-theme="aurora"] .content-panel { max-width: 720px; padding: 1.5rem 1rem; }
+[data-theme="aurora"] .content-panel:has(.chat-screen) { max-width: 100%; padding: 0.6rem; }
+
+/* Topbar: clean white, minimal */
+[data-theme="aurora"] .topbar {
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid var(--line);
+  padding: 0.5rem 1rem;
+}
+
+[data-theme="aurora"] .topbar-icon-btn { color: var(--ink-muted); border-radius: 20px; }
+[data-theme="aurora"] .topbar-icon-btn:hover { background: rgba(108, 92, 231, 0.06); color: var(--ink); }
+[data-theme="aurora"] .topbar-icon-btn.active { background: var(--accent); color: #fff; border-color: transparent; }
+[data-theme="aurora"] .topbar-back { border-radius: 20px; padding: 0.3rem 0.8rem; }
+[data-theme="aurora"] .topbar-back:hover { background: rgba(108, 92, 231, 0.06); }
+
+/* Settings drawer */
+[data-theme="aurora"] .settings-drawer { background: rgba(255, 255, 255, 0.95); border-bottom-color: var(--line); }
+[data-theme="aurora"] .settings-section h3 { color: var(--ink-muted); }
+[data-theme="aurora"] .settings-hint { color: var(--ink-muted); }
+[data-theme="aurora"] .settings-advanced-toggle { color: var(--accent); }
+[data-theme="aurora"] .settings-advanced-toggle:hover { color: var(--accent-strong); }
+[data-theme="aurora"] .settings-nav-btn { border-color: var(--line); color: var(--ink-muted); border-radius: 20px; }
+[data-theme="aurora"] .settings-nav-btn:hover { color: var(--accent); border-color: rgba(108, 92, 231, 0.3); }
+[data-theme="aurora"] .settings-advanced-nav { border-top-color: var(--line); }
+
+/* Cards */
+[data-theme="aurora"] .card {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: 18px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="aurora"] input,
+[data-theme="aurora"] select,
+[data-theme="aurora"] textarea {
+  background: #f8f9fc;
+  border-color: var(--line);
+  border-radius: 12px;
+}
+[data-theme="aurora"] input:focus,
+[data-theme="aurora"] select:focus,
+[data-theme="aurora"] textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.1); }
+[data-theme="aurora"] button { border-radius: 12px; }
+[data-theme="aurora"] button.primary {
+  background: linear-gradient(135deg, #6c5ce7, #5a47d6);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Chat sidebar */
+[data-theme="aurora"] .chat-sidebar { background: #fff; border-color: var(--line); border-radius: 18px; }
+[data-theme="aurora"] .chat-sidebar-header { border-bottom-color: var(--line); }
+[data-theme="aurora"] .chat-thread { border-color: var(--line); border-radius: 14px; }
+[data-theme="aurora"] .chat-thread.active { background: rgba(108, 92, 231, 0.08); border-color: var(--accent); }
+[data-theme="aurora"] .chat-header-actions button { border-radius: 12px; }
+
+/* Chat: big rounded bubbles, centered */
+[data-theme="aurora"] .chat-messages { border-bottom-color: var(--line); }
+[data-theme="aurora"] .chat-bubble { border-radius: 20px; padding: 0.7rem 1rem; }
+[data-theme="aurora"] .chat-bubble.user {
+  background: linear-gradient(135deg, #6c5ce7, #5a47d6);
+  color: #fff;
+}
+[data-theme="aurora"] .chat-bubble.user header strong,
+[data-theme="aurora"] .chat-bubble.user header small { color: rgba(255, 255, 255, 0.7); }
+[data-theme="aurora"] .chat-bubble.user p { color: #fff; }
+[data-theme="aurora"] .chat-bubble.assistant { background: #fff; border: 1px solid var(--line); }
+
+[data-theme="aurora"] .chat-input-row textarea { border-radius: 16px; }
+[data-theme="aurora"] .model-select { border-radius: 12px; }
+[data-theme="aurora"] .send-btn {
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6c5ce7, #5a47d6);
+  color: #fff;
+  border: none;
+}
+[data-theme="aurora"] .new-chat-btn { border-radius: 12px; }
+
+[data-theme="aurora"] .terminal-panel { background: #1a1c2e; border-radius: 16px; }
+[data-theme="aurora"] .harness-progress { background: rgba(108, 92, 231, 0.08); }
+[data-theme="aurora"] .harness-progress span { background: linear-gradient(90deg, #6c5ce7, #00cec9); }
+[data-theme="aurora"] .typing-dots span { background: var(--accent); }
+[data-theme="aurora"] .banner.info { background: var(--info-bg); border-color: rgba(108, 92, 231, 0.12); border-radius: 12px; }
+[data-theme="aurora"] .history-row,
+[data-theme="aurora"] .profile-item,
+[data-theme="aurora"] .grant-item,
+[data-theme="aurora"] .compat-card,
+[data-theme="aurora"] .queue-row { background: var(--panel); border-color: var(--line); border-radius: 14px; }
+
+
+/* ===================================================================
+   THEME 3: TERMINAL
+   Full-screen. Monospace. Green on black. Maximum chat area.
+   =================================================================== */
+
+[data-theme="terminal"] {
+  --bg: #0a0a0a;
+  --panel: #111111;
+  --ink: #33ff88;
+  --ink-muted: #228855;
+  --line: #1a3322;
+  --accent: #00ff88;
+  --accent-strong: #00cc66;
+  --danger: #ff3333;
+  --danger-bg: rgba(255, 51, 51, 0.1);
+  --info-bg: rgba(0, 255, 136, 0.05);
+  --shadow: none;
+}
+
+[data-theme="terminal"] body {
+  background: #0a0a0a;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "Menlo", monospace;
+  font-size: 0.84rem;
+}
+
+[data-theme="terminal"] h1,
+[data-theme="terminal"] h2,
+[data-theme="terminal"] h3 {
+  font-family: inherit;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.9rem;
+}
+
+[data-theme="terminal"] p,
+[data-theme="terminal"] small,
+[data-theme="terminal"] label,
+[data-theme="terminal"] button,
+[data-theme="terminal"] input,
+[data-theme="terminal"] textarea,
+[data-theme="terminal"] select,
+[data-theme="terminal"] code,
+[data-theme="terminal"] span,
+[data-theme="terminal"] strong,
+[data-theme="terminal"] li { font-family: inherit; }
+
+/* Layout: topbar becomes a tiny line, content fills the screen */
+[data-theme="terminal"] .topbar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  padding: 0.35rem 1rem;
+  gap: 0.5rem;
+}
+
+[data-theme="terminal"] .content-panel { max-width: 100%; padding: 0.8rem 1rem; }
+
+[data-theme="terminal"] .chat-screen { height: calc(100vh - 48px); }
+
+[data-theme="terminal"] .topbar-icon-btn {
+  color: var(--ink-muted);
+  font-size: 1rem;
+  border-radius: 3px;
+}
+[data-theme="terminal"] .topbar-icon-btn:hover { color: var(--ink); background: rgba(0, 255, 136, 0.05); }
+[data-theme="terminal"] .topbar-icon-btn.active {
+  color: var(--accent);
+  background: rgba(0, 255, 136, 0.08);
+  border-color: transparent;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+[data-theme="terminal"] .topbar-back {
+  border-color: var(--line);
+  color: var(--ink-muted);
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+[data-theme="terminal"] .topbar-back:hover { color: var(--ink); background: rgba(0, 255, 136, 0.05); }
+
+/* Settings drawer */
+[data-theme="terminal"] .settings-drawer { background: rgba(10, 10, 10, 0.98); border-bottom-color: var(--line); }
+[data-theme="terminal"] .settings-section h3 {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.78rem;
+}
+[data-theme="terminal"] .settings-hint { color: var(--ink-muted); }
+[data-theme="terminal"] .settings-advanced-toggle { color: var(--ink-muted); text-decoration: none; border-bottom: 1px dashed var(--ink-muted); }
+[data-theme="terminal"] .settings-advanced-toggle:hover { color: var(--ink); border-bottom-color: var(--ink); }
+[data-theme="terminal"] .settings-nav-btn { border-color: var(--line); color: var(--ink-muted); border-radius: 3px; }
+[data-theme="terminal"] .settings-nav-btn:hover { color: var(--accent); border-color: var(--accent); }
+[data-theme="terminal"] .settings-advanced-nav { border-top-color: var(--line); }
+
+/* Cards & forms */
+[data-theme="terminal"] .card { background: var(--panel); border-color: var(--line); border-radius: 3px; box-shadow: none; }
+[data-theme="terminal"] input,
+[data-theme="terminal"] select,
+[data-theme="terminal"] textarea { background: #060606; border: 1px solid var(--line); color: var(--ink); border-radius: 3px; caret-color: var(--accent); }
+[data-theme="terminal"] input:focus,
+[data-theme="terminal"] select:focus,
+[data-theme="terminal"] textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 6px rgba(0, 255, 136, 0.12); }
+[data-theme="terminal"] input::placeholder,
+[data-theme="terminal"] textarea::placeholder { color: var(--ink-muted); }
+[data-theme="terminal"] button { background: var(--panel); border-color: var(--line); color: var(--ink); border-radius: 3px; }
+[data-theme="terminal"] button.primary {
+  background: rgba(0, 255, 136, 0.08);
+  border-color: var(--accent);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+/* Chat sidebar */
+[data-theme="terminal"] .chat-sidebar { background: var(--panel); border-color: var(--line); border-radius: 3px; }
+[data-theme="terminal"] .chat-sidebar-header { border-bottom-color: var(--line); }
+[data-theme="terminal"] .chat-thread { border-color: var(--line); border-radius: 3px; }
+[data-theme="terminal"] .chat-thread.active { background: rgba(0, 255, 136, 0.06); border-color: var(--accent); }
+[data-theme="terminal"] .chat-thread-title { font-size: 0.78rem; }
+[data-theme="terminal"] .chat-header-actions button { border-radius: 3px; background: var(--panel); border-color: var(--line); color: var(--ink-muted); }
+[data-theme="terminal"] .chat-header-actions button:hover { color: var(--accent); }
+
+/* Chat: no bubbles, just flat lines like a terminal */
+[data-theme="terminal"] .chat-messages { border-bottom-color: var(--line); }
+[data-theme="terminal"] .chat-bubble {
+  border-radius: 0;
+  padding: 0.3rem 0;
+  max-width: 100%;
+  background: transparent !important;
+  margin: 0 !important;
+  border-bottom: 1px solid rgba(0, 255, 136, 0.06);
+}
+[data-theme="terminal"] .chat-bubble header strong { color: var(--accent); font-size: 0.76rem; }
+[data-theme="terminal"] .chat-bubble header small { color: var(--ink-muted); }
+[data-theme="terminal"] .chat-bubble.assistant header strong { color: #00aaff; }
+[data-theme="terminal"] .chat-bubble p { font-size: 0.84rem; }
+
+[data-theme="terminal"] .chat-input-row textarea { border-radius: 3px; }
+[data-theme="terminal"] .model-select { border-radius: 3px; }
+[data-theme="terminal"] .send-btn { border-radius: 3px; background: rgba(0, 255, 136, 0.08); border-color: var(--accent); color: var(--accent); }
+[data-theme="terminal"] .new-chat-btn { border-radius: 3px; color: var(--ink-muted); border-color: var(--line); }
+
+[data-theme="terminal"] .terminal-panel { background: #060606; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); }
+[data-theme="terminal"] .harness-progress { background: rgba(0, 255, 136, 0.06); }
+[data-theme="terminal"] .harness-progress span { background: var(--accent); box-shadow: 0 0 8px rgba(0, 255, 136, 0.3); }
+[data-theme="terminal"] .typing-dots span { background: var(--accent); box-shadow: 0 0 3px rgba(0, 255, 136, 0.4); }
+[data-theme="terminal"] .banner.info { background: var(--info-bg); border-color: var(--line); color: var(--ink); border-radius: 3px; }
+[data-theme="terminal"] .banner.error { background: var(--danger-bg); border-color: rgba(255, 51, 51, 0.2); color: var(--danger); border-radius: 3px; }
+[data-theme="terminal"] .history-row,
+[data-theme="terminal"] .profile-item,
+[data-theme="terminal"] .grant-item,
+[data-theme="terminal"] .compat-card,
+[data-theme="terminal"] .queue-row { background: var(--panel); border-color: var(--line); border-radius: 3px; }
+
+
+/* ===================================================================
+   THEME 4: PAPER
+   Pure white. Editorial serif headers. Huge whitespace.
+   Borderless cards. Content speaks for itself.
+   =================================================================== */
+
+[data-theme="paper"] {
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --ink: #1c1c1c;
+  --ink-muted: #999;
+  --line: #e8e8e8;
+  --accent: #1c1c1c;
+  --accent-strong: #000;
+  --danger: #c53030;
+  --danger-bg: #fff5f5;
+  --info-bg: #f7fafc;
+  --shadow: none;
+}
+
+[data-theme="paper"] body {
+  background: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-size: 0.92rem;
+}
+
+[data-theme="paper"] h1,
+[data-theme="paper"] h2,
+[data-theme="paper"] h3 { font-family: "Georgia", "Times New Roman", serif; font-weight: 400; }
+[data-theme="paper"] h1 { font-size: 1.1rem; }
+
+[data-theme="paper"] p,
+[data-theme="paper"] small,
+[data-theme="paper"] label,
+[data-theme="paper"] button,
+[data-theme="paper"] input,
+[data-theme="paper"] textarea,
+[data-theme="paper"] select,
+[data-theme="paper"] span,
+[data-theme="paper"] strong,
+[data-theme="paper"] li { font-family: inherit; }
+
+[data-theme="paper"] code { font-family: "SF Mono", "Menlo", monospace; }
+
+/* Layout: very narrow, lots of breathing room */
+[data-theme="paper"] .content-panel { max-width: 640px; padding: 2rem 1rem; }
+[data-theme="paper"] .content-panel:has(.chat-screen) { max-width: 100%; padding: 0.6rem; }
+
+/* Topbar: invisible, just a line */
+[data-theme="paper"] .topbar {
+  background: #fff;
+  border-bottom: 1px solid #eee;
+  padding: 0.6rem 1.5rem;
+}
+
+[data-theme="paper"] .topbar-icon-btn {
+  color: var(--ink-muted);
+  border-radius: 4px;
+}
+[data-theme="paper"] .topbar-icon-btn:hover { color: var(--ink); background: transparent; }
+[data-theme="paper"] .topbar-icon-btn.active {
+  color: var(--ink);
+  background: transparent;
+  font-weight: 600;
+}
+[data-theme="paper"] .topbar-back {
+  border-color: #ddd;
+  color: var(--ink-muted);
+  border-radius: 4px;
+}
+[data-theme="paper"] .topbar-back:hover { color: var(--ink); text-decoration: underline; }
+
+/* Settings drawer */
+[data-theme="paper"] .settings-drawer { background: #fff; border-bottom: 1px solid #eee; }
+[data-theme="paper"] .settings-section h3 { color: var(--ink-muted); font-family: "Georgia", "Times New Roman", serif; font-weight: 400; }
+[data-theme="paper"] .settings-hint { color: var(--ink-muted); }
+[data-theme="paper"] .settings-advanced-toggle { color: var(--ink-muted); }
+[data-theme="paper"] .settings-advanced-toggle:hover { color: var(--ink); }
+[data-theme="paper"] .settings-nav-btn { border-color: #ddd; color: var(--ink-muted); border-radius: 4px; }
+[data-theme="paper"] .settings-nav-btn:hover { color: var(--ink); text-decoration: underline; }
+[data-theme="paper"] .settings-advanced-nav { border-top-color: #eee; }
+
+/* Cards: borderless, just spacing */
+[data-theme="paper"] .card { border: none; background: transparent; box-shadow: none; border-radius: 0; padding: 0; }
+
+[data-theme="paper"] input,
+[data-theme="paper"] select,
+[data-theme="paper"] textarea { background: #fafafa; border: 1px solid #ddd; border-radius: 4px; }
+[data-theme="paper"] input:focus,
+[data-theme="paper"] select:focus,
+[data-theme="paper"] textarea:focus { border-color: #999; outline: none; }
+[data-theme="paper"] button { background: transparent; border: 1px solid #ddd; border-radius: 4px; }
+[data-theme="paper"] button.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+/* Chat sidebar */
+[data-theme="paper"] .chat-sidebar { background: transparent; border-color: #eee; border-radius: 4px; }
+[data-theme="paper"] .chat-sidebar-header { border-bottom-color: #eee; }
+[data-theme="paper"] .chat-thread { border-color: #eee; border-radius: 4px; }
+[data-theme="paper"] .chat-thread.active { background: #f5f5f5; border-color: var(--ink); }
+[data-theme="paper"] .chat-header-actions button { border-radius: 4px; background: transparent; border-color: #ddd; }
+
+/* Chat: thread-like, no bubbles */
+[data-theme="paper"] .chat-messages { border-bottom: 1px solid #eee; padding: 1.5rem 0; gap: 1rem; }
+[data-theme="paper"] .chat-bubble {
+  max-width: 100%;
+  margin: 0 !important;
+  background: transparent !important;
+  border-radius: 0;
+  padding: 0;
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 0.8rem;
+}
+[data-theme="paper"] .chat-bubble:last-child { border-bottom: none; }
+[data-theme="paper"] .chat-bubble header strong { font-size: 0.8rem; font-weight: 600; }
+[data-theme="paper"] .chat-bubble p { font-size: 0.9rem; line-height: 1.65; }
+
+[data-theme="paper"] .chat-input-row textarea { border-radius: 4px; border-color: #ddd; }
+[data-theme="paper"] .model-select { border-radius: 4px; }
+[data-theme="paper"] .send-btn { border-radius: 4px; }
+[data-theme="paper"] .new-chat-btn { border-radius: 4px; }
+
+[data-theme="paper"] .terminal-panel { border-radius: 6px; }
+[data-theme="paper"] .harness-progress { background: #eee; }
+[data-theme="paper"] .harness-progress span { background: #888; }
+[data-theme="paper"] .typing-dots span { background: #666; }
+[data-theme="paper"] .banner { border-radius: 4px; }
+[data-theme="paper"] .history-row,
+[data-theme="paper"] .profile-item,
+[data-theme="paper"] .grant-item,
+[data-theme="paper"] .compat-card,
+[data-theme="paper"] .queue-row { background: transparent; border-color: #eee; border-radius: 4px; }
+
+
+/* ===================================================================
+   THEME 5: DUSK
+   Warm dark. Amber/gold accents. Purple undertones. Cozy & premium.
+   Medium content width. Generous spacing.
+   =================================================================== */
+
+[data-theme="dusk"] {
+  --bg: #16131e;
+  --panel: #1e1a28;
+  --ink: #ede6d8;
+  --ink-muted: #9a917f;
+  --line: #302a3a;
+  --accent: #e8a84c;
+  --accent-strong: #d4922e;
+  --danger: #e85b5b;
+  --danger-bg: rgba(232, 91, 91, 0.1);
+  --info-bg: rgba(232, 168, 76, 0.06);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="dusk"] body {
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(232, 168, 76, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 90%, rgba(120, 80, 200, 0.03) 0%, transparent 50%),
+    var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+[data-theme="dusk"] h1,
+[data-theme="dusk"] h2,
+[data-theme="dusk"] h3 { font-family: inherit; font-weight: 600; letter-spacing: -0.01em; }
+
+[data-theme="dusk"] p,
+[data-theme="dusk"] small,
+[data-theme="dusk"] label,
+[data-theme="dusk"] button,
+[data-theme="dusk"] input,
+[data-theme="dusk"] textarea,
+[data-theme="dusk"] select,
+[data-theme="dusk"] span,
+[data-theme="dusk"] strong,
+[data-theme="dusk"] li { font-family: inherit; }
+
+[data-theme="dusk"] code { font-family: "JetBrains Mono", "Fira Code", "Menlo", monospace; }
+
+/* Layout: medium width, generous padding */
+[data-theme="dusk"] .content-panel { max-width: 800px; padding: 1.5rem; }
+[data-theme="dusk"] .content-panel:has(.chat-screen) { max-width: 100%; padding: 0.6rem; }
+
+/* Topbar */
+[data-theme="dusk"] .topbar {
+  background: rgba(30, 26, 40, 0.9);
+  border-bottom-color: var(--line);
+  backdrop-filter: blur(16px);
+  padding: 0.55rem 1.2rem;
+}
+
+[data-theme="dusk"] .topbar-icon-btn { color: var(--ink-muted); border-radius: 8px; }
+[data-theme="dusk"] .topbar-icon-btn:hover { background: rgba(232, 168, 76, 0.06); color: var(--ink); }
+[data-theme="dusk"] .topbar-icon-btn.active {
+  background: rgba(232, 168, 76, 0.1);
+  color: var(--accent);
+  border-color: transparent;
+}
+[data-theme="dusk"] .topbar-back { border-color: var(--line); color: var(--ink-muted); border-radius: 8px; }
+[data-theme="dusk"] .topbar-back:hover { color: var(--ink); border-color: var(--ink-muted); }
+
+/* Settings drawer */
+[data-theme="dusk"] .settings-drawer { background: rgba(30, 26, 40, 0.98); border-bottom-color: var(--line); }
+[data-theme="dusk"] .settings-section h3 { color: var(--ink-muted); }
+[data-theme="dusk"] .settings-hint { color: var(--ink-muted); }
+[data-theme="dusk"] .settings-advanced-toggle { color: var(--accent); }
+[data-theme="dusk"] .settings-advanced-toggle:hover { color: var(--ink); }
+[data-theme="dusk"] .settings-nav-btn { border-color: var(--line); color: var(--ink-muted); border-radius: 8px; }
+[data-theme="dusk"] .settings-nav-btn:hover { color: var(--accent); border-color: rgba(232, 168, 76, 0.3); }
+[data-theme="dusk"] .settings-advanced-nav { border-top-color: var(--line); }
+
+/* Cards & forms */
+[data-theme="dusk"] .card { background: var(--panel); border-color: var(--line); border-radius: 14px; }
+[data-theme="dusk"] input,
+[data-theme="dusk"] select,
+[data-theme="dusk"] textarea { background: #130f1a; border-color: var(--line); color: var(--ink); border-radius: 10px; }
+[data-theme="dusk"] input:focus,
+[data-theme="dusk"] select:focus,
+[data-theme="dusk"] textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px rgba(232, 168, 76, 0.1); }
+[data-theme="dusk"] button { background: var(--panel); border-color: var(--line); color: var(--ink); border-radius: 10px; }
+[data-theme="dusk"] button.primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  border-color: var(--accent-strong);
+  color: #1a1520;
+  font-weight: 600;
+}
+
+/* Chat sidebar */
+[data-theme="dusk"] .chat-sidebar { background: var(--panel); border-color: var(--line); border-radius: 14px; }
+[data-theme="dusk"] .chat-sidebar-header { border-bottom-color: var(--line); }
+[data-theme="dusk"] .chat-thread { border-color: var(--line); border-radius: 10px; }
+[data-theme="dusk"] .chat-thread.active { background: rgba(232, 168, 76, 0.08); border-color: var(--accent); }
+[data-theme="dusk"] .chat-header-actions button { border-radius: 10px; background: var(--panel); border-color: var(--line); color: var(--ink-muted); }
+[data-theme="dusk"] .chat-header-actions button:hover { color: var(--accent); }
+
+/* Chat */
+[data-theme="dusk"] .chat-messages { border-bottom-color: var(--line); }
+[data-theme="dusk"] .chat-bubble { border-radius: 14px; }
+[data-theme="dusk"] .chat-bubble.user { background: rgba(232, 168, 76, 0.1); }
+[data-theme="dusk"] .chat-bubble.assistant { background: rgba(184, 125, 232, 0.06); }
+[data-theme="dusk"] .chat-empty { color: var(--ink-muted); }
+[data-theme="dusk"] .model-select { background: #130f1a; border-color: var(--line); color: var(--ink); border-radius: 10px; }
+[data-theme="dusk"] .send-btn {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #1a1520;
+  border: none;
+  border-radius: 10px;
+}
+[data-theme="dusk"] .new-chat-btn { border-color: var(--line); color: var(--ink-muted); }
+
+/* Terminal & misc */
+[data-theme="dusk"] .terminal-panel { background: #0d0a12; border: 1px solid var(--line); color: #e8d5a0; }
+[data-theme="dusk"] .terminal-panel .timestamp { color: #6b5e48; }
+[data-theme="dusk"] .terminal-panel .stderr { color: #e8a0a0; }
+[data-theme="dusk"] .harness-progress { background: rgba(232, 168, 76, 0.08); }
+[data-theme="dusk"] .harness-progress span { background: linear-gradient(90deg, var(--accent), #b87de8); }
+[data-theme="dusk"] .typing-dots span { background: var(--accent); }
+[data-theme="dusk"] .banner.info { background: var(--info-bg); border-color: rgba(232, 168, 76, 0.15); color: var(--ink); border-radius: 10px; }
+[data-theme="dusk"] .banner.error { background: var(--danger-bg); border-color: rgba(232, 91, 91, 0.2); color: var(--danger); border-radius: 10px; }
+[data-theme="dusk"] .history-row,
+[data-theme="dusk"] .profile-item,
+[data-theme="dusk"] .grant-item,
+[data-theme="dusk"] .compat-card,
+[data-theme="dusk"] .queue-row { background: var(--panel); border-color: var(--line); border-radius: 10px; }
