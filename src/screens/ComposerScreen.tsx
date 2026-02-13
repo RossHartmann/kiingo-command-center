@@ -32,6 +32,12 @@ export function ComposerScreen(): JSX.Element {
   );
 
   useEffect(() => {
+    if (!cwd.trim() && suggestedWorkspaces.length) {
+      setCwd(suggestedWorkspaces[0]);
+    }
+  }, [cwd, suggestedWorkspaces]);
+
+  useEffect(() => {
     if (!selectedProfile) {
       return;
     }
