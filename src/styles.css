@@ -1088,6 +1088,17 @@ button.primary {
 
 .metric-link-btn:hover { color: var(--accent-strong); }
 
+.dashboard-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.dashboard-toolbar button {
+  font-size: 0.76rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+}
+
 /* ---- Metric Admin ---- */
 
 .metric-admin {
@@ -1305,6 +1316,22 @@ button.primary {
 .metric-binding-item button:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+.metric-binding-item.dragging {
+  opacity: 0.4;
+}
+
+.metric-binding-drag-handle {
+  cursor: grab;
+  color: var(--ink-muted);
+  font-size: 1rem;
+  user-select: none;
+  line-height: 1;
+}
+
+.metric-binding-drag-handle:active {
+  cursor: grabbing;
 }
 
 .metric-binding-add {

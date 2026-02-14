@@ -741,6 +741,20 @@ export async function unbindMetricFromScreen(screenId: string, metricId: string)
   return { success: true };
 }
 
+export async function reorderScreenMetrics(screenId: string, metricIds: string[]): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("reorder_screen_metrics", { screenId, metricIds });
+  }
+  metricIds.forEach((id, i) => {
+    const binding = mockStore.screenMetrics.find(
+      (b) => b.screenId === screenId && b.metricId === id
+    );
+    if (binding) binding.position = i;
+  });
+  persistMockStore();
+  return { success: true };
+}
+
 export async function getScreenMetrics(screenId: string): Promise<ScreenMetricView[]> {
   if (IS_TAURI) {
     return tauriInvoke("get_screen_metrics", { screenId });

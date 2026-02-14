@@ -326,6 +326,15 @@ fn bind_metric_to_screen(
 }
 
 #[tauri::command]
+fn reorder_screen_metrics(
+    state: tauri::State<'_, AppState>,
+    screen_id: String,
+    metric_ids: Vec<String>,
+) -> Result<BooleanResponse, String> {
+    state.runner.reorder_screen_metrics(&screen_id, &metric_ids).map_err(to_client_error)
+}
+
+#[tauri::command]
 fn unbind_metric_from_screen(
     state: tauri::State<'_, AppState>,
     screen_id: String,
@@ -458,6 +467,7 @@ pub fn run() {
             list_metric_snapshots,
             bind_metric_to_screen,
             unbind_metric_from_screen,
+            reorder_screen_metrics,
             get_screen_metrics,
             refresh_metric,
             refresh_screen_metrics

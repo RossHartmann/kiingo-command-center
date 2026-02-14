@@ -2124,6 +2124,11 @@ impl RunnerCore {
         Ok(BooleanResponse { success })
     }
 
+    pub fn reorder_screen_metrics(&self, screen_id: &str, metric_ids: &[String]) -> AppResult<BooleanResponse> {
+        self.db.reorder_screen_metrics(screen_id, metric_ids)?;
+        Ok(BooleanResponse { success: true })
+    }
+
     pub fn get_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<ScreenMetricView>> {
         self.db.list_screen_metrics(screen_id)
     }
@@ -2244,17 +2249,34 @@ impl RunnerCore {
             _ => return, // Not a metric run
         };
 
+        let metric_id = snapshot.metric_id.clone();
+
         if !success {
             let _ = self.db.fail_metric_snapshot(&snapshot.id, "Run failed");
+            let _ = self.emit_app_event("metric.snapshot_failed", json!({
+                "metricId": metric_id,
+                "snapshotId": snapshot.id,
+                "error": "Run failed"
+            }));
             return;
         }
 
         match parse_metric_output(output_text) {
             Ok((values, html)) => {
                 let _ = self.db.complete_metric_snapshot(&snapshot.id, &values, &html);
+                let _ = self.emit_app_event("metric.snapshot_completed", json!({
+                    "metricId": metric_id,
+                    "snapshotId": snapshot.id
+                }));
             }
             Err(err) => {
-                let _ = self.db.fail_metric_snapshot(&snapshot.id, &format!("Output parse error: {}", err));
+                let msg = format!("Output parse error: {}", err);
+                let _ = self.db.fail_metric_snapshot(&snapshot.id, &msg);
+                let _ = self.emit_app_event("metric.snapshot_failed", json!({
+                    "metricId": metric_id,
+                    "snapshotId": snapshot.id,
+                    "error": msg
+                }));
             }
         }
     }

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppActions, useAppState, type Screen } from "../state/appState";
-import type { MetricLayoutHint } from "../lib/types";
+import type { MetricLayoutHint, ScreenMetricView } from "../lib/types";
 import { SCREEN_META } from "./Sidebar/navigationConfig";
 
 interface MetricBindingManagerProps {
@@ -13,6 +13,8 @@ export function MetricBindingManager({ screenId: initialScreenId }: MetricBindin
   const [selectedScreen, setSelectedScreen] = useState<string>(initialScreenId ?? "dashboard");
   const [selectedMetricId, setSelectedMetricId] = useState<string>("");
   const [layoutHint, setLayoutHint] = useState<MetricLayoutHint>("card");
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const dragOverIndex = useRef<number | null>(null);
 
   const views = state.screenMetricViews[selectedScreen] ?? [];
 
@@ -45,6 +47,34 @@ export function MetricBindingManager({ screenId: initialScreenId }: MetricBindin
     await actions.unbindMetricFromScreen(selectedScreen, metricId);
   };
 
+  const handleDragStart = (index: number) => {
+    setDragIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    dragOverIndex.current = index;
+  };
+
+  const handleDrop = async () => {
+    if (dragIndex === null || dragOverIndex.current === null || dragIndex === dragOverIndex.current) {
+      setDragIndex(null);
+      return;
+    }
+    const reordered: ScreenMetricView[] = [...views];
+    const [moved] = reordered.splice(dragIndex, 1);
+    reordered.splice(dragOverIndex.current, 0, moved);
+    const metricIds = reordered.map((v) => v.definition.id);
+    setDragIndex(null);
+    dragOverIndex.current = null;
+    await actions.reorderScreenMetrics(selectedScreen, metricIds);
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    dragOverIndex.current = null;
+  };
+
   const screenOptions = Object.entries(SCREEN_META).map(([id, meta]) => ({
     id: id as Screen,
     label: meta.title
@@ -68,8 +98,17 @@ export function MetricBindingManager({ screenId: initialScreenId }: MetricBindin
       <div className="metric-binding-list">
         <h3>Bound Metrics ({views.length})</h3>
         {views.length === 0 && <p className="settings-hint">No metrics bound to this screen</p>}
-        {views.map((view) => (
-          <div key={view.binding.id} className="metric-binding-item">
+        {views.map((view, i) => (
+          <div
+            key={view.binding.id}
+            className={`metric-binding-item${dragIndex === i ? " dragging" : ""}`}
+            draggable
+            onDragStart={() => handleDragStart(i)}
+            onDragOver={(e) => handleDragOver(e, i)}
+            onDrop={handleDrop}
+            onDragEnd={handleDragEnd}
+          >
+            <span className="metric-binding-drag-handle">{"\u2261"}</span>
             <span>{view.definition.name}</span>
             <small>{view.binding.layoutHint}</small>
             <button

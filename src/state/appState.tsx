@@ -32,6 +32,7 @@ import {
   onRunEvent,
   refreshMetric,
   refreshScreenMetrics,
+  reorderScreenMetrics,
   rerun,
   renameConversation,
   resumeSession,
@@ -304,6 +305,7 @@ interface Actions {
   refreshMetric: (metricId: string) => Promise<void>;
   bindMetricToScreen: (payload: BindMetricToScreenPayload) => Promise<void>;
   unbindMetricFromScreen: (screenId: string, metricId: string) => Promise<void>;
+  reorderScreenMetrics: (screenId: string, metricIds: string[]) => Promise<void>;
 }
 
 const StateContext = createContext<State>(initialState);
@@ -314,6 +316,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   const runsRef = useRef<RunRecord[]>([]);
   const runDetailsRef = useRef<Record<string, RunDetail>>({});
   const selectedConversationRef = useRef<Record<Provider, string | undefined>>(initialState.selectedConversationByProvider);
+  const screenMetricViewsRef = useRef<Record<string, ScreenMetricView[]>>({});
 
   const safeDispatch = useCallback((action: Action) => {
     dispatch(action);
@@ -323,7 +326,8 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
     runsRef.current = state.runs;
     runDetailsRef.current = state.runDetails;
     selectedConversationRef.current = state.selectedConversationByProvider;
-  }, [state.runs, state.runDetails, state.selectedConversationByProvider]);
+    screenMetricViewsRef.current = state.screenMetricViews;
+  }, [state.runs, state.runDetails, state.selectedConversationByProvider, state.screenMetricViews]);
 
   const refreshAll = useCallback(async () => {
     safeDispatch({ type: "loading", value: true });
@@ -364,6 +368,15 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         void onConversationEventUpdate(safeDispatch, event, selectedConversationRef.current).catch((error) => {
           safeDispatch({ type: "error", error: asError(error) });
         });
+        return;
+      }
+      if (event.type === "metric.snapshot_completed" || event.type === "metric.snapshot_failed") {
+        const metricId = event.payload.metricId as string | undefined;
+        if (metricId) {
+          safeDispatch({ type: "clear_metric_refresh", metricId });
+          // Reload all cached screen views that might contain this metric
+          void reloadAllScreenMetrics(safeDispatch, screenMetricViewsRef.current);
+        }
         return;
       }
       onRunEventUpdate(safeDispatch, runsRef.current, runDetailsRef.current, event);
@@ -586,6 +599,11 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         await unbindMetricFromScreen(screenId, metricId);
         const views = await getScreenMetrics(screenId);
         safeDispatch({ type: "set_screen_metric_views", screenId, views });
+      },
+      reorderScreenMetrics: async (screenId, metricIds) => {
+        await reorderScreenMetrics(screenId, metricIds);
+        const views = await getScreenMetrics(screenId);
+        safeDispatch({ type: "set_screen_metric_views", screenId, views });
       }
     };
   }, [refreshAll, safeDispatch, state.selectedConversationByProvider]);
@@ -595,6 +613,21 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       <ActionContext.Provider value={actions}>{children}</ActionContext.Provider>
     </StateContext.Provider>
   );
+}
+
+async function reloadAllScreenMetrics(
+  dispatch: Dispatch<Action>,
+  cachedViews: Record<string, ScreenMetricView[]>
+): Promise<void> {
+  const screenIds = Object.keys(cachedViews);
+  for (const screenId of screenIds) {
+    try {
+      const views = await getScreenMetrics(screenId);
+      dispatch({ type: "set_screen_metric_views", screenId, views });
+    } catch {
+      // ignore — screen may no longer be relevant
+    }
+  }
 }
 
 function onRunEventUpdate(
