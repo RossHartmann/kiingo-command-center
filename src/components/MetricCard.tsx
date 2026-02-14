@@ -1,5 +1,13 @@
+import { useState } from "react";
+import { LiveProvider, LivePreview, LiveError } from "react-live";
+import * as Recharts from "recharts";
 import { useAppActions } from "../state/appState";
 import type { ScreenMetricView } from "../lib/types";
+
+const LIVE_SCOPE = {
+  ...Recharts,
+  useState
+};
 
 interface MetricCardProps {
   view: ScreenMetricView;
@@ -80,10 +88,12 @@ export function MetricCard({ view }: MetricCardProps): JSX.Element {
           </button>
         </span>
       </div>
-      <div
-        className="metric-card-body"
-        dangerouslySetInnerHTML={{ __html: latestSnapshot.renderedHtml }}
-      />
+      <div className="metric-card-body">
+        <LiveProvider code={latestSnapshot.renderedHtml} scope={LIVE_SCOPE} noInline={false}>
+          <LivePreview />
+          <LiveError className="metric-live-error" />
+        </LiveProvider>
+      </div>
     </div>
   );
 }

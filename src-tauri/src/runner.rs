@@ -2147,14 +2147,33 @@ impl RunnerCore {
 
         let snapshot = self.db.insert_metric_snapshot(metric_id)?;
 
-        let system_prompt = "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. Fill the HTML template with actual values. Return JSON: { \"values\": { ... }, \"html\": \"...\" }".to_string();
+        let system_prompt = concat!(
+            "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. ",
+            "Then produce a React/JSX component that displays the results.\n\n",
+            "Your output will be rendered via react-live. The following are available in scope: ",
+            "AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, ComposedChart, ",
+            "XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ",
+            "ReferenceArea, ReferenceDot, Cell, LabelList, Brush, Scatter, ScatterChart, ",
+            "RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Treemap, Funnel, FunnelChart, ",
+            "RadialBarChart, RadialBar, Sector, Text, Label, Dot, Cross, Curve, Rectangle, ",
+            "Symbols, Polygon, Trapezoid, useState.\n\n",
+            "Return a JSON object with two keys:\n",
+            "- \"values\": an object containing the raw extracted metric values (numbers, arrays) for trending/storage\n",
+            "- \"html\": a string containing the JSX expression to render (NOT a full component definition — just the JSX, e.g. `<div>...</div>`)\n\n",
+            "The JSX should use inline styles (not Tailwind/CSS classes). Use a dark theme: background #030712 (gray-950), ",
+            "text #f9fafb (gray-50), accent #3b82f6 (blue-500). Include summary stat cards above charts. ",
+            "Add a footnote with data source. Use AreaChart with gradient fills for time-series data.\n\n",
+            "IMPORTANT: The \"html\" value must be a single JSX expression, not multiple statements. ",
+            "Do not use import/export. Do not define functions or components — just return the JSX directly. ",
+            "Data should be embedded as inline constants within the JSX expression using IIFE if needed."
+        ).to_string();
 
         let user_prompt = format!(
-            "# Metric: {name}\n\n## Instructions\n{instructions}\n\n## HTML Template\n{template}\n\nReturn your response as JSON with `values` and `html` keys.",
+            "# Metric: {name}\n\n## Instructions\n{instructions}\n\n## JSX Template\n{template}\n\nReturn your response as JSON with `values` and `html` keys. The `html` value must be a JSX expression string.",
             name = definition.name,
             instructions = definition.instructions,
             template = if definition.template_html.is_empty() {
-                "Create clean self-contained HTML to display the metric data.".to_string()
+                "Create a clean React/Recharts JSX component to display the metric data with stat cards and an appropriate chart type.".to_string()
             } else {
                 definition.template_html.clone()
             }
