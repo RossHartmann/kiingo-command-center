@@ -14,8 +14,9 @@ use crate::models::{
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
     ExportResponse, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
     Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveMetricDefinitionPayload,
-    SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView, SendConversationMessagePayload,
-    StartInteractiveSessionResponse, StartRunPayload, StartRunResponse, WorkspaceGrant,
+    SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
+    SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
+    UpdateScreenMetricLayoutPayload, WorkspaceGrant,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -335,6 +336,14 @@ fn reorder_screen_metrics(
 }
 
 #[tauri::command]
+fn update_screen_metric_layout(
+    state: tauri::State<'_, AppState>,
+    payload: UpdateScreenMetricLayoutPayload,
+) -> Result<BooleanResponse, String> {
+    state.runner.update_screen_metric_layout(&payload.screen_id, &payload.layouts).map_err(to_client_error)
+}
+
+#[tauri::command]
 fn unbind_metric_from_screen(
     state: tauri::State<'_, AppState>,
     screen_id: String,
@@ -468,6 +477,7 @@ pub fn run() {
             bind_metric_to_screen,
             unbind_metric_from_screen,
             reorder_screen_metrics,
+            update_screen_metric_layout,
             get_screen_metrics,
             refresh_metric,
             refresh_screen_metrics

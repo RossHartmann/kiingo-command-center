@@ -957,26 +957,22 @@ button.primary {
    METRIC SYSTEM
    =================================================================== */
 
-/* ---- Metric Grid ---- */
+/* ---- Metric Grid (react-grid-layout) ---- */
 
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 0.8rem;
+.metric-grid-layout {
+  position: relative;
 }
-
-.metric-grid .metric-card.wide { grid-column: span 2; }
-.metric-grid .metric-card.full { grid-column: 1 / -1; }
 
 /* ---- Metric Card ---- */
 
 .metric-card {
+  height: 100%;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: rgba(255, 252, 244, 0.92);
+  background: var(--panel);
   box-shadow: var(--shadow);
-  display: grid;
-  gap: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1025,10 +1021,36 @@ button.primary {
 .metric-card-body {
   padding: 0.8rem;
   min-height: 80px;
+  flex: 1;
+  overflow: auto;
 }
 
 .metric-stale {
   border-left: 3px solid #d7a13f;
+}
+
+/* Edit mode: drag & resize */
+.dashboard-editing .metric-card-header {
+  cursor: grab;
+}
+.dashboard-editing .metric-card-header:active {
+  cursor: grabbing;
+}
+
+.react-grid-item > .react-resizable-handle {
+  display: none;
+}
+.dashboard-editing .react-grid-item > .react-resizable-handle {
+  display: block;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-color: var(--ink-muted) !important;
+}
+
+.react-grid-placeholder {
+  background: var(--accent) !important;
+  opacity: 0.12 !important;
+  border-radius: 14px;
 }
 
 /* Loading shimmer */
@@ -1364,6 +1386,84 @@ button.primary {
 .metric-binding-add-row select { flex: 1; }
 
 /* ===================================================================
+   METRIC COMPONENTS  –  theme-aware building blocks for LLM output
+   =================================================================== */
+
+.metric-section {
+  display: grid;
+  gap: 0.75rem;
+  color: var(--ink);
+}
+
+.metric-section-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.metric-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.metric-row > * {
+  flex: 1 1 0;
+  min-width: 100px;
+}
+
+.metric-stat-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+}
+
+.metric-stat-card-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.metric-stat-card-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin-top: 0.15rem;
+  line-height: 1.2;
+}
+
+.metric-stat-card-subtitle {
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  margin-top: 0.1rem;
+}
+
+.metric-stat-card-trend {
+  font-size: 0.72rem;
+  margin-top: 0.15rem;
+  font-weight: 600;
+}
+
+.metric-stat-card-trend.up { color: var(--accent); }
+.metric-stat-card-trend.down { color: var(--danger); }
+.metric-stat-card-trend.flat { color: var(--ink-muted); }
+
+.metric-text {
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.metric-note {
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  text-align: center;
+  margin: 0.4rem 0 0;
+}
+
+/* ===================================================================
    RESPONSIVE  –  sidebar becomes off-canvas overlay on mobile
    =================================================================== */
 
@@ -1410,9 +1510,6 @@ button.primary {
   .toolbar-grid,
   .meta-grid { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
-  .metric-grid { grid-template-columns: 1fr; }
-  .metric-grid .metric-card.wide,
-  .metric-grid .metric-card.full { grid-column: auto; }
   .metric-editor-row { grid-template-columns: 1fr; }
   .metric-binding-add-row { flex-wrap: wrap; }
 }

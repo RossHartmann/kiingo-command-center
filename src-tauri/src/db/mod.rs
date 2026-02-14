@@ -4,7 +4,7 @@ use crate::models::{
     ConversationSummary, ListConversationsFilters, ListRunsFilters, MetricDefinition,
     MetricSnapshot, MetricSnapshotStatus, Profile, Provider, RunArtifact, RunDetail, RunEventRecord, RunMode,
     RunRecord, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
-    ScreenMetricView, WorkspaceGrant,
+    ScreenMetricLayoutItem, ScreenMetricView, WorkspaceGrant,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -974,6 +974,20 @@ impl Database {
         .map_err(AppError::from)
     }
 
+    pub fn mark_orphan_snapshots_failed(&self) -> AppResult<u64> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute(
+            "UPDATE metric_snapshots
+             SET status = 'failed', error_message = 'Run interrupted by app restart'
+             WHERE status IN ('pending', 'running')",
+            [],
+        )?;
+        Ok(changed as u64)
+    }
+
     pub fn mark_orphan_runs_interrupted(&self) -> AppResult<u64> {
         let now = Utc::now().to_rfc3339();
         let conn = self
@@ -1277,7 +1291,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
-             FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT 1",
+             FROM metric_snapshots WHERE metric_id = ?1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
             [metric_id],
             parse_metric_snapshot_row,
         )
@@ -1339,12 +1353,16 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let position = payload.position.unwrap_or(0);
         let layout_hint = payload.layout_hint.as_deref().unwrap_or("card");
+        let grid_x = payload.grid_x.unwrap_or(-1);
+        let grid_y = payload.grid_y.unwrap_or(-1);
+        let grid_w = payload.grid_w.unwrap_or(4);
+        let grid_h = payload.grid_h.unwrap_or(3);
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
-            "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(screen_id, metric_id) DO UPDATE SET position=excluded.position, layout_hint=excluded.layout_hint",
-            params![id, payload.screen_id, payload.metric_id, position, layout_hint],
+            "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(screen_id, metric_id) DO UPDATE SET position=excluded.position, layout_hint=excluded.layout_hint, grid_x=excluded.grid_x, grid_y=excluded.grid_y, grid_w=excluded.grid_w, grid_h=excluded.grid_h",
+            params![id, payload.screen_id, payload.metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h],
         )?;
         Ok(ScreenMetricBinding {
             id,
@@ -1352,6 +1370,10 @@ impl Database {
             metric_id: payload.metric_id.clone(),
             position,
             layout_hint: layout_hint.to_string(),
+            grid_x,
+            grid_y,
+            grid_w,
+            grid_h,
         })
     }
 
@@ -1368,6 +1390,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT sm.id, sm.screen_id, sm.metric_id, sm.position, sm.layout_hint,
+                    sm.grid_x, sm.grid_y, sm.grid_w, sm.grid_h,
                     md.id, md.name, md.slug, md.instructions, md.template_html, md.ttl_seconds,
                     md.provider, md.model, md.profile_id, md.cwd, md.enabled, md.proactive,
                     md.metadata_json, md.created_at, md.updated_at, md.archived_at
@@ -1386,48 +1409,59 @@ impl Database {
                 metric_id: row.get(2)?,
                 position: row.get(3)?,
                 layout_hint: row.get(4)?,
+                grid_x: row.get(5)?,
+                grid_y: row.get(6)?,
+                grid_w: row.get(7)?,
+                grid_h: row.get(8)?,
             };
-            let metric_id_str: String = row.get(5)?;
+            let metric_id_str: String = row.get(9)?;
             let definition = MetricDefinition {
                 id: metric_id_str.clone(),
-                name: row.get(6)?,
-                slug: row.get(7)?,
-                instructions: row.get(8)?,
-                template_html: row.get(9)?,
-                ttl_seconds: row.get(10)?,
-                provider: parse_provider(&row.get::<_, String>(11)?)?,
-                model: row.get(12)?,
-                profile_id: row.get(13)?,
-                cwd: row.get(14)?,
-                enabled: row.get::<_, i32>(15)? != 0,
-                proactive: row.get::<_, i32>(16)? != 0,
-                metadata_json: serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(17)?)
+                name: row.get(10)?,
+                slug: row.get(11)?,
+                instructions: row.get(12)?,
+                template_html: row.get(13)?,
+                ttl_seconds: row.get(14)?,
+                provider: parse_provider(&row.get::<_, String>(15)?)?,
+                model: row.get(16)?,
+                profile_id: row.get(17)?,
+                cwd: row.get(18)?,
+                enabled: row.get::<_, i32>(19)? != 0,
+                proactive: row.get::<_, i32>(20)? != 0,
+                metadata_json: serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(21)?)
                     .unwrap_or(serde_json::json!({})),
-                created_at: parse_time(&row.get::<_, String>(18)?)?,
-                updated_at: parse_time(&row.get::<_, String>(19)?)?,
+                created_at: parse_time(&row.get::<_, String>(22)?)?,
+                updated_at: parse_time(&row.get::<_, String>(23)?)?,
                 archived_at: row
-                    .get::<_, Option<String>>(20)?
+                    .get::<_, Option<String>>(24)?
                     .map(|raw| parse_time(&raw))
                     .transpose()?,
             };
 
-            // Fetch latest snapshot inline
+            // Fetch latest completed snapshot for display (fallback-safe)
             let latest_snapshot: Option<MetricSnapshot> = {
                 let mut snap_stmt = conn.prepare(
                     "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
-                     FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                     FROM metric_snapshots WHERE metric_id = ?1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
                 )?;
                 snap_stmt
                     .query_row([&metric_id_str], parse_metric_snapshot_row)
                     .optional()?
             };
 
+            // Check if there's a pending/running snapshot (refresh in flight)
+            let refresh_in_progress: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM metric_snapshots WHERE metric_id = ?1 AND status IN ('pending', 'running')",
+                    [&metric_id_str],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+
             let is_stale = match &latest_snapshot {
                 None => true,
                 Some(snap) => {
-                    if snap.status == MetricSnapshotStatus::Failed {
-                        true
-                    } else if let Some(completed) = snap.completed_at {
+                    if let Some(completed) = snap.completed_at {
                         let elapsed = Utc::now().signed_duration_since(completed).num_seconds();
                         elapsed >= definition.ttl_seconds
                     } else {
@@ -1435,11 +1469,6 @@ impl Database {
                     }
                 }
             };
-
-            let refresh_in_progress = matches!(
-                latest_snapshot.as_ref().map(|s| s.status),
-                Some(MetricSnapshotStatus::Pending) | Some(MetricSnapshotStatus::Running)
-            );
 
             views.push(ScreenMetricView {
                 binding,
@@ -1459,6 +1488,17 @@ impl Database {
             conn.execute(
                 "UPDATE screen_metrics SET position = ?1 WHERE screen_id = ?2 AND metric_id = ?3",
                 params![i as i32, screen_id, metric_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn update_screen_metric_layouts(&self, screen_id: &str, layouts: &[ScreenMetricLayoutItem]) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        for item in layouts {
+            conn.execute(
+                "UPDATE screen_metrics SET grid_x = ?1, grid_y = ?2, grid_w = ?3, grid_h = ?4 WHERE screen_id = ?5 AND metric_id = ?6",
+                params![item.grid_x, item.grid_y, item.grid_w, item.grid_h, screen_id, item.metric_id],
             )?;
         }
         Ok(())
@@ -1606,66 +1646,33 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
   const trough = TROUGH_PLACEHOLDER;
   const avgValue = AVG_PLACEHOLDER;
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: '#111827', color: '#fff', padding: '8px 12px', borderRadius: 8, fontSize: 13, border: '1px solid #374151' }}>
-          <div style={{ fontWeight: 600 }}>Week of {label}</div>
-          <div style={{ color: '#93c5fd' }}>{payload[0].value} leads (trailing 30d)</div>
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
-    <div style={{ background: '#030712', padding: 24, borderRadius: 16, color: '#f9fafb', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 18, fontWeight: 700 }}>Trailing 30-Day Leads</div>
-        <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>HubSpot lead creation, rolling 30-day window by week</div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
-        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Current</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{current}</div>
-          <div style={{ fontSize: 12, color: '#4ade80', marginTop: 2 }}>Trailing 30d</div>
-        </div>
-        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Peak</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{peak}</div>
-          <div style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }}>Best week</div>
-        </div>
-        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Trough</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{trough}</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>Lowest week</div>
-        </div>
-      </div>
-
-      <div style={{ background: '#111827', borderRadius: 16, padding: 20, height: 320 }}>
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="Current" value={current} subtitle="Trailing 30d" />
+        <StatCard label="Peak" value={peak} subtitle="Best week" />
+        <StatCard label="Trough" value={trough} subtitle="Lowest week" />
+      </MetricRow>
+      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="leadGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
-                <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                <stop offset="0%" stopColor={theme.gradientFrom} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={theme.gradientFrom} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-            <XAxis dataKey="week" stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} interval={2} />
-            <YAxis stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 'auto']} />
-            <Tooltip content={<CustomTooltip />} />
-            <ReferenceLine y={avgValue} stroke="#4b5563" strokeDasharray="6 4" />
-            <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2.5} fill="url(#leadGradient)" dot={{ fill: '#3b82f6', r: 3, strokeWidth: 0 }} activeDot={{ fill: '#60a5fa', r: 5, strokeWidth: 2, stroke: '#1e3a5f' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="week" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} interval={2} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} domain={[0, 'auto']} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+            <ReferenceLine y={avgValue} stroke={theme.line} strokeDasharray="6 4" />
+            <Area type="monotone" dataKey="value" stroke={theme.accent} strokeWidth={2.5} fill="url(#leadGradient)" dot={{ fill: theme.accent, r: 3, strokeWidth: 0 }} activeDot={{ fill: theme.accentStrong, r: 5, strokeWidth: 2, stroke: theme.line }} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
-
-      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 12, textAlign: 'center' }}>
-        Each point = total leads created in the 30 days ending that week · Source: HubSpot CRM via Kiingo MCP
-      </div>
-    </div>
+      <MetricNote>Each point = trailing 30-day leads · Source: HubSpot CRM via Kiingo MCP</MetricNote>
+    </MetricSection>
   );
 })()"##;
 
@@ -1679,66 +1686,33 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
   const trough = 22;
   const avgValue = 39;
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: '#111827', color: '#fff', padding: '8px 12px', borderRadius: 8, fontSize: 13, border: '1px solid #374151' }}>
-          <div style={{ fontWeight: 600 }}>Week of {label}</div>
-          <div style={{ color: '#93c5fd' }}>{payload[0].value} leads (trailing 30d)</div>
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
-    <div style={{ background: '#030712', padding: 24, borderRadius: 16, color: '#f9fafb', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 18, fontWeight: 700 }}>Trailing 30-Day Leads</div>
-        <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>HubSpot lead creation, rolling 30-day window by week</div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
-        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Current</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{current}</div>
-          <div style={{ fontSize: 12, color: '#4ade80', marginTop: 2 }}>Trailing 30d</div>
-        </div>
-        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Peak</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{peak}</div>
-          <div style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }}>Best week</div>
-        </div>
-        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
-          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Trough</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{trough}</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>Lowest week</div>
-        </div>
-      </div>
-
-      <div style={{ background: '#111827', borderRadius: 16, padding: 20, height: 320 }}>
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="Current" value={current} subtitle="Trailing 30d" />
+        <StatCard label="Peak" value={peak} subtitle="Best week" />
+        <StatCard label="Trough" value={trough} subtitle="Lowest week" />
+      </MetricRow>
+      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="leadGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
-                <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                <stop offset="0%" stopColor={theme.gradientFrom} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={theme.gradientFrom} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-            <XAxis dataKey="week" stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} interval={2} />
-            <YAxis stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 'auto']} />
-            <Tooltip content={<CustomTooltip />} />
-            <ReferenceLine y={avgValue} stroke="#4b5563" strokeDasharray="6 4" />
-            <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2.5} fill="url(#leadGradient)" dot={{ fill: '#3b82f6', r: 3, strokeWidth: 0 }} activeDot={{ fill: '#60a5fa', r: 5, strokeWidth: 2, stroke: '#1e3a5f' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="week" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} interval={2} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} domain={[0, 'auto']} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+            <ReferenceLine y={avgValue} stroke={theme.line} strokeDasharray="6 4" />
+            <Area type="monotone" dataKey="value" stroke={theme.accent} strokeWidth={2.5} fill="url(#leadGradient)" dot={{ fill: theme.accent, r: 3, strokeWidth: 0 }} activeDot={{ fill: theme.accentStrong, r: 5, strokeWidth: 2, stroke: theme.line }} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
-
-      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 12, textAlign: 'center' }}>
-        Each point = total leads created in the 30 days ending that week · Source: HubSpot CRM via Kiingo MCP · Snapshot: Feb 14, 2026
-      </div>
-    </div>
+      <MetricNote>Each point = trailing 30-day leads · Source: HubSpot CRM via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>
+    </MetricSection>
   );
 })()"##;
 
@@ -1777,8 +1751,8 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
 
         // Bind to dashboard screen as a full-width card
         conn.execute(
-            "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint)
-             VALUES (?1, ?2, ?3, 0, 'full')",
+            "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
+             VALUES (?1, ?2, ?3, 0, 'full', -1, -1, 12, 4)",
             params![binding_id, "dashboard", metric_id],
         )?;
 
@@ -1888,6 +1862,24 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
              CREATE INDEX IF NOT EXISTS idx_screen_metrics_screen ON screen_metrics(screen_id, position);
              CREATE INDEX IF NOT EXISTS idx_screen_metrics_metric ON screen_metrics(metric_id);",
         )?;
+
+        // Grid layout columns for react-grid-layout
+        if !column_exists(&conn, "screen_metrics", "grid_x")? {
+            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_x INTEGER DEFAULT -1", [])?;
+            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_y INTEGER DEFAULT -1", [])?;
+            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_w INTEGER DEFAULT 4", [])?;
+            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_h INTEGER DEFAULT 3", [])?;
+
+            // Migrate existing layout_hint values to grid sizes
+            conn.execute(
+                "UPDATE screen_metrics SET grid_w = 8, grid_h = 3 WHERE layout_hint = 'wide'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE screen_metrics SET grid_w = 12, grid_h = 4 WHERE layout_hint = 'full'",
+                [],
+            )?;
+        }
 
         Ok(())
     }

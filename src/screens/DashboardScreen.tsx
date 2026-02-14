@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricGrid } from "../components/MetricGrid";
 import { MetricBindingManager } from "../components/MetricBindingManager";
+import type { ScreenMetricLayoutItem } from "../lib/types";
 
 interface DashboardScreenProps {
   screenId: string;
@@ -24,6 +25,13 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
       void actions.refreshMetric(view.definition.id).catch(() => {});
     }
   }, [views, actions]);
+
+  const handleLayoutChange = useCallback(
+    (layouts: ScreenMetricLayoutItem[]) => {
+      void actions.updateScreenMetricLayout(screenId, layouts);
+    },
+    [actions, screenId]
+  );
 
   if (views.length === 0 && !editMode) {
     return (
@@ -53,7 +61,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   }
 
   return (
-    <div className="screen">
+    <div className={`screen${editMode ? " dashboard-editing" : ""}`}>
       <div className="dashboard-toolbar">
         <button
           type="button"
@@ -63,7 +71,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
           {editMode ? "Done" : "Edit"}
         </button>
       </div>
-      <MetricGrid views={views} />
+      <MetricGrid views={views} editMode={editMode} onLayoutChange={handleLayoutChange} />
       {editMode && <MetricBindingManager screenId={screenId} />}
     </div>
   );

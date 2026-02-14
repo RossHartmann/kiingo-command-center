@@ -34,11 +34,19 @@ export function MetricBindingManager({ screenId: initialScreenId }: MetricBindin
 
   const handleBind = async () => {
     if (!selectedMetricId) return;
+    const gridDefaults: Record<string, { gridW: number; gridH: number }> = {
+      card: { gridW: 4, gridH: 3 },
+      wide: { gridW: 8, gridH: 3 },
+      full: { gridW: 12, gridH: 4 },
+    };
+    const { gridW, gridH } = gridDefaults[layoutHint] ?? gridDefaults.card;
     await actions.bindMetricToScreen({
       screenId: selectedScreen,
       metricId: selectedMetricId,
       position: views.length,
-      layoutHint
+      layoutHint,
+      gridW,
+      gridH,
     });
     setSelectedMetricId("");
   };

@@ -370,6 +370,10 @@ export interface ScreenMetricBinding {
   metricId: string;
   position: number;
   layoutHint: string;
+  gridX: number;
+  gridY: number;
+  gridW: number;
+  gridH: number;
 }
 
 export interface SaveMetricDefinitionPayload {
@@ -393,6 +397,23 @@ export interface BindMetricToScreenPayload {
   metricId: string;
   position?: number;
   layoutHint?: MetricLayoutHint;
+  gridX?: number;
+  gridY?: number;
+  gridW?: number;
+  gridH?: number;
+}
+
+export interface UpdateScreenMetricLayoutPayload {
+  screenId: string;
+  layouts: ScreenMetricLayoutItem[];
+}
+
+export interface ScreenMetricLayoutItem {
+  metricId: string;
+  gridX: number;
+  gridY: number;
+  gridW: number;
+  gridH: number;
 }
 
 export interface ScreenMetricView {

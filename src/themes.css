@@ -115,6 +115,13 @@
 [data-theme="obsidian"] .compat-card,
 [data-theme="obsidian"] .queue-row { background: var(--panel); border-color: var(--line); }
 
+/* Metric cards */
+[data-theme="obsidian"] .metric-card { background: var(--panel); border-color: var(--line); }
+[data-theme="obsidian"] .metric-card-header { border-bottom-color: var(--line); }
+[data-theme="obsidian"] .metric-card-header button { background: var(--bg); border-color: var(--line); color: var(--ink-muted); }
+[data-theme="obsidian"] .metric-card-header button:hover { color: var(--ink); }
+[data-theme="obsidian"] .metric-stat-card { background: var(--bg); border-color: var(--line); }
+
 
 /* ===================================================================
    THEME 2: AURORA
@@ -403,6 +410,12 @@
 [data-theme="terminal"] .compat-card,
 [data-theme="terminal"] .queue-row { background: var(--panel); border-color: var(--line); border-radius: 3px; }
 
+/* Metric cards */
+[data-theme="terminal"] .metric-card { background: var(--panel); border-color: var(--line); border-radius: 3px; box-shadow: none; }
+[data-theme="terminal"] .metric-card-header { border-bottom-color: var(--line); }
+[data-theme="terminal"] .metric-card-header button { background: var(--bg); border-color: var(--line); color: var(--ink-muted); border-radius: 3px; }
+[data-theme="terminal"] .metric-stat-card { background: var(--bg); border-color: var(--line); border-radius: 3px; }
+
 
 /* ===================================================================
    THEME 4: PAPER
@@ -657,3 +670,9 @@
 [data-theme="dusk"] .grant-item,
 [data-theme="dusk"] .compat-card,
 [data-theme="dusk"] .queue-row { background: var(--panel); border-color: var(--line); border-radius: 10px; }
+
+/* Metric cards */
+[data-theme="dusk"] .metric-card { background: var(--panel); border-color: var(--line); border-radius: 14px; }
+[data-theme="dusk"] .metric-card-header { border-bottom-color: var(--line); }
+[data-theme="dusk"] .metric-card-header button { background: var(--bg); border-color: var(--line); color: var(--ink-muted); border-radius: 10px; }
+[data-theme="dusk"] .metric-stat-card { background: var(--bg); border-color: var(--line); border-radius: 10px; }

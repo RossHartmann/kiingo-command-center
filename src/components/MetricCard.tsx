@@ -3,10 +3,34 @@ import { LiveProvider, LivePreview, LiveError } from "react-live";
 import * as Recharts from "recharts";
 import { useAppActions } from "../state/appState";
 import type { ScreenMetricView } from "../lib/types";
+import { StatCard, MetricSection, MetricRow, MetricText, MetricNote } from "./MetricComponents";
+
+const METRIC_THEME = {
+  bg:            "var(--bg)",
+  panel:         "var(--panel)",
+  ink:           "var(--ink)",
+  inkMuted:      "var(--ink-muted)",
+  line:          "var(--line)",
+  accent:        "var(--accent)",
+  accentStrong:  "var(--accent-strong)",
+  danger:        "var(--danger)",
+  axisStroke:    "var(--ink-muted)",
+  gridStroke:    "var(--line)",
+  tooltipBg:     "var(--panel)",
+  tooltipBorder: "var(--line)",
+  tooltipText:   "var(--ink)",
+  gradientFrom:  "var(--accent)",
+};
 
 const LIVE_SCOPE = {
   ...Recharts,
-  useState
+  useState,
+  StatCard,
+  MetricSection,
+  MetricRow,
+  MetricText,
+  MetricNote,
+  theme: METRIC_THEME,
 };
 
 interface MetricCardProps {
@@ -27,7 +51,7 @@ export function MetricCard({ view }: MetricCardProps): JSX.Element {
 
   if (refreshInProgress) {
     return (
-      <div className={`metric-card metric-loading layout-${view.binding.layoutHint}`}>
+      <div className="metric-card metric-loading">
         <div className="metric-card-header">
           <strong>{definition.name}</strong>
           <small className="metric-card-time">refreshing...</small>
@@ -45,7 +69,7 @@ export function MetricCard({ view }: MetricCardProps): JSX.Element {
 
   if (latestSnapshot?.status === "failed") {
     return (
-      <div className={`metric-card metric-error layout-${view.binding.layoutHint}`}>
+      <div className="metric-card metric-error">
         <div className="metric-card-header">
           <strong>{definition.name}</strong>
           <button type="button" className="metric-refresh-btn" onClick={handleRefresh}>
@@ -63,7 +87,7 @@ export function MetricCard({ view }: MetricCardProps): JSX.Element {
 
   if (!latestSnapshot || !latestSnapshot.renderedHtml) {
     return (
-      <div className={`metric-card metric-stale layout-${view.binding.layoutHint}`}>
+      <div className="metric-card metric-stale">
         <div className="metric-card-header">
           <strong>{definition.name}</strong>
           <button type="button" className="metric-refresh-btn" onClick={handleRefresh}>
@@ -78,7 +102,7 @@ export function MetricCard({ view }: MetricCardProps): JSX.Element {
   }
 
   return (
-    <div className={`metric-card layout-${view.binding.layoutHint}${isStale ? " metric-stale" : ""}`}>
+    <div className={`metric-card${isStale ? " metric-stale" : ""}`}>
       <div className="metric-card-header">
         <strong>{definition.name}</strong>
         <span className="metric-card-meta">

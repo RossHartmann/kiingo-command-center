@@ -43,6 +43,7 @@ import {
   startInteractiveSession,
   startRun,
   unbindMetricFromScreen,
+  updateScreenMetricLayout,
   updateSettings
 } from "../lib/tauriClient";
 import type {
@@ -59,6 +60,7 @@ import type {
   RunRecord,
   SaveMetricDefinitionPayload,
   SchedulerJob,
+  ScreenMetricLayoutItem,
   ScreenMetricView,
   StartRunPayload,
   StreamEnvelope,
@@ -95,7 +97,8 @@ export type Screen =
   | "settings"
   | "compatibility"
   | "queue"
-  | "metric-admin";
+  | "metric-admin"
+  | "ceo-training";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 
@@ -306,6 +309,7 @@ interface Actions {
   bindMetricToScreen: (payload: BindMetricToScreenPayload) => Promise<void>;
   unbindMetricFromScreen: (screenId: string, metricId: string) => Promise<void>;
   reorderScreenMetrics: (screenId: string, metricIds: string[]) => Promise<void>;
+  updateScreenMetricLayout: (screenId: string, layouts: ScreenMetricLayoutItem[]) => Promise<void>;
 }
 
 const StateContext = createContext<State>(initialState);
@@ -602,6 +606,11 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       },
       reorderScreenMetrics: async (screenId, metricIds) => {
         await reorderScreenMetrics(screenId, metricIds);
+        const views = await getScreenMetrics(screenId);
+        safeDispatch({ type: "set_screen_metric_views", screenId, views });
+      },
+      updateScreenMetricLayout: async (screenId, layouts) => {
+        await updateScreenMetricLayout({ screenId, layouts });
         const views = await getScreenMetrics(screenId);
         safeDispatch({ type: "set_screen_metric_views", screenId, views });
       }

@@ -615,6 +615,10 @@ pub struct ScreenMetricBinding {
     pub metric_id: String,
     pub position: i32,
     pub layout_hint: String,
+    pub grid_x: i32,
+    pub grid_y: i32,
+    pub grid_w: i32,
+    pub grid_h: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -642,6 +646,27 @@ pub struct BindMetricToScreenPayload {
     pub metric_id: String,
     pub position: Option<i32>,
     pub layout_hint: Option<String>,
+    pub grid_x: Option<i32>,
+    pub grid_y: Option<i32>,
+    pub grid_w: Option<i32>,
+    pub grid_h: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateScreenMetricLayoutPayload {
+    pub screen_id: String,
+    pub layouts: Vec<ScreenMetricLayoutItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenMetricLayoutItem {
+    pub metric_id: String,
+    pub grid_x: i32,
+    pub grid_y: i32,
+    pub grid_w: i32,
+    pub grid_h: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

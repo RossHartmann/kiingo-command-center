@@ -23,6 +23,7 @@ import type {
   SchedulerJob,
   StartRunPayload,
   StreamEnvelope,
+  UpdateScreenMetricLayoutPayload,
   WorkspaceGrant
 } from "./types";
 
@@ -713,6 +714,10 @@ export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Pr
   if (existing) {
     existing.position = payload.position ?? existing.position;
     existing.layoutHint = payload.layoutHint ?? existing.layoutHint;
+    existing.gridX = payload.gridX ?? existing.gridX;
+    existing.gridY = payload.gridY ?? existing.gridY;
+    existing.gridW = payload.gridW ?? existing.gridW;
+    existing.gridH = payload.gridH ?? existing.gridH;
     persistMockStore();
     return existing;
   }
@@ -721,7 +726,11 @@ export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Pr
     screenId: payload.screenId,
     metricId: payload.metricId,
     position: payload.position ?? 0,
-    layoutHint: payload.layoutHint ?? "card"
+    layoutHint: payload.layoutHint ?? "card",
+    gridX: payload.gridX ?? -1,
+    gridY: payload.gridY ?? -1,
+    gridW: payload.gridW ?? 4,
+    gridH: payload.gridH ?? 3
   };
   mockStore.screenMetrics.push(binding);
   persistMockStore();
@@ -751,6 +760,25 @@ export async function reorderScreenMetrics(screenId: string, metricIds: string[]
     );
     if (binding) binding.position = i;
   });
+  persistMockStore();
+  return { success: true };
+}
+
+export async function updateScreenMetricLayout(payload: UpdateScreenMetricLayoutPayload): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("update_screen_metric_layout", { payload });
+  }
+  for (const item of payload.layouts) {
+    const binding = mockStore.screenMetrics.find(
+      (b) => b.screenId === payload.screenId && b.metricId === item.metricId
+    );
+    if (binding) {
+      binding.gridX = item.gridX;
+      binding.gridY = item.gridY;
+      binding.gridW = item.gridW;
+      binding.gridH = item.gridH;
+    }
+  }
   persistMockStore();
   return { success: true };
 }

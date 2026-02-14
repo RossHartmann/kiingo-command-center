@@ -100,6 +100,14 @@ export const NAVIGATION: NavGroup[] = [
     ]
   },
   {
+    id: "ceo-training",
+    label: "CEO Training Ground",
+    icon: "\u2691",
+    items: [
+      { id: "ceo-training", label: "Training Ground", icon: "\u2691" }
+    ]
+  },
+  {
     id: "system",
     label: "System",
     icon: "\u2388",
@@ -152,6 +160,8 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   live: { title: "Live Run", description: "Monitor running sessions", group: "ai-agent" },
   history: { title: "History", description: "Past runs and results", group: "ai-agent" },
   queue: { title: "Queue", description: "Scheduled and queued jobs", group: "ai-agent" },
+
+  "ceo-training": { title: "CEO Training Ground", description: "CEO-focused training scenarios and simulations", group: "ceo-training" },
 
   settings: { title: "Settings", description: "Workspace and app configuration", group: "system" },
   profiles: { title: "Profiles", description: "Manage provider profiles", group: "system" },

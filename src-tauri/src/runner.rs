@@ -20,8 +20,8 @@ use crate::models::{
     ExportResponse, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
     MetricSnapshot, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
-    ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload,
-    StartRunResponse, StreamEnvelope, WorkspaceGrant,
+    ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
+    StartRunPayload, StartRunResponse, StreamEnvelope, WorkspaceGrant,
 };
 use crate::policy::PolicyEngine;
 use crate::redaction::Redactor;
@@ -188,6 +188,12 @@ impl RunnerCore {
         if let Ok(interrupted) = this.db.mark_orphan_runs_interrupted() {
             if interrupted > 0 {
                 tracing::warn!(count = interrupted, "marked orphaned runs as interrupted on startup");
+            }
+        }
+
+        if let Ok(cleaned) = this.db.mark_orphan_snapshots_failed() {
+            if cleaned > 0 {
+                tracing::warn!(count = cleaned, "marked orphaned metric snapshots as failed on startup");
             }
         }
 
@@ -2133,38 +2139,71 @@ impl RunnerCore {
         self.db.list_screen_metrics(screen_id)
     }
 
+    pub fn update_screen_metric_layout(&self, screen_id: &str, layouts: &[ScreenMetricLayoutItem]) -> AppResult<BooleanResponse> {
+        self.db.update_screen_metric_layouts(screen_id, layouts)?;
+        Ok(BooleanResponse { success: true })
+    }
+
     pub async fn refresh_metric(&self, metric_id: &str) -> AppResult<MetricRefreshResponse> {
+        tracing::info!(metric_id = %metric_id, "metric refresh requested");
+
         let definition = self.db.get_metric_definition(metric_id)?
             .ok_or_else(|| AppError::NotFound(format!("Metric definition not found: {}", metric_id)))?;
 
         if !definition.enabled || definition.archived_at.is_some() {
+            tracing::warn!(metric_id = %metric_id, "metric refresh blocked: disabled or archived");
             return Err(AppError::Policy("Metric is disabled or archived".to_string()));
         }
 
         if self.db.has_pending_snapshot(metric_id)? {
+            tracing::warn!(metric_id = %metric_id, "metric refresh blocked: already in progress");
             return Err(AppError::Policy("Refresh already in progress for this metric".to_string()));
         }
 
         let snapshot = self.db.insert_metric_snapshot(metric_id)?;
+        tracing::info!(metric_id = %metric_id, snapshot_id = %snapshot.id, "metric snapshot created, queuing run");
 
         let system_prompt = concat!(
             "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. ",
-            "Then produce a React/JSX component that displays the results.\n\n",
-            "Your output will be rendered via react-live. The following are available in scope: ",
+            "Then produce a React/JSX expression that displays the results.\n\n",
+            "Your output is rendered via react-live inside the app's themed dashboard. ",
+            "Do NOT hardcode color hex values. Do NOT set background on the outermost container. ",
+            "The dashboard imposes its own theme — your job is data retrieval and choosing the right presentation.\n\n",
+            "## Available in scope\n\n",
+            "### Recharts\n",
             "AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, ComposedChart, ",
             "XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ",
             "ReferenceArea, ReferenceDot, Cell, LabelList, Brush, Scatter, ScatterChart, ",
             "RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Treemap, Funnel, FunnelChart, ",
             "RadialBarChart, RadialBar, Sector, Text, Label, Dot, Cross, Curve, Rectangle, ",
             "Symbols, Polygon, Trapezoid, useState.\n\n",
+            "### Layout components\n",
+            "- `<MetricSection title?>` — outer container, sets color/spacing\n",
+            "- `<MetricRow>` — flex row for side-by-side items\n",
+            "- `<StatCard label value subtitle? trend? trendDirection?>` — single stat display (trendDirection: \"up\"|\"down\"|\"flat\")\n",
+            "- `<MetricText>` — narrative paragraph\n",
+            "- `<MetricNote>` — footnote/source text\n\n",
+            "These are optional — use them when they fit, or use raw divs with `theme.*` inline styles.\n\n",
+            "### Theme object (`theme`)\n",
+            "Keys: bg, panel, ink, inkMuted, line, accent, accentStrong, danger, ",
+            "axisStroke, gridStroke, tooltipBg, tooltipBorder, tooltipText, gradientFrom.\n",
+            "Usage: `style={{ color: theme.ink }}` or `<XAxis stroke={theme.axisStroke} />`\n\n",
+            "### Recharts theming examples\n",
+            "```jsx\n",
+            "<CartesianGrid stroke={theme.gridStroke} />\n",
+            "<XAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />\n",
+            "<YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />\n",
+            "<Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />\n",
+            "<Area stroke={theme.accent} fill=\"url(#gradient)\" />\n",
+            "// gradient stop: <stop stopColor={theme.gradientFrom} />\n",
+            "```\n\n",
+            "## Output format\n\n",
             "Return a JSON object with two keys:\n",
             "- \"values\": an object containing the raw extracted metric values (numbers, arrays) for trending/storage\n",
-            "- \"html\": a string containing the JSX expression to render (NOT a full component definition — just the JSX, e.g. `<div>...</div>`)\n\n",
-            "The JSX should use inline styles (not Tailwind/CSS classes). Use a dark theme: background #030712 (gray-950), ",
-            "text #f9fafb (gray-50), accent #3b82f6 (blue-500). Include summary stat cards above charts. ",
-            "Add a footnote with data source. Use AreaChart with gradient fills for time-series data.\n\n",
+            "- \"html\": a string containing the JSX expression to render\n\n",
+            "Choose the presentation that fits the data: a single number, a paragraph, a chart, or any combination.\n\n",
             "IMPORTANT: The \"html\" value must be a single JSX expression, not multiple statements. ",
-            "Do not use import/export. Do not define functions or components — just return the JSX directly. ",
+            "Do not use import/export. Do not define standalone functions or components outside the expression. ",
             "Data should be embedded as inline constants within the JSX expression using IIFE if needed."
         ).to_string();
 
@@ -2219,6 +2258,7 @@ impl RunnerCore {
         let result = self.start_run(payload).await;
         match result {
             Ok(response) => {
+                tracing::info!(metric_id = %metric_id, run_id = %response.run_id, snapshot_id = %snapshot.id, "metric run started successfully");
                 self.db.update_metric_snapshot_run_id(&snapshot.id, &response.run_id)?;
                 Ok(MetricRefreshResponse {
                     metric_id: metric_id.to_string(),
@@ -2227,6 +2267,7 @@ impl RunnerCore {
                 })
             }
             Err(err) => {
+                tracing::error!(metric_id = %metric_id, snapshot_id = %snapshot.id, error = %err, "metric run failed to start");
                 self.db.fail_metric_snapshot(&snapshot.id, &err.to_string())?;
                 Err(err)
             }
@@ -2269,8 +2310,17 @@ impl RunnerCore {
         };
 
         let metric_id = snapshot.metric_id.clone();
+        tracing::info!(
+            metric_id = %metric_id,
+            snapshot_id = %snapshot.id,
+            run_id = %run_id,
+            success = success,
+            output_len = output_text.len(),
+            "processing metric run completion"
+        );
 
         if !success {
+            tracing::error!(metric_id = %metric_id, run_id = %run_id, "metric run failed");
             let _ = self.db.fail_metric_snapshot(&snapshot.id, "Run failed");
             let _ = self.emit_app_event("metric.snapshot_failed", json!({
                 "metricId": metric_id,
@@ -2280,8 +2330,19 @@ impl RunnerCore {
             return;
         }
 
+        // Log a preview of the output for debugging
+        let preview: String = output_text.chars().take(500).collect();
+        tracing::debug!(metric_id = %metric_id, output_preview = %preview, "metric run raw output");
+
         match parse_metric_output(output_text) {
             Ok((values, html)) => {
+                tracing::info!(
+                    metric_id = %metric_id,
+                    snapshot_id = %snapshot.id,
+                    values = %values,
+                    html_len = html.len(),
+                    "metric output parsed successfully"
+                );
                 let _ = self.db.complete_metric_snapshot(&snapshot.id, &values, &html);
                 let _ = self.emit_app_event("metric.snapshot_completed", json!({
                     "metricId": metric_id,
@@ -2289,6 +2350,13 @@ impl RunnerCore {
                 }));
             }
             Err(err) => {
+                tracing::error!(
+                    metric_id = %metric_id,
+                    snapshot_id = %snapshot.id,
+                    error = %err,
+                    output_preview = %preview,
+                    "metric output parse failed"
+                );
                 let msg = format!("Output parse error: {}", err);
                 let _ = self.db.fail_metric_snapshot(&snapshot.id, &msg);
                 let _ = self.emit_app_event("metric.snapshot_failed", json!({
@@ -3163,32 +3231,69 @@ fn render_text_export(detail: &RunDetail) -> String {
 }
 
 fn parse_metric_output(raw: &str) -> Result<(serde_json::Value, String), String> {
-    // Strategy 1: Parse entire output as JSON
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
-        if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
-            return Ok((values.clone(), html.as_str().unwrap_or_default().to_string()));
-        }
-    }
+    // The raw text may be NDJSON from the CLI. Collect all candidate texts to try parsing.
+    let mut candidates: Vec<String> = Vec::new();
 
-    // Strategy 2: Extract ```json ... ``` code block
-    if let Some(start) = raw.find("```json") {
-        let after = &raw[start + 7..];
-        if let Some(end) = after.find("```") {
-            let block = after[..end].trim();
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(block) {
-                if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
-                    return Ok((values.clone(), html.as_str().unwrap_or_default().to_string()));
+    // Strategy 0: Extract the `result` field from CLI result envelope lines.
+    // The CLI outputs NDJSON where the last line is {"type":"result","result":"..."}
+    // The `result` field contains the LLM's text response with the metric JSON.
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(line) {
+            if envelope.get("type").and_then(|t| t.as_str()) == Some("result") {
+                if let Some(result_text) = envelope.get("result").and_then(|r| r.as_str()) {
+                    candidates.push(result_text.to_string());
                 }
             }
         }
     }
 
-    // Strategy 3: Scan for first balanced {} containing "values" key
-    if let Some(start) = raw.find('{') {
+    // Also try the raw text itself as a candidate
+    candidates.push(raw.to_string());
+
+    for text in &candidates {
+        if let Some(result) = try_extract_metric_json(text) {
+            return Ok(result);
+        }
+    }
+
+    Err("Could not parse metric output: no valid JSON with 'values' and 'html' keys found".to_string())
+}
+
+fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
+    // Strategy 1: Parse entire text as JSON with values+html keys
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+        if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
+            return Some((values.clone(), html.as_str().unwrap_or_default().to_string()));
+        }
+    }
+
+    // Strategy 2: Extract ```json ... ``` code block
+    if let Some(start) = text.find("```json") {
+        let after = &text[start + 7..];
+        if let Some(end) = after.find("```") {
+            let block = after[..end].trim();
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(block) {
+                if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
+                    return Some((values.clone(), html.as_str().unwrap_or_default().to_string()));
+                }
+            }
+        }
+    }
+
+    // Strategy 3: Scan for balanced {} containing "values" key
+    // Skip objects that look like CLI envelopes (contain "type":"result")
+    let bytes = text.as_bytes();
+    let mut search_from = 0;
+    while let Some(offset) = text[search_from..].find('{') {
+        let start = search_from + offset;
         let mut depth = 0i32;
-        let bytes = raw.as_bytes();
         let mut in_string = false;
         let mut escape_next = false;
+        let mut found_end = None;
         for (i, &b) in bytes.iter().enumerate().skip(start) {
             if escape_next {
                 escape_next = false;
@@ -3210,19 +3315,26 @@ fn parse_metric_output(raw: &str) -> Result<(serde_json::Value, String), String>
             } else if b == b'}' {
                 depth -= 1;
                 if depth == 0 {
-                    let candidate = &raw[start..=i];
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(candidate) {
-                        if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
-                            return Ok((values.clone(), html.as_str().unwrap_or_default().to_string()));
-                        }
-                    }
+                    found_end = Some(i);
                     break;
                 }
             }
         }
+
+        if let Some(end) = found_end {
+            let candidate = &text[start..=end];
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(candidate) {
+                if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
+                    return Some((values.clone(), html.as_str().unwrap_or_default().to_string()));
+                }
+            }
+            search_from = end + 1;
+        } else {
+            break;
+        }
     }
 
-    Err("Could not parse metric output: no valid JSON with 'values' and 'html' keys found".to_string())
+    None
 }
 
 #[cfg(test)]
