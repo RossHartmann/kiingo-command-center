@@ -35,6 +35,7 @@ impl Database {
         };
 
         db.ensure_schema_extensions()?;
+        db.seed_default_metrics()?;
         db.ensure_default_settings()?;
         db.ensure_default_retention()?;
 
@@ -1544,6 +1545,243 @@ impl Database {
                 ],
             )?;
         }
+        Ok(())
+    }
+
+    fn seed_default_metrics(&self) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+
+        // Check if trailing-30-day-leads already exists
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM metric_definitions WHERE slug = 'trailing-30-day-leads'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if exists {
+            return Ok(());
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let metric_id = Uuid::new_v4().to_string();
+        let snapshot_id = Uuid::new_v4().to_string();
+        let binding_id = Uuid::new_v4().to_string();
+
+        let instructions = r#"Retrieve all HubSpot leads and compute the trailing 30-day lead count measured weekly.
+
+## Data Source
+HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
+
+## Retrieval Steps
+1. Paginate through ALL leads: call `hubspot.listLeads({ limit: 100, properties: ['createdate', 'hs_lead_name'], after })` in a loop until `paging.next.after` is absent.
+2. Parse `createdate` from each lead's properties (fall back to `createdAt`). Sort ascending.
+3. Compute trailing 30-day count for each week starting from the first full Sunday after the earliest lead:
+   - For each week-ending date, count leads created in the 30-day window ending on that date.
+4. Also compute: current trailing 30 count (from today), by-month breakdown, peak/trough/average.
+
+## Narrative Context
+- Steady state baseline is ~40-50 trailing leads (Oct-Nov 2025 was 45-52).
+- Expect holiday dip mid-Dec through early Jan (Dec 2025-Jan 2026 bottomed at 22).
+- Single-day spikes usually indicate campaigns or events.
+- Always report: trailing window dates, whether current period is complete, current vs peak vs trough.
+
+## Values to Return
+- `trailing30`: current trailing 30-day count
+- `peak`: highest weekly trailing 30 value and which week
+- `trough`: lowest weekly trailing 30 value (excluding ramp-up) and which week
+- `total`: total lead count
+- `avgTrailing`: average trailing 30 across all weeks
+- `weeklyData`: array of { weekOf, trailing30 } for the chart
+- `byMonth`: object of month -> count"#;
+
+        let template_jsx = r##"(() => {
+  const data = DATA_PLACEHOLDER;
+  const current = CURRENT_PLACEHOLDER;
+  const peak = PEAK_PLACEHOLDER;
+  const trough = TROUGH_PLACEHOLDER;
+  const avgValue = AVG_PLACEHOLDER;
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      return (
+        <div style={{ background: '#111827', color: '#fff', padding: '8px 12px', borderRadius: 8, fontSize: 13, border: '1px solid #374151' }}>
+          <div style={{ fontWeight: 600 }}>Week of {label}</div>
+          <div style={{ color: '#93c5fd' }}>{payload[0].value} leads (trailing 30d)</div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div style={{ background: '#030712', padding: 24, borderRadius: 16, color: '#f9fafb', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Trailing 30-Day Leads</div>
+        <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>HubSpot lead creation, rolling 30-day window by week</div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Current</div>
+          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{current}</div>
+          <div style={{ fontSize: 12, color: '#4ade80', marginTop: 2 }}>Trailing 30d</div>
+        </div>
+        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Peak</div>
+          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{peak}</div>
+          <div style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }}>Best week</div>
+        </div>
+        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Trough</div>
+          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{trough}</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>Lowest week</div>
+        </div>
+      </div>
+
+      <div style={{ background: '#111827', borderRadius: 16, padding: 20, height: 320 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="leadGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+            <XAxis dataKey="week" stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} interval={2} />
+            <YAxis stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 'auto']} />
+            <Tooltip content={<CustomTooltip />} />
+            <ReferenceLine y={avgValue} stroke="#4b5563" strokeDasharray="6 4" />
+            <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2.5} fill="url(#leadGradient)" dot={{ fill: '#3b82f6', r: 3, strokeWidth: 0 }} activeDot={{ fill: '#60a5fa', r: 5, strokeWidth: 2, stroke: '#1e3a5f' }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 12, textAlign: 'center' }}>
+        Each point = total leads created in the 30 days ending that week · Source: HubSpot CRM via Kiingo MCP
+      </div>
+    </div>
+  );
+})()"##;
+
+        // Initial snapshot with real data from Feb 14, 2026
+        let initial_values = r#"{"trailing30":90,"peak":70,"peakWeek":"2026-02-08","trough":22,"troughWeek":"2026-01-11","total":247,"avgTrailing":39,"weeklyData":[{"weekOf":"2025-09-21","trailing30":2},{"weekOf":"2025-09-28","trailing30":13},{"weekOf":"2025-10-05","trailing30":20},{"weekOf":"2025-10-12","trailing30":32},{"weekOf":"2025-10-19","trailing30":45},{"weekOf":"2025-10-26","trailing30":44},{"weekOf":"2025-11-02","trailing30":49},{"weekOf":"2025-11-09","trailing30":48},{"weekOf":"2025-11-16","trailing30":44},{"weekOf":"2025-11-23","trailing30":52},{"weekOf":"2025-11-30","trailing30":45},{"weekOf":"2025-12-07","trailing30":42},{"weekOf":"2025-12-14","trailing30":41},{"weekOf":"2025-12-21","trailing30":35},{"weekOf":"2025-12-28","trailing30":32},{"weekOf":"2026-01-04","trailing30":23},{"weekOf":"2026-01-11","trailing30":22},{"weekOf":"2026-01-18","trailing30":38},{"weekOf":"2026-01-25","trailing30":53},{"weekOf":"2026-02-01","trailing30":65},{"weekOf":"2026-02-08","trailing30":70}],"byMonth":{"2025-09":13,"2025-10":54,"2025-11":45,"2025-12":33,"2026-01":65,"2026-02":37}}"#;
+
+        let initial_html = r##"(() => {
+  const data = [{ week: "Sep 21", value: 2 }, { week: "Sep 28", value: 13 }, { week: "Oct 5", value: 20 }, { week: "Oct 12", value: 32 }, { week: "Oct 19", value: 45 }, { week: "Oct 26", value: 44 }, { week: "Nov 2", value: 49 }, { week: "Nov 9", value: 48 }, { week: "Nov 16", value: 44 }, { week: "Nov 23", value: 52 }, { week: "Nov 30", value: 45 }, { week: "Dec 7", value: 42 }, { week: "Dec 14", value: 41 }, { week: "Dec 21", value: 35 }, { week: "Dec 28", value: 32 }, { week: "Jan 4", value: 23 }, { week: "Jan 11", value: 22 }, { week: "Jan 18", value: 38 }, { week: "Jan 25", value: 53 }, { week: "Feb 1", value: 65 }, { week: "Feb 8", value: 70 }];
+  const current = 90;
+  const peak = 70;
+  const trough = 22;
+  const avgValue = 39;
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      return (
+        <div style={{ background: '#111827', color: '#fff', padding: '8px 12px', borderRadius: 8, fontSize: 13, border: '1px solid #374151' }}>
+          <div style={{ fontWeight: 600 }}>Week of {label}</div>
+          <div style={{ color: '#93c5fd' }}>{payload[0].value} leads (trailing 30d)</div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div style={{ background: '#030712', padding: 24, borderRadius: 16, color: '#f9fafb', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Trailing 30-Day Leads</div>
+        <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>HubSpot lead creation, rolling 30-day window by week</div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Current</div>
+          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{current}</div>
+          <div style={{ fontSize: 12, color: '#4ade80', marginTop: 2 }}>Trailing 30d</div>
+        </div>
+        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Peak</div>
+          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{peak}</div>
+          <div style={{ fontSize: 12, color: '#60a5fa', marginTop: 2 }}>Best week</div>
+        </div>
+        <div style={{ background: '#111827', borderRadius: 12, padding: '14px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1 }}>Trough</div>
+          <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{trough}</div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>Lowest week</div>
+        </div>
+      </div>
+
+      <div style={{ background: '#111827', borderRadius: 16, padding: 20, height: 320 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="leadGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+            <XAxis dataKey="week" stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} interval={2} />
+            <YAxis stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 'auto']} />
+            <Tooltip content={<CustomTooltip />} />
+            <ReferenceLine y={avgValue} stroke="#4b5563" strokeDasharray="6 4" />
+            <Area type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2.5} fill="url(#leadGradient)" dot={{ fill: '#3b82f6', r: 3, strokeWidth: 0 }} activeDot={{ fill: '#60a5fa', r: 5, strokeWidth: 2, stroke: '#1e3a5f' }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 12, textAlign: 'center' }}>
+        Each point = total leads created in the 30 days ending that week · Source: HubSpot CRM via Kiingo MCP · Snapshot: Feb 14, 2026
+      </div>
+    </div>
+  );
+})()"##;
+
+        // Insert metric definition
+        conn.execute(
+            "INSERT INTO metric_definitions (id, name, slug, instructions, template_html,
+             ttl_seconds, provider, enabled, proactive, metadata_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+            params![
+                metric_id,
+                "Trailing 30-Day Leads",
+                "trailing-30-day-leads",
+                instructions,
+                template_jsx,
+                3600, // 1 hour TTL
+                "claude",
+                1,    // enabled
+                0,    // not proactive by default
+                "{}",
+                now,
+            ],
+        )?;
+
+        // Insert initial completed snapshot with real data
+        conn.execute(
+            "INSERT INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at)
+             VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?5)",
+            params![
+                snapshot_id,
+                metric_id,
+                initial_values,
+                initial_html,
+                now,
+            ],
+        )?;
+
+        // Bind to dashboard screen as a full-width card
+        conn.execute(
+            "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint)
+             VALUES (?1, ?2, ?3, 0, 'full')",
+            params![binding_id, "dashboard", metric_id],
+        )?;
+
         Ok(())
     }
 
