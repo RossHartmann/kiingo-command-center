@@ -461,6 +461,15 @@ pub struct SchedulerJob {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NavOrderConfig {
+    #[serde(default)]
+    pub group_order: Vec<String>,
+    #[serde(default)]
+    pub item_order: BTreeMap<String, Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
@@ -473,6 +482,7 @@ pub struct AppSettings {
     pub remote_telemetry_opt_in: bool,
     pub redact_aggressive: bool,
     pub store_encrypted_raw_artifacts: bool,
+    pub nav_order: Option<NavOrderConfig>,
 }
 
 impl Default for AppSettings {
@@ -487,6 +497,7 @@ impl Default for AppSettings {
             remote_telemetry_opt_in: false,
             redact_aggressive: true,
             store_encrypted_raw_artifacts: false,
+            nav_order: None,
         }
     }
 }
@@ -537,4 +548,116 @@ pub struct BooleanResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AcceptedResponse {
     pub accepted: bool,
+}
+
+// ─── Metric Library ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MetricSnapshotStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+impl MetricSnapshotStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricDefinition {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub instructions: String,
+    pub template_html: String,
+    pub ttl_seconds: i64,
+    pub provider: Provider,
+    pub model: Option<String>,
+    pub profile_id: Option<String>,
+    pub cwd: Option<String>,
+    pub enabled: bool,
+    pub proactive: bool,
+    pub metadata_json: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricSnapshot {
+    pub id: String,
+    pub metric_id: String,
+    pub run_id: Option<String>,
+    pub values_json: serde_json::Value,
+    pub rendered_html: String,
+    pub status: MetricSnapshotStatus,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenMetricBinding {
+    pub id: String,
+    pub screen_id: String,
+    pub metric_id: String,
+    pub position: i32,
+    pub layout_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveMetricDefinitionPayload {
+    pub id: Option<String>,
+    pub name: String,
+    pub slug: String,
+    pub instructions: String,
+    pub template_html: Option<String>,
+    pub ttl_seconds: Option<i64>,
+    pub provider: Option<Provider>,
+    pub model: Option<String>,
+    pub profile_id: Option<String>,
+    pub cwd: Option<String>,
+    pub enabled: Option<bool>,
+    pub proactive: Option<bool>,
+    pub metadata_json: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindMetricToScreenPayload {
+    pub screen_id: String,
+    pub metric_id: String,
+    pub position: Option<i32>,
+    pub layout_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenMetricView {
+    pub binding: ScreenMetricBinding,
+    pub definition: MetricDefinition,
+    pub latest_snapshot: Option<MetricSnapshot>,
+    pub is_stale: bool,
+    pub refresh_in_progress: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricRefreshResponse {
+    pub metric_id: String,
+    pub snapshot_id: String,
+    pub run_id: Option<String>,
 }

@@ -11,47 +11,90 @@ import {
 } from "react";
 import {
   archiveConversation,
+  archiveMetricDefinition,
+  bindMetricToScreen,
   cancelRun,
   createConversation,
+  deleteMetricDefinition,
   getConversation,
+  getScreenMetrics,
   endSession,
   getRun,
   getSettings,
   grantWorkspace,
   listConversations,
   listCapabilities,
+  listMetricDefinitions,
   listProfiles,
   listQueueJobs,
   listRuns,
   listWorkspaceGrants,
   onRunEvent,
+  refreshMetric,
+  refreshScreenMetrics,
   rerun,
   renameConversation,
   resumeSession,
+  saveMetricDefinition,
   saveProfile,
   sendConversationMessage,
   sendSessionInput,
   startInteractiveSession,
   startRun,
+  unbindMetricFromScreen,
   updateSettings
 } from "../lib/tauriClient";
 import type {
   AppSettings,
+  BindMetricToScreenPayload,
   CapabilitySnapshot,
   ConversationDetail,
   ConversationSummary,
+  MetricDefinition,
   Profile,
   Provider,
   RunDetail,
   RunEvent,
   RunRecord,
+  SaveMetricDefinitionPayload,
   SchedulerJob,
+  ScreenMetricView,
   StartRunPayload,
   StreamEnvelope,
   WorkspaceGrant
 } from "../lib/types";
 
-export type Screen = "chat" | "composer" | "live" | "history" | "profiles" | "settings" | "compatibility" | "queue";
+export type Screen =
+  | "dashboard"
+  | "client-roi"
+  | "client-journey"
+  | "client-health"
+  | "path1-bootcamps"
+  | "path1-champions"
+  | "path1-accelerator"
+  | "path2-pipeline"
+  | "path2-deployed"
+  | "path2-fde"
+  | "revenue"
+  | "growth"
+  | "efficiency"
+  | "pipeline"
+  | "leads-gtm"
+  | "dept-sales"
+  | "dept-marketing"
+  | "dept-engineering"
+  | "dept-operations"
+  | "team-scorecard"
+  | "team-rocks"
+  | "chat"
+  | "composer"
+  | "live"
+  | "history"
+  | "profiles"
+  | "settings"
+  | "compatibility"
+  | "queue"
+  | "metric-admin";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 
@@ -68,6 +111,9 @@ interface State {
   queueJobs: SchedulerJob[];
   workspaceGrants: WorkspaceGrant[];
   settings?: AppSettings;
+  metricDefinitions: MetricDefinition[];
+  screenMetricViews: Record<string, ScreenMetricView[]>;
+  metricRefreshes: Record<string, string>;
   loading: boolean;
   error?: string;
 }
@@ -88,10 +134,14 @@ type Action =
   | { type: "set_jobs"; jobs: SchedulerJob[] }
   | { type: "set_grants"; grants: WorkspaceGrant[] }
   | { type: "set_settings"; settings: AppSettings }
-  | { type: "append_event"; runId: string; run: RunRecord; event: RunEvent };
+  | { type: "append_event"; runId: string; run: RunRecord; event: RunEvent }
+  | { type: "set_metric_definitions"; definitions: MetricDefinition[] }
+  | { type: "set_screen_metric_views"; screenId: string; views: ScreenMetricView[] }
+  | { type: "set_metric_refresh"; metricId: string; snapshotId: string }
+  | { type: "clear_metric_refresh"; metricId: string };
 
 const initialState: State = {
-  selectedScreen: "chat",
+  selectedScreen: "dashboard",
   runs: [],
   runDetails: {},
   conversations: [],
@@ -101,6 +151,9 @@ const initialState: State = {
   capabilities: [],
   queueJobs: [],
   workspaceGrants: [],
+  metricDefinitions: [],
+  screenMetricViews: {},
+  metricRefreshes: {},
   loading: true
 };
 
@@ -180,6 +233,28 @@ function reducer(state: State, action: Action): State {
         }
       };
     }
+    case "set_metric_definitions":
+      return { ...state, metricDefinitions: action.definitions };
+    case "set_screen_metric_views":
+      return {
+        ...state,
+        screenMetricViews: {
+          ...state.screenMetricViews,
+          [action.screenId]: action.views
+        }
+      };
+    case "set_metric_refresh":
+      return {
+        ...state,
+        metricRefreshes: {
+          ...state.metricRefreshes,
+          [action.metricId]: action.snapshotId
+        }
+      };
+    case "clear_metric_refresh": {
+      const { [action.metricId]: _, ...rest } = state.metricRefreshes;
+      return { ...state, metricRefreshes: rest };
+    }
     default:
       return state;
   }
@@ -220,6 +295,15 @@ interface Actions {
   endSession: (runId: string) => Promise<void>;
   resumeSession: (runId: string) => Promise<void>;
   selectScreen: (screen: Screen) => void;
+  loadMetricDefinitions: () => Promise<void>;
+  saveMetricDefinition: (payload: SaveMetricDefinitionPayload) => Promise<MetricDefinition>;
+  archiveMetricDefinition: (id: string) => Promise<void>;
+  deleteMetricDefinition: (id: string) => Promise<void>;
+  loadScreenMetrics: (screenId: string) => Promise<void>;
+  refreshScreenMetrics: (screenId: string) => Promise<void>;
+  refreshMetric: (metricId: string) => Promise<void>;
+  bindMetricToScreen: (payload: BindMetricToScreenPayload) => Promise<void>;
+  unbindMetricFromScreen: (screenId: string, metricId: string) => Promise<void>;
 }
 
 const StateContext = createContext<State>(initialState);
@@ -456,6 +540,52 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       },
       selectScreen: (screen) => {
         safeDispatch({ type: "select_screen", screen });
+      },
+      loadMetricDefinitions: async () => {
+        const definitions = await listMetricDefinitions();
+        safeDispatch({ type: "set_metric_definitions", definitions });
+      },
+      saveMetricDefinition: async (payload) => {
+        const saved = await saveMetricDefinition(payload);
+        const definitions = await listMetricDefinitions();
+        safeDispatch({ type: "set_metric_definitions", definitions });
+        return saved;
+      },
+      archiveMetricDefinition: async (id) => {
+        await archiveMetricDefinition(id);
+        const definitions = await listMetricDefinitions();
+        safeDispatch({ type: "set_metric_definitions", definitions });
+      },
+      deleteMetricDefinition: async (id) => {
+        await deleteMetricDefinition(id);
+        const definitions = await listMetricDefinitions();
+        safeDispatch({ type: "set_metric_definitions", definitions });
+      },
+      loadScreenMetrics: async (screenId) => {
+        const views = await getScreenMetrics(screenId);
+        safeDispatch({ type: "set_screen_metric_views", screenId, views });
+      },
+      refreshScreenMetrics: async (screenId) => {
+        const results = await refreshScreenMetrics(screenId);
+        for (const result of results) {
+          safeDispatch({ type: "set_metric_refresh", metricId: result.metricId, snapshotId: result.snapshotId });
+        }
+        const views = await getScreenMetrics(screenId);
+        safeDispatch({ type: "set_screen_metric_views", screenId, views });
+      },
+      refreshMetric: async (metricId) => {
+        const result = await refreshMetric(metricId);
+        safeDispatch({ type: "set_metric_refresh", metricId: result.metricId, snapshotId: result.snapshotId });
+      },
+      bindMetricToScreen: async (payload) => {
+        await bindMetricToScreen(payload);
+        const views = await getScreenMetrics(payload.screenId);
+        safeDispatch({ type: "set_screen_metric_views", screenId: payload.screenId, views });
+      },
+      unbindMetricFromScreen: async (screenId, metricId) => {
+        await unbindMetricFromScreen(screenId, metricId);
+        const views = await getScreenMetrics(screenId);
+        safeDispatch({ type: "set_screen_metric_views", screenId, views });
       }
     };
   }, [refreshAll, safeDispatch, state.selectedConversationByProvider]);

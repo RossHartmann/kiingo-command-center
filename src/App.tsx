@@ -1,29 +1,24 @@
-import clsx from "clsx";
 import { useMemo, useState } from "react";
-import { useAppActions, useAppState, type Screen } from "./state/appState";
+import { useAppState } from "./state/appState";
+import { Sidebar } from "./components/Sidebar/Sidebar";
+import { SCREEN_META } from "./components/Sidebar/navigationConfig";
 import { ChatScreen } from "./screens/ChatScreen";
 import { LegacyChatScreen } from "./screens/LegacyChatScreen";
 import { CompatibilityScreen } from "./screens/CompatibilityScreen";
 import { ComposerScreen } from "./screens/ComposerScreen";
 import { HistoryScreen } from "./screens/HistoryScreen";
 import { LiveRunScreen } from "./screens/LiveRunScreen";
+import { DashboardScreen } from "./screens/DashboardScreen";
+import { MetricAdminScreen } from "./screens/MetricAdminScreen";
 import { ProfilesScreen } from "./screens/ProfilesScreen";
 import { QueueScreen } from "./screens/QueueScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
-import { ThemeSwitcher } from "./ThemeSwitcher";
 
 export default function App(): JSX.Element {
   const state = useAppState();
-  const actions = useAppActions();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const isAdvancedScreen =
-    state.selectedScreen === "composer" ||
-    state.selectedScreen === "live" ||
-    state.selectedScreen === "history" ||
-    state.selectedScreen === "profiles" ||
-    state.selectedScreen === "compatibility" ||
-    state.selectedScreen === "queue";
+  const meta = SCREEN_META[state.selectedScreen];
 
   const panel = useMemo(() => {
     switch (state.selectedScreen) {
@@ -39,56 +34,44 @@ export default function App(): JSX.Element {
         return <CompatibilityScreen />;
       case "queue":
         return <QueueScreen />;
+      case "settings":
+        return <SettingsScreen />;
       case "chat":
-      default:
         return state.settings?.conversationThreadsV1 ? <ChatScreen /> : <LegacyChatScreen />;
+      case "metric-admin":
+        return <MetricAdminScreen />;
+      default: {
+        return <DashboardScreen screenId={state.selectedScreen} />;
+      }
     }
-  }, [state.selectedScreen, state.settings?.conversationThreadsV1]);
-
-  function goHome(): void {
-    actions.selectScreen("chat");
-    setSettingsOpen(false);
-  }
+  }, [state.selectedScreen, state.settings?.conversationThreadsV1, meta.title, meta.description]);
 
   return (
     <div className="app-shell">
-      <ThemeSwitcher />
+      <Sidebar mobileOpen={mobileMenuOpen} onMobileClose={() => setMobileMenuOpen(false)} />
 
-      <header className="topbar">
-        <div className="topbar-spacer" />
-
-        {isAdvancedScreen && (
+      <div className="content-area">
+        <header className="content-header">
           <button
             type="button"
-            className="topbar-back"
-            onClick={goHome}
+            className="mobile-menu-btn"
+            onClick={() => setMobileMenuOpen((v) => !v)}
+            aria-label="Toggle menu"
           >
-            Back to chat
+            {"\u2630"}
           </button>
-        )}
+          <div className="content-header-text">
+            <h1>{meta.title}</h1>
+            <p>{meta.description}</p>
+          </div>
+        </header>
 
-        <button
-          type="button"
-          className={clsx("topbar-icon-btn", settingsOpen && "active")}
-          onClick={() => setSettingsOpen((v) => !v)}
-          aria-label="Settings"
-          title="Settings"
-        >
-          {"\u2699"}
-        </button>
-      </header>
-
-      {settingsOpen && (
-        <div className="settings-drawer">
-          <SettingsScreen onNavigate={(screen: Screen) => { actions.selectScreen(screen); setSettingsOpen(false); }} />
-        </div>
-      )}
-
-      <main className="content-panel">
-        {state.loading && <div className="banner info">Loading...</div>}
-        {state.error && <div className="banner error">{state.error}</div>}
-        {panel}
-      </main>
+        <main className="content-panel">
+          {state.loading && <div className="banner info">Loading...</div>}
+          {state.error && <div className="banner error">{state.error}</div>}
+          {panel}
+        </main>
+      </div>
     </div>
   );
 }

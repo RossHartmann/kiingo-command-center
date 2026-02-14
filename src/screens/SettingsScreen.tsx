@@ -1,22 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { clearProviderToken, hasProviderToken, saveProviderToken } from "../lib/tauriClient";
 import { useAppActions, useAppState } from "../state/appState";
-import type { Screen } from "../state/appState";
 
-interface SettingsScreenProps {
-  onNavigate?: (screen: Screen) => void;
-}
-
-const ADVANCED_SCREENS: Array<{ key: Screen; label: string }> = [
-  { key: "composer", label: "Composer" },
-  { key: "live", label: "Live Run" },
-  { key: "history", label: "History" },
-  { key: "profiles", label: "Profiles" },
-  { key: "compatibility", label: "Compatibility" },
-  { key: "queue", label: "Queue" }
-];
-
-export function SettingsScreen({ onNavigate }: SettingsScreenProps): JSX.Element {
+export function SettingsScreen(): JSX.Element {
   const state = useAppState();
   const actions = useAppActions();
   const [workspacePath, setWorkspacePath] = useState("");
@@ -226,23 +212,6 @@ export function SettingsScreen({ onNavigate }: SettingsScreenProps): JSX.Element
               </label>
             </div>
 
-            {onNavigate && (
-              <div className="settings-advanced-nav">
-                <p className="settings-hint">Developer tools</p>
-                <div className="settings-nav-grid">
-                  {ADVANCED_SCREENS.map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      className="settings-nav-btn"
-                      onClick={() => onNavigate(item.key)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>

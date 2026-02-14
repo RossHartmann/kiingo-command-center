@@ -15,11 +15,13 @@ use crate::harness::line_buffer::LineBuffer;
 use crate::harness::shell_prelude::prepare_shell_prelude;
 use crate::harness::structured_output::{resolve_structured_output, validate_structured_output};
 use crate::models::{
-    AcceptedResponse, AppSettings, ArchiveConversationPayload, BooleanResponse, CapabilitySnapshot,
-    ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload, ExportResponse,
-    ListConversationsFilters, ListRunsFilters, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
-    RunMode, RunStatus, SaveProfilePayload, SchedulerJob, SendConversationMessagePayload, StartInteractiveSessionResponse,
-    StartRunPayload, StartRunResponse, StreamEnvelope, WorkspaceGrant,
+    AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
+    CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
+    ExportResponse, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
+    MetricSnapshot, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
+    RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
+    ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload,
+    StartRunResponse, StreamEnvelope, WorkspaceGrant,
 };
 use crate::policy::PolicyEngine;
 use crate::redaction::Redactor;
@@ -900,6 +902,7 @@ impl RunnerCore {
                 .db
                 .update_run_status(&run_id, RunStatus::Completed, exit_code, None);
             let _ = self.db.mark_job_finished(&run_id, false);
+            self.process_metric_run_if_applicable(&run_id, true, &buffered_text);
             let _ = self
                 .emit_event(&run_id, "run.completed", json!({ "exit_code": exit_code }))
                 .await;
@@ -916,6 +919,7 @@ impl RunnerCore {
             {
                 return false;
             }
+            self.process_metric_run_if_applicable(&run_id, false, &buffered_text);
             let _ = self
                 .fail_run(&run_id, exit_code, &error_message, true)
                 .await;
@@ -1103,6 +1107,7 @@ impl RunnerCore {
                 .db
                 .update_run_status(&run_id, RunStatus::Completed, exit_code, None);
             let _ = self.db.mark_job_finished(&run_id, false);
+            self.process_metric_run_if_applicable(&run_id, true, &buffered_text);
             let _ = self
                 .emit_event(&run_id, "run.completed", json!({ "exit_code": exit_code }))
                 .await;
@@ -1124,6 +1129,7 @@ impl RunnerCore {
             {
                 Ok(false)
             } else {
+                self.process_metric_run_if_applicable(&run_id, false, &buffered_text);
                 let _ = self
                     .fail_run(&run_id, exit_code, &error_message, false)
                     .await;
@@ -1609,6 +1615,7 @@ impl RunnerCore {
                 .db
                 .update_run_status(&run_id, RunStatus::Completed, exit_code, None);
             let _ = self.db.mark_job_finished(&run_id, false);
+            self.process_metric_run_if_applicable(&run_id, true, &buffered_text);
             let _ = self
                 .emit_event(&run_id, "run.completed", json!({ "exit_code": exit_code }))
                 .await;
@@ -1630,6 +1637,7 @@ impl RunnerCore {
             {
                 Ok(false)
             } else {
+                self.process_metric_run_if_applicable(&run_id, false, &buffered_text);
                 let _ = self
                     .fail_run(&run_id, exit_code, &error_message, false)
                     .await;
@@ -2073,6 +2081,182 @@ impl RunnerCore {
     pub fn run_retention(&self) -> AppResult<()> {
         let settings = self.db.get_settings()?;
         self.db.run_retention_prune(&settings)
+    }
+
+    // ─── Metric Library ─────────────────────────────────────────────────────
+
+    pub fn save_metric_definition(&self, payload: SaveMetricDefinitionPayload) -> AppResult<MetricDefinition> {
+        self.db.save_metric_definition(payload)
+    }
+
+    pub fn get_metric_definition(&self, id: &str) -> AppResult<Option<MetricDefinition>> {
+        self.db.get_metric_definition(id)
+    }
+
+    pub fn list_metric_definitions(&self, include_archived: bool) -> AppResult<Vec<MetricDefinition>> {
+        self.db.list_metric_definitions(include_archived)
+    }
+
+    pub fn archive_metric_definition(&self, id: &str) -> AppResult<BooleanResponse> {
+        let success = self.db.archive_metric_definition(id)?;
+        Ok(BooleanResponse { success })
+    }
+
+    pub fn delete_metric_definition(&self, id: &str) -> AppResult<BooleanResponse> {
+        let success = self.db.delete_metric_definition(id)?;
+        Ok(BooleanResponse { success })
+    }
+
+    pub fn get_latest_metric_snapshot(&self, metric_id: &str) -> AppResult<Option<MetricSnapshot>> {
+        self.db.get_latest_snapshot(metric_id)
+    }
+
+    pub fn list_metric_snapshots(&self, metric_id: &str, limit: Option<u32>) -> AppResult<Vec<MetricSnapshot>> {
+        self.db.list_snapshots(metric_id, limit.unwrap_or(50))
+    }
+
+    pub fn bind_metric_to_screen(&self, payload: BindMetricToScreenPayload) -> AppResult<ScreenMetricBinding> {
+        self.db.bind_metric_to_screen(&payload)
+    }
+
+    pub fn unbind_metric_from_screen(&self, screen_id: &str, metric_id: &str) -> AppResult<BooleanResponse> {
+        let success = self.db.unbind_metric_from_screen(screen_id, metric_id)?;
+        Ok(BooleanResponse { success })
+    }
+
+    pub fn get_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<ScreenMetricView>> {
+        self.db.list_screen_metrics(screen_id)
+    }
+
+    pub async fn refresh_metric(&self, metric_id: &str) -> AppResult<MetricRefreshResponse> {
+        let definition = self.db.get_metric_definition(metric_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Metric definition not found: {}", metric_id)))?;
+
+        if !definition.enabled || definition.archived_at.is_some() {
+            return Err(AppError::Policy("Metric is disabled or archived".to_string()));
+        }
+
+        if self.db.has_pending_snapshot(metric_id)? {
+            return Err(AppError::Policy("Refresh already in progress for this metric".to_string()));
+        }
+
+        let snapshot = self.db.insert_metric_snapshot(metric_id)?;
+
+        let system_prompt = "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. Fill the HTML template with actual values. Return JSON: { \"values\": { ... }, \"html\": \"...\" }".to_string();
+
+        let user_prompt = format!(
+            "# Metric: {name}\n\n## Instructions\n{instructions}\n\n## HTML Template\n{template}\n\nReturn your response as JSON with `values` and `html` keys.",
+            name = definition.name,
+            instructions = definition.instructions,
+            template = if definition.template_html.is_empty() {
+                "Create clean self-contained HTML to display the metric data.".to_string()
+            } else {
+                definition.template_html.clone()
+            }
+        );
+
+        let grants = self.db.list_workspace_grants()?;
+        let active_cwd = definition.cwd
+            .clone()
+            .or_else(|| grants.iter().find(|g| g.revoked_at.is_none()).map(|g| g.path.clone()))
+            .unwrap_or_else(|| ".".to_string());
+
+        let payload = StartRunPayload {
+            provider: definition.provider,
+            prompt: user_prompt,
+            model: definition.model.clone(),
+            mode: RunMode::NonInteractive,
+            output_format: Some("json".to_string()),
+            cwd: active_cwd,
+            optional_flags: std::collections::BTreeMap::new(),
+            profile_id: definition.profile_id.clone(),
+            queue_priority: Some(-10),
+            timeout_seconds: Some(120),
+            scheduled_at: None,
+            max_retries: Some(1),
+            retry_backoff_ms: None,
+            harness: Some(crate::models::HarnessRequestOptions {
+                system_prompt: Some(system_prompt),
+                tools: Some(vec![
+                    crate::models::UnifiedTool::Mcp,
+                    crate::models::UnifiedTool::WebFetch,
+                    crate::models::UnifiedTool::WebSearch,
+                ]),
+                permissions: Some(crate::models::UnifiedPermission {
+                    sandbox_mode: crate::models::SandboxMode::ReadOnly,
+                    auto_approve: true,
+                    network_access: true,
+                    approval_policy: Some(crate::models::ApprovalPolicy::Never),
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let result = self.start_run(payload).await;
+        match result {
+            Ok(response) => {
+                self.db.update_metric_snapshot_run_id(&snapshot.id, &response.run_id)?;
+                Ok(MetricRefreshResponse {
+                    metric_id: metric_id.to_string(),
+                    snapshot_id: snapshot.id,
+                    run_id: Some(response.run_id),
+                })
+            }
+            Err(err) => {
+                self.db.fail_metric_snapshot(&snapshot.id, &err.to_string())?;
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn refresh_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<MetricRefreshResponse>> {
+        let stale = self.db.find_stale_metrics_for_screen(screen_id)?;
+        let mut results = Vec::new();
+        for metric in stale {
+            match self.refresh_metric(&metric.id).await {
+                Ok(response) => results.push(response),
+                Err(err) => {
+                    tracing::warn!(metric_id = %metric.id, error = %err, "failed to refresh metric");
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    pub async fn refresh_proactive_metrics(&self) -> AppResult<()> {
+        let stale = self.db.find_proactive_stale_metrics()?;
+        for metric in stale {
+            if let Err(err) = self.refresh_metric(&metric.id).await {
+                tracing::warn!(metric_id = %metric.id, error = %err, "proactive metric refresh failed");
+            }
+        }
+        Ok(())
+    }
+
+    pub fn process_metric_run_if_applicable(
+        &self,
+        run_id: &str,
+        success: bool,
+        output_text: &str,
+    ) {
+        let snapshot = match self.db.find_snapshot_by_run_id(run_id) {
+            Ok(Some(snap)) => snap,
+            _ => return, // Not a metric run
+        };
+
+        if !success {
+            let _ = self.db.fail_metric_snapshot(&snapshot.id, "Run failed");
+            return;
+        }
+
+        match parse_metric_output(output_text) {
+            Ok((values, html)) => {
+                let _ = self.db.complete_metric_snapshot(&snapshot.id, &values, &html);
+            }
+            Err(err) => {
+                let _ = self.db.fail_metric_snapshot(&snapshot.id, &format!("Output parse error: {}", err));
+            }
+        }
     }
 
     pub async fn save_provider_token(&self, provider: Provider, token: String) -> AppResult<BooleanResponse> {
@@ -2935,6 +3119,69 @@ fn render_text_export(detail: &RunDetail) -> String {
         out.push_str(&format!("{} | {} | {}\n", event.created_at, event.event_type, event.payload));
     }
     out
+}
+
+fn parse_metric_output(raw: &str) -> Result<(serde_json::Value, String), String> {
+    // Strategy 1: Parse entire output as JSON
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
+            return Ok((values.clone(), html.as_str().unwrap_or_default().to_string()));
+        }
+    }
+
+    // Strategy 2: Extract ```json ... ``` code block
+    if let Some(start) = raw.find("```json") {
+        let after = &raw[start + 7..];
+        if let Some(end) = after.find("```") {
+            let block = after[..end].trim();
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(block) {
+                if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
+                    return Ok((values.clone(), html.as_str().unwrap_or_default().to_string()));
+                }
+            }
+        }
+    }
+
+    // Strategy 3: Scan for first balanced {} containing "values" key
+    if let Some(start) = raw.find('{') {
+        let mut depth = 0i32;
+        let bytes = raw.as_bytes();
+        let mut in_string = false;
+        let mut escape_next = false;
+        for (i, &b) in bytes.iter().enumerate().skip(start) {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+            if b == b'\\' && in_string {
+                escape_next = true;
+                continue;
+            }
+            if b == b'"' {
+                in_string = !in_string;
+                continue;
+            }
+            if in_string {
+                continue;
+            }
+            if b == b'{' {
+                depth += 1;
+            } else if b == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    let candidate = &raw[start..=i];
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(candidate) {
+                        if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
+                            return Ok((values.clone(), html.as_str().unwrap_or_default().to_string()));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    Err("Could not parse metric output: no valid JSON with 'values' and 'html' keys found".to_string())
 }
 
 #[cfg(test)]

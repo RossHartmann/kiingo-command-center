@@ -1,8 +1,10 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AppSettings, CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary,
-    ListConversationsFilters, ListRunsFilters, Profile, Provider, RunArtifact, RunDetail, RunEventRecord, RunMode,
-    RunRecord, RunStatus, SaveProfilePayload, SchedulerJob, WorkspaceGrant,
+    AppSettings, BindMetricToScreenPayload, CapabilitySnapshot, ConversationDetail, ConversationRecord,
+    ConversationSummary, ListConversationsFilters, ListRunsFilters, MetricDefinition,
+    MetricSnapshot, MetricSnapshotStatus, Profile, Provider, RunArtifact, RunDetail, RunEventRecord, RunMode,
+    RunRecord, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
+    ScreenMetricView, WorkspaceGrant,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -998,6 +1000,10 @@ impl Database {
             "DELETE FROM runs WHERE started_at < datetime('now', ?1)",
             [format!("-{} days", settings.retention_days)],
         )?;
+        conn.execute(
+            "DELETE FROM metric_snapshots WHERE created_at < datetime('now', ?1)",
+            [format!("-{} days", settings.retention_days)],
+        )?;
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         drop(conn);
 
@@ -1046,6 +1052,484 @@ impl Database {
             total += meta.len();
         }
         Ok(total)
+    }
+
+    // ─── Metric Definitions CRUD ──────────────────────────────────────────────
+
+    pub fn save_metric_definition(&self, payload: SaveMetricDefinitionPayload) -> AppResult<MetricDefinition> {
+        let now = Utc::now();
+        let id = payload.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let exists = conn
+            .query_row(
+                "SELECT COUNT(1) FROM metric_definitions WHERE id = ?1",
+                [id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        let provider = payload.provider.unwrap_or(Provider::Claude);
+        let template_html = payload.template_html.unwrap_or_default();
+        let ttl_seconds = payload.ttl_seconds.unwrap_or(3600);
+        let enabled = payload.enabled.unwrap_or(true);
+        let proactive = payload.proactive.unwrap_or(false);
+        let metadata = payload.metadata_json.unwrap_or_else(|| serde_json::json!({}));
+
+        if exists {
+            conn.execute(
+                "UPDATE metric_definitions SET name=?1, slug=?2, instructions=?3, template_html=?4,
+                 ttl_seconds=?5, provider=?6, model=?7, profile_id=?8, cwd=?9, enabled=?10,
+                 proactive=?11, metadata_json=?12, updated_at=?13 WHERE id=?14",
+                params![
+                    payload.name,
+                    payload.slug,
+                    payload.instructions,
+                    template_html,
+                    ttl_seconds,
+                    provider.as_str(),
+                    payload.model,
+                    payload.profile_id,
+                    payload.cwd,
+                    enabled as i32,
+                    proactive as i32,
+                    serde_json::to_string(&metadata)?,
+                    now.to_rfc3339(),
+                    id,
+                ],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO metric_definitions (id, name, slug, instructions, template_html,
+                 ttl_seconds, provider, model, profile_id, cwd, enabled, proactive,
+                 metadata_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                params![
+                    id,
+                    payload.name,
+                    payload.slug,
+                    payload.instructions,
+                    template_html,
+                    ttl_seconds,
+                    provider.as_str(),
+                    payload.model,
+                    payload.profile_id,
+                    payload.cwd,
+                    enabled as i32,
+                    proactive as i32,
+                    serde_json::to_string(&metadata)?,
+                    now.to_rfc3339(),
+                ],
+            )?;
+        }
+
+        Ok(MetricDefinition {
+            id,
+            name: payload.name,
+            slug: payload.slug,
+            instructions: payload.instructions,
+            template_html,
+            ttl_seconds,
+            provider,
+            model: payload.model,
+            profile_id: payload.profile_id,
+            cwd: payload.cwd,
+            enabled,
+            proactive,
+            metadata_json: metadata,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        })
+    }
+
+    pub fn get_metric_definition(&self, id: &str) -> AppResult<Option<MetricDefinition>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
+             profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
+             FROM metric_definitions WHERE id = ?1",
+            [id],
+            parse_metric_definition_row,
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    pub fn get_metric_definition_by_slug(&self, slug: &str) -> AppResult<Option<MetricDefinition>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
+             profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
+             FROM metric_definitions WHERE slug = ?1",
+            [slug],
+            parse_metric_definition_row,
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    pub fn list_metric_definitions(&self, include_archived: bool) -> AppResult<Vec<MetricDefinition>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let query = if include_archived {
+            "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
+             profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
+             FROM metric_definitions ORDER BY name ASC"
+        } else {
+            "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
+             profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
+             FROM metric_definitions WHERE archived_at IS NULL ORDER BY name ASC"
+        };
+        let mut stmt = conn.prepare(query)?;
+        let rows = stmt.query_map([], parse_metric_definition_row)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    pub fn archive_metric_definition(&self, id: &str) -> AppResult<bool> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute(
+            "UPDATE metric_definitions SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
+            params![now, id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn delete_metric_definition(&self, id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute("DELETE FROM metric_definitions WHERE id = ?1", [id])?;
+        Ok(changed > 0)
+    }
+
+    // ─── Metric Snapshots CRUD ──────────────────────────────────────────────
+
+    pub fn insert_metric_snapshot(&self, metric_id: &str) -> AppResult<MetricSnapshot> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "INSERT INTO metric_snapshots (id, metric_id, status, created_at) VALUES (?1, ?2, 'pending', ?3)",
+            params![id, metric_id, now.to_rfc3339()],
+        )?;
+        Ok(MetricSnapshot {
+            id,
+            metric_id: metric_id.to_string(),
+            run_id: None,
+            values_json: serde_json::json!({}),
+            rendered_html: String::new(),
+            status: MetricSnapshotStatus::Pending,
+            error_message: None,
+            created_at: now,
+            completed_at: None,
+        })
+    }
+
+    pub fn update_metric_snapshot_status(&self, id: &str, status: MetricSnapshotStatus) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE metric_snapshots SET status = ?1 WHERE id = ?2",
+            params![status.as_str(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_metric_snapshot_run_id(&self, id: &str, run_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE metric_snapshots SET run_id = ?1, status = 'running' WHERE id = ?2",
+            params![run_id, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_metric_snapshot(
+        &self,
+        id: &str,
+        values_json: &serde_json::Value,
+        rendered_html: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE metric_snapshots SET status='completed', values_json=?1, rendered_html=?2, completed_at=?3 WHERE id=?4",
+            params![serde_json::to_string(values_json)?, rendered_html, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn fail_metric_snapshot(&self, id: &str, error_message: &str) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "UPDATE metric_snapshots SET status='failed', error_message=?1, completed_at=?2 WHERE id=?3",
+            params![error_message, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_latest_snapshot(&self, metric_id: &str) -> AppResult<Option<MetricSnapshot>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
+             FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            [metric_id],
+            parse_metric_snapshot_row,
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    pub fn get_snapshot(&self, id: &str) -> AppResult<Option<MetricSnapshot>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
+             FROM metric_snapshots WHERE id = ?1",
+            [id],
+            parse_metric_snapshot_row,
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    pub fn list_snapshots(&self, metric_id: &str, limit: u32) -> AppResult<Vec<MetricSnapshot>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
+             FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![metric_id, limit], parse_metric_snapshot_row)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    pub fn has_pending_snapshot(&self, metric_id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM metric_snapshots WHERE metric_id = ?1 AND status IN ('pending', 'running')",
+            [metric_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn find_snapshot_by_run_id(&self, run_id: &str) -> AppResult<Option<MetricSnapshot>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
+             FROM metric_snapshots WHERE run_id = ?1",
+            [run_id],
+            parse_metric_snapshot_row,
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
+    // ─── Screen Bindings CRUD ───────────────────────────────────────────────
+
+    pub fn bind_metric_to_screen(&self, payload: &BindMetricToScreenPayload) -> AppResult<ScreenMetricBinding> {
+        let id = Uuid::new_v4().to_string();
+        let position = payload.position.unwrap_or(0);
+        let layout_hint = payload.layout_hint.as_deref().unwrap_or("card");
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(screen_id, metric_id) DO UPDATE SET position=excluded.position, layout_hint=excluded.layout_hint",
+            params![id, payload.screen_id, payload.metric_id, position, layout_hint],
+        )?;
+        Ok(ScreenMetricBinding {
+            id,
+            screen_id: payload.screen_id.clone(),
+            metric_id: payload.metric_id.clone(),
+            position,
+            layout_hint: layout_hint.to_string(),
+        })
+    }
+
+    pub fn unbind_metric_from_screen(&self, screen_id: &str, metric_id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute(
+            "DELETE FROM screen_metrics WHERE screen_id = ?1 AND metric_id = ?2",
+            params![screen_id, metric_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn list_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<ScreenMetricView>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT sm.id, sm.screen_id, sm.metric_id, sm.position, sm.layout_hint,
+                    md.id, md.name, md.slug, md.instructions, md.template_html, md.ttl_seconds,
+                    md.provider, md.model, md.profile_id, md.cwd, md.enabled, md.proactive,
+                    md.metadata_json, md.created_at, md.updated_at, md.archived_at
+             FROM screen_metrics sm
+             JOIN metric_definitions md ON md.id = sm.metric_id
+             WHERE sm.screen_id = ?1
+             ORDER BY sm.position ASC",
+        )?;
+
+        let mut views = Vec::new();
+        let mut rows = stmt.query([screen_id])?;
+        while let Some(row) = rows.next()? {
+            let binding = ScreenMetricBinding {
+                id: row.get(0)?,
+                screen_id: row.get(1)?,
+                metric_id: row.get(2)?,
+                position: row.get(3)?,
+                layout_hint: row.get(4)?,
+            };
+            let metric_id_str: String = row.get(5)?;
+            let definition = MetricDefinition {
+                id: metric_id_str.clone(),
+                name: row.get(6)?,
+                slug: row.get(7)?,
+                instructions: row.get(8)?,
+                template_html: row.get(9)?,
+                ttl_seconds: row.get(10)?,
+                provider: parse_provider(&row.get::<_, String>(11)?)?,
+                model: row.get(12)?,
+                profile_id: row.get(13)?,
+                cwd: row.get(14)?,
+                enabled: row.get::<_, i32>(15)? != 0,
+                proactive: row.get::<_, i32>(16)? != 0,
+                metadata_json: serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(17)?)
+                    .unwrap_or(serde_json::json!({})),
+                created_at: parse_time(&row.get::<_, String>(18)?)?,
+                updated_at: parse_time(&row.get::<_, String>(19)?)?,
+                archived_at: row
+                    .get::<_, Option<String>>(20)?
+                    .map(|raw| parse_time(&raw))
+                    .transpose()?,
+            };
+
+            // Fetch latest snapshot inline
+            let latest_snapshot: Option<MetricSnapshot> = {
+                let mut snap_stmt = conn.prepare(
+                    "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
+                     FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                )?;
+                snap_stmt
+                    .query_row([&metric_id_str], parse_metric_snapshot_row)
+                    .optional()?
+            };
+
+            let is_stale = match &latest_snapshot {
+                None => true,
+                Some(snap) => {
+                    if snap.status == MetricSnapshotStatus::Failed {
+                        true
+                    } else if let Some(completed) = snap.completed_at {
+                        let elapsed = Utc::now().signed_duration_since(completed).num_seconds();
+                        elapsed >= definition.ttl_seconds
+                    } else {
+                        true
+                    }
+                }
+            };
+
+            let refresh_in_progress = matches!(
+                latest_snapshot.as_ref().map(|s| s.status),
+                Some(MetricSnapshotStatus::Pending) | Some(MetricSnapshotStatus::Running)
+            );
+
+            views.push(ScreenMetricView {
+                binding,
+                definition,
+                latest_snapshot,
+                is_stale,
+                refresh_in_progress,
+            });
+        }
+
+        Ok(views)
+    }
+
+    pub fn reorder_screen_metrics(&self, screen_id: &str, metric_ids: &[String]) -> AppResult<()> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        for (i, metric_id) in metric_ids.iter().enumerate() {
+            conn.execute(
+                "UPDATE screen_metrics SET position = ?1 WHERE screen_id = ?2 AND metric_id = ?3",
+                params![i as i32, screen_id, metric_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    // ─── Staleness queries ──────────────────────────────────────────────────
+
+    pub fn find_stale_metrics_for_screen(&self, screen_id: &str) -> AppResult<Vec<MetricDefinition>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT md.id, md.name, md.slug, md.instructions, md.template_html, md.ttl_seconds,
+                    md.provider, md.model, md.profile_id, md.cwd, md.enabled, md.proactive,
+                    md.metadata_json, md.created_at, md.updated_at, md.archived_at
+             FROM screen_metrics sm
+             JOIN metric_definitions md ON md.id = sm.metric_id
+             WHERE sm.screen_id = ?1
+               AND md.enabled = 1
+               AND md.archived_at IS NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM metric_snapshots ms
+                 WHERE ms.metric_id = md.id AND ms.status IN ('pending', 'running')
+               )
+               AND (
+                 NOT EXISTS (
+                   SELECT 1 FROM metric_snapshots ms2
+                   WHERE ms2.metric_id = md.id AND ms2.status = 'completed'
+                 )
+                 OR (
+                   SELECT MAX(ms3.completed_at) FROM metric_snapshots ms3
+                   WHERE ms3.metric_id = md.id AND ms3.status = 'completed'
+                 ) < datetime('now', '-' || md.ttl_seconds || ' seconds')
+               )",
+        )?;
+        let rows = stmt.query_map([screen_id], parse_metric_definition_row)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    pub fn find_proactive_stale_metrics(&self) -> AppResult<Vec<MetricDefinition>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, slug, instructions, template_html, ttl_seconds,
+                    provider, model, profile_id, cwd, enabled, proactive,
+                    metadata_json, created_at, updated_at, archived_at
+             FROM metric_definitions
+             WHERE proactive = 1
+               AND enabled = 1
+               AND archived_at IS NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM metric_snapshots ms
+                 WHERE ms.metric_id = metric_definitions.id AND ms.status IN ('pending', 'running')
+               )
+               AND (
+                 NOT EXISTS (
+                   SELECT 1 FROM metric_snapshots ms2
+                   WHERE ms2.metric_id = metric_definitions.id AND ms2.status = 'completed'
+                 )
+                 OR (
+                   SELECT MAX(ms3.completed_at) FROM metric_snapshots ms3
+                   WHERE ms3.metric_id = metric_definitions.id AND ms3.status = 'completed'
+                 ) < datetime('now', '-' || ttl_seconds || ' seconds')
+               )",
+        )?;
+        let rows = stmt.query_map([], parse_metric_definition_row)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
     }
 
     fn ensure_default_settings(&self) -> AppResult<()> {
@@ -1116,6 +1600,56 @@ impl Database {
         self.repair_missing_conversation_links(&conn)?;
         self.backfill_conversation_threads_if_needed(&mut conn)?;
         self.repair_missing_conversation_links(&conn)?;
+
+        // Metric library tables
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS metric_definitions (
+               id TEXT PRIMARY KEY,
+               name TEXT NOT NULL,
+               slug TEXT UNIQUE NOT NULL,
+               instructions TEXT NOT NULL,
+               template_html TEXT DEFAULT '',
+               ttl_seconds INTEGER DEFAULT 3600,
+               provider TEXT DEFAULT 'claude',
+               model TEXT,
+               profile_id TEXT,
+               cwd TEXT,
+               enabled INTEGER DEFAULT 1,
+               proactive INTEGER DEFAULT 0,
+               metadata_json TEXT DEFAULT '{}',
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               archived_at TEXT
+             );
+             CREATE TABLE IF NOT EXISTS metric_snapshots (
+               id TEXT PRIMARY KEY,
+               metric_id TEXT NOT NULL,
+               run_id TEXT,
+               values_json TEXT DEFAULT '{}',
+               rendered_html TEXT DEFAULT '',
+               status TEXT DEFAULT 'pending',
+               error_message TEXT,
+               created_at TEXT NOT NULL,
+               completed_at TEXT,
+               FOREIGN KEY(metric_id) REFERENCES metric_definitions(id) ON DELETE CASCADE
+             );
+             CREATE TABLE IF NOT EXISTS screen_metrics (
+               id TEXT PRIMARY KEY,
+               screen_id TEXT NOT NULL,
+               metric_id TEXT NOT NULL,
+               position INTEGER DEFAULT 0,
+               layout_hint TEXT DEFAULT 'card',
+               FOREIGN KEY(metric_id) REFERENCES metric_definitions(id) ON DELETE CASCADE,
+               UNIQUE(screen_id, metric_id)
+             );
+             CREATE INDEX IF NOT EXISTS idx_metric_definitions_slug ON metric_definitions(slug);
+             CREATE INDEX IF NOT EXISTS idx_metric_definitions_enabled ON metric_definitions(enabled, archived_at);
+             CREATE INDEX IF NOT EXISTS idx_metric_snapshots_metric_created ON metric_snapshots(metric_id, created_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_metric_snapshots_run ON metric_snapshots(run_id);
+             CREATE INDEX IF NOT EXISTS idx_metric_snapshots_status ON metric_snapshots(status);
+             CREATE INDEX IF NOT EXISTS idx_screen_metrics_screen ON screen_metrics(screen_id, position);
+             CREATE INDEX IF NOT EXISTS idx_screen_metrics_metric ON screen_metrics(metric_id);",
+        )?;
 
         Ok(())
     }
@@ -1410,6 +1944,59 @@ fn parse_conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conversat
         updated_at: parse_time(&row.get::<_, String>(6)?)?,
         archived_at: row
             .get::<_, Option<String>>(7)?
+            .map(|raw| parse_time(&raw))
+            .transpose()?,
+    })
+}
+
+fn parse_metric_definition_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MetricDefinition> {
+    Ok(MetricDefinition {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        slug: row.get(2)?,
+        instructions: row.get(3)?,
+        template_html: row.get(4)?,
+        ttl_seconds: row.get(5)?,
+        provider: parse_provider(&row.get::<_, String>(6)?)?,
+        model: row.get(7)?,
+        profile_id: row.get(8)?,
+        cwd: row.get(9)?,
+        enabled: row.get::<_, i32>(10)? != 0,
+        proactive: row.get::<_, i32>(11)? != 0,
+        metadata_json: serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(12)?)
+            .unwrap_or(serde_json::json!({})),
+        created_at: parse_time(&row.get::<_, String>(13)?)?,
+        updated_at: parse_time(&row.get::<_, String>(14)?)?,
+        archived_at: row
+            .get::<_, Option<String>>(15)?
+            .map(|raw| parse_time(&raw))
+            .transpose()?,
+    })
+}
+
+fn parse_metric_snapshot_status(raw: &str) -> MetricSnapshotStatus {
+    match raw {
+        "pending" => MetricSnapshotStatus::Pending,
+        "running" => MetricSnapshotStatus::Running,
+        "completed" => MetricSnapshotStatus::Completed,
+        "failed" => MetricSnapshotStatus::Failed,
+        _ => MetricSnapshotStatus::Failed,
+    }
+}
+
+fn parse_metric_snapshot_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MetricSnapshot> {
+    Ok(MetricSnapshot {
+        id: row.get(0)?,
+        metric_id: row.get(1)?,
+        run_id: row.get(2)?,
+        values_json: serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(3)?)
+            .unwrap_or(serde_json::json!({})),
+        rendered_html: row.get(4)?,
+        status: parse_metric_snapshot_status(&row.get::<_, String>(5)?),
+        error_message: row.get(6)?,
+        created_at: parse_time(&row.get::<_, String>(7)?)?,
+        completed_at: row
+            .get::<_, Option<String>>(8)?
             .map(|raw| parse_time(&raw))
             .transpose()?,
     })

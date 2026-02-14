@@ -10,11 +10,12 @@ mod scheduler;
 mod session;
 
 use crate::models::{
-    AcceptedResponse, AppSettings, ArchiveConversationPayload, BooleanResponse, CapabilitySnapshot, ConversationDetail,
-    ConversationRecord, ConversationSummary, CreateConversationPayload, ExportResponse, ListConversationsFilters,
-    ListRunsFilters, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveProfilePayload,
-    SchedulerJob, SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
-    WorkspaceGrant,
+    AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
+    CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
+    ExportResponse, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
+    Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveMetricDefinitionPayload,
+    SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView, SendConversationMessagePayload,
+    StartInteractiveSessionResponse, StartRunPayload, StartRunResponse, WorkspaceGrant,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -257,6 +258,106 @@ async fn has_provider_token(
         .map_err(to_client_error)
 }
 
+// ─── Metric Commands ─────────────────────────────────────────────────────
+
+#[tauri::command]
+fn save_metric_definition(
+    state: tauri::State<'_, AppState>,
+    payload: SaveMetricDefinitionPayload,
+) -> Result<MetricDefinition, String> {
+    state.runner.save_metric_definition(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn get_metric_definition(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Option<MetricDefinition>, String> {
+    state.runner.get_metric_definition(&id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn list_metric_definitions(
+    state: tauri::State<'_, AppState>,
+    include_archived: Option<bool>,
+) -> Result<Vec<MetricDefinition>, String> {
+    state.runner.list_metric_definitions(include_archived.unwrap_or(false)).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn archive_metric_definition(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<BooleanResponse, String> {
+    state.runner.archive_metric_definition(&id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn delete_metric_definition(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<BooleanResponse, String> {
+    state.runner.delete_metric_definition(&id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn get_latest_metric_snapshot(
+    state: tauri::State<'_, AppState>,
+    metric_id: String,
+) -> Result<Option<MetricSnapshot>, String> {
+    state.runner.get_latest_metric_snapshot(&metric_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn list_metric_snapshots(
+    state: tauri::State<'_, AppState>,
+    metric_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<MetricSnapshot>, String> {
+    state.runner.list_metric_snapshots(&metric_id, limit).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn bind_metric_to_screen(
+    state: tauri::State<'_, AppState>,
+    payload: BindMetricToScreenPayload,
+) -> Result<ScreenMetricBinding, String> {
+    state.runner.bind_metric_to_screen(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn unbind_metric_from_screen(
+    state: tauri::State<'_, AppState>,
+    screen_id: String,
+    metric_id: String,
+) -> Result<BooleanResponse, String> {
+    state.runner.unbind_metric_from_screen(&screen_id, &metric_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn get_screen_metrics(
+    state: tauri::State<'_, AppState>,
+    screen_id: String,
+) -> Result<Vec<ScreenMetricView>, String> {
+    state.runner.get_screen_metrics(&screen_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+async fn refresh_metric(
+    state: tauri::State<'_, AppState>,
+    metric_id: String,
+) -> Result<MetricRefreshResponse, String> {
+    state.runner.refresh_metric(&metric_id).await.map_err(to_client_error)
+}
+
+#[tauri::command]
+async fn refresh_screen_metrics(
+    state: tauri::State<'_, AppState>,
+    screen_id: String,
+) -> Result<Vec<MetricRefreshResponse>, String> {
+    state.runner.refresh_screen_metrics(&screen_id).await.map_err(to_client_error)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -304,6 +405,19 @@ pub fn run() {
                 }
             });
 
+            tauri::async_runtime::spawn({
+                let runner = runner.clone();
+                async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        if let Err(error) = runner.refresh_proactive_metrics().await {
+                            tracing::warn!(error = %error, "proactive metric refresh failed");
+                        }
+                    }
+                }
+            });
+
             app.manage(AppState { runner });
             Ok(())
         })
@@ -334,7 +448,19 @@ pub fn run() {
             export_run,
             save_provider_token,
             clear_provider_token,
-            has_provider_token
+            has_provider_token,
+            save_metric_definition,
+            get_metric_definition,
+            list_metric_definitions,
+            archive_metric_definition,
+            delete_metric_definition,
+            get_latest_metric_snapshot,
+            list_metric_snapshots,
+            bind_metric_to_screen,
+            unbind_metric_from_screen,
+            get_screen_metrics,
+            refresh_metric,
+            refresh_screen_metrics
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");

@@ -290,6 +290,11 @@ export interface SchedulerJob {
   finishedAt?: string;
 }
 
+export interface NavOrderConfig {
+  groupOrder: string[];
+  itemOrder: Record<string, string[]>;
+}
+
 export interface AppSettings {
   codexPath: string;
   claudePath: string;
@@ -300,6 +305,7 @@ export interface AppSettings {
   remoteTelemetryOptIn: boolean;
   redactAggressive: boolean;
   storeEncryptedRawArtifacts: boolean;
+  navOrder?: NavOrderConfig;
 }
 
 export interface ListRunsFilters {
@@ -320,4 +326,85 @@ export interface StreamEnvelope {
   timestamp: string;
   eventId?: string;
   seq?: number;
+}
+
+// ─── Metric Library ─────────────────────────────────────────────────────────
+
+export type MetricSnapshotStatus = "pending" | "running" | "completed" | "failed";
+export type MetricLayoutHint = "card" | "wide" | "full";
+
+export interface MetricDefinition {
+  id: string;
+  name: string;
+  slug: string;
+  instructions: string;
+  templateHtml: string;
+  ttlSeconds: number;
+  provider: Provider;
+  model?: string;
+  profileId?: string;
+  cwd?: string;
+  enabled: boolean;
+  proactive: boolean;
+  metadataJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
+
+export interface MetricSnapshot {
+  id: string;
+  metricId: string;
+  runId?: string;
+  valuesJson: Record<string, unknown>;
+  renderedHtml: string;
+  status: MetricSnapshotStatus;
+  errorMessage?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface ScreenMetricBinding {
+  id: string;
+  screenId: string;
+  metricId: string;
+  position: number;
+  layoutHint: string;
+}
+
+export interface SaveMetricDefinitionPayload {
+  id?: string;
+  name: string;
+  slug: string;
+  instructions: string;
+  templateHtml?: string;
+  ttlSeconds?: number;
+  provider?: Provider;
+  model?: string;
+  profileId?: string;
+  cwd?: string;
+  enabled?: boolean;
+  proactive?: boolean;
+  metadataJson?: Record<string, unknown>;
+}
+
+export interface BindMetricToScreenPayload {
+  screenId: string;
+  metricId: string;
+  position?: number;
+  layoutHint?: MetricLayoutHint;
+}
+
+export interface ScreenMetricView {
+  binding: ScreenMetricBinding;
+  definition: MetricDefinition;
+  latestSnapshot?: MetricSnapshot;
+  isStale: boolean;
+  refreshInProgress: boolean;
+}
+
+export interface MetricRefreshResponse {
+  metricId: string;
+  snapshotId: string;
+  runId?: string;
 }

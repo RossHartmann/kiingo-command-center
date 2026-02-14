@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettings,
+  BindMetricToScreenPayload,
   CapabilitySnapshot,
   ConversationDetail,
   ConversationRecord,
@@ -9,7 +10,13 @@ import type {
   CreateConversationPayload,
   ListConversationsFilters,
   ListRunsFilters,
+  MetricDefinition,
+  MetricRefreshResponse,
+  MetricSnapshot,
   Profile,
+  SaveMetricDefinitionPayload,
+  ScreenMetricBinding,
+  ScreenMetricView,
   SendConversationMessagePayload,
   RunDetail,
   RunRecord,
@@ -30,6 +37,9 @@ interface MockStore {
   jobs: SchedulerJob[];
   capabilities: CapabilitySnapshot[];
   settings: AppSettings;
+  metricDefinitions: MetricDefinition[];
+  metricSnapshots: MetricSnapshot[];
+  screenMetrics: ScreenMetricBinding[];
 }
 
 const defaultSettings: AppSettings = {
@@ -41,7 +51,8 @@ const defaultSettings: AppSettings = {
   allowAdvancedPolicy: false,
   remoteTelemetryOptIn: false,
   redactAggressive: true,
-  storeEncryptedRawArtifacts: false
+  storeEncryptedRawArtifacts: false,
+  navOrder: undefined
 };
 
 const mockStore = loadMockStore();
@@ -54,30 +65,29 @@ function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function emptyMockStore(): MockStore {
+  return {
+    runs: [],
+    conversations: [],
+    profiles: [],
+    grants: [],
+    jobs: [],
+    capabilities: [],
+    settings: defaultSettings,
+    metricDefinitions: [],
+    metricSnapshots: [],
+    screenMetrics: []
+  };
+}
+
 function loadMockStore(): MockStore {
   const storage = getStorage();
   if (!storage) {
-    return {
-      runs: [],
-      conversations: [],
-      profiles: [],
-      grants: [],
-      jobs: [],
-      capabilities: [],
-      settings: defaultSettings
-    };
+    return emptyMockStore();
   }
   const raw = storage.getItem(LOCAL_STORAGE_KEY);
   if (!raw) {
-    return {
-      runs: [],
-      conversations: [],
-      profiles: [],
-      grants: [],
-      jobs: [],
-      capabilities: [],
-      settings: defaultSettings
-    };
+    return emptyMockStore();
   }
   try {
     const parsed = JSON.parse(raw) as Partial<MockStore>;
@@ -88,18 +98,13 @@ function loadMockStore(): MockStore {
       grants: parsed.grants ?? [],
       jobs: parsed.jobs ?? [],
       capabilities: parsed.capabilities ?? [],
-      settings: { ...defaultSettings, ...(parsed.settings ?? {}) }
+      settings: { ...defaultSettings, ...(parsed.settings ?? {}) },
+      metricDefinitions: parsed.metricDefinitions ?? [],
+      metricSnapshots: parsed.metricSnapshots ?? [],
+      screenMetrics: parsed.screenMetrics ?? []
     };
   } catch {
-    return {
-      runs: [],
-      conversations: [],
-      profiles: [],
-      grants: [],
-      jobs: [],
-      capabilities: [],
-      settings: defaultSettings
-    };
+    return emptyMockStore();
   }
 }
 
@@ -584,4 +589,207 @@ export async function hasProviderToken(provider: "codex" | "claude"): Promise<{ 
     return tauriInvoke("has_provider_token", { provider });
   }
   return { success: false };
+}
+
+// ─── Metric Library ─────────────────────────────────────────────────────────
+
+export async function saveMetricDefinition(payload: SaveMetricDefinitionPayload): Promise<MetricDefinition> {
+  if (IS_TAURI) {
+    return tauriInvoke("save_metric_definition", { payload });
+  }
+  const now = nowIso();
+  const existing = payload.id ? mockStore.metricDefinitions.find((d) => d.id === payload.id) : undefined;
+  if (existing) {
+    Object.assign(existing, {
+      name: payload.name,
+      slug: payload.slug,
+      instructions: payload.instructions,
+      templateHtml: payload.templateHtml ?? existing.templateHtml,
+      ttlSeconds: payload.ttlSeconds ?? existing.ttlSeconds,
+      provider: payload.provider ?? existing.provider,
+      model: payload.model,
+      profileId: payload.profileId,
+      cwd: payload.cwd,
+      enabled: payload.enabled ?? existing.enabled,
+      proactive: payload.proactive ?? existing.proactive,
+      metadataJson: payload.metadataJson ?? existing.metadataJson,
+      updatedAt: now
+    });
+    persistMockStore();
+    return existing;
+  }
+  const definition: MetricDefinition = {
+    id: uid("metric"),
+    name: payload.name,
+    slug: payload.slug,
+    instructions: payload.instructions,
+    templateHtml: payload.templateHtml ?? "",
+    ttlSeconds: payload.ttlSeconds ?? 3600,
+    provider: payload.provider ?? "claude",
+    model: payload.model,
+    profileId: payload.profileId,
+    cwd: payload.cwd,
+    enabled: payload.enabled ?? true,
+    proactive: payload.proactive ?? false,
+    metadataJson: payload.metadataJson ?? {},
+    createdAt: now,
+    updatedAt: now
+  };
+  mockStore.metricDefinitions.unshift(definition);
+  persistMockStore();
+  return definition;
+}
+
+export async function getMetricDefinition(id: string): Promise<MetricDefinition | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("get_metric_definition", { id });
+  }
+  return mockStore.metricDefinitions.find((d) => d.id === id) ?? null;
+}
+
+export async function listMetricDefinitions(includeArchived = false): Promise<MetricDefinition[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("list_metric_definitions", { includeArchived });
+  }
+  let defs = [...mockStore.metricDefinitions];
+  if (!includeArchived) {
+    defs = defs.filter((d) => !d.archivedAt);
+  }
+  return defs;
+}
+
+export async function archiveMetricDefinition(id: string): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("archive_metric_definition", { id });
+  }
+  const def = mockStore.metricDefinitions.find((d) => d.id === id);
+  if (!def) return { success: false };
+  def.archivedAt = nowIso();
+  def.updatedAt = nowIso();
+  persistMockStore();
+  return { success: true };
+}
+
+export async function deleteMetricDefinition(id: string): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("delete_metric_definition", { id });
+  }
+  const idx = mockStore.metricDefinitions.findIndex((d) => d.id === id);
+  if (idx === -1) return { success: false };
+  mockStore.metricDefinitions.splice(idx, 1);
+  mockStore.metricSnapshots = mockStore.metricSnapshots.filter((s) => s.metricId !== id);
+  mockStore.screenMetrics = mockStore.screenMetrics.filter((b) => b.metricId !== id);
+  persistMockStore();
+  return { success: true };
+}
+
+export async function getLatestMetricSnapshot(metricId: string): Promise<MetricSnapshot | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("get_latest_metric_snapshot", { metricId });
+  }
+  const snaps = mockStore.metricSnapshots
+    .filter((s) => s.metricId === metricId)
+    .sort((a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf());
+  return snaps[0] ?? null;
+}
+
+export async function listMetricSnapshots(metricId: string, limit = 50): Promise<MetricSnapshot[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("list_metric_snapshots", { metricId, limit });
+  }
+  return mockStore.metricSnapshots
+    .filter((s) => s.metricId === metricId)
+    .sort((a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf())
+    .slice(0, limit);
+}
+
+export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Promise<ScreenMetricBinding> {
+  if (IS_TAURI) {
+    return tauriInvoke("bind_metric_to_screen", { payload });
+  }
+  const existing = mockStore.screenMetrics.find(
+    (b) => b.screenId === payload.screenId && b.metricId === payload.metricId
+  );
+  if (existing) {
+    existing.position = payload.position ?? existing.position;
+    existing.layoutHint = payload.layoutHint ?? existing.layoutHint;
+    persistMockStore();
+    return existing;
+  }
+  const binding: ScreenMetricBinding = {
+    id: uid("sm"),
+    screenId: payload.screenId,
+    metricId: payload.metricId,
+    position: payload.position ?? 0,
+    layoutHint: payload.layoutHint ?? "card"
+  };
+  mockStore.screenMetrics.push(binding);
+  persistMockStore();
+  return binding;
+}
+
+export async function unbindMetricFromScreen(screenId: string, metricId: string): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("unbind_metric_from_screen", { screenId, metricId });
+  }
+  const idx = mockStore.screenMetrics.findIndex(
+    (b) => b.screenId === screenId && b.metricId === metricId
+  );
+  if (idx === -1) return { success: false };
+  mockStore.screenMetrics.splice(idx, 1);
+  persistMockStore();
+  return { success: true };
+}
+
+export async function getScreenMetrics(screenId: string): Promise<ScreenMetricView[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("get_screen_metrics", { screenId });
+  }
+  const bindings = mockStore.screenMetrics
+    .filter((b) => b.screenId === screenId)
+    .sort((a, b) => a.position - b.position);
+  return bindings.map((binding) => {
+    const definition = mockStore.metricDefinitions.find((d) => d.id === binding.metricId);
+    if (!definition) return null;
+    const latestSnapshot = mockStore.metricSnapshots
+      .filter((s) => s.metricId === binding.metricId)
+      .sort((a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf())[0] ?? undefined;
+    const isStale = !latestSnapshot || latestSnapshot.status === "failed" || !latestSnapshot.completedAt ||
+      (new Date().valueOf() - new Date(latestSnapshot.completedAt).valueOf()) / 1000 >= definition.ttlSeconds;
+    const refreshInProgress = latestSnapshot?.status === "pending" || latestSnapshot?.status === "running";
+    return { binding, definition, latestSnapshot, isStale, refreshInProgress } as ScreenMetricView;
+  }).filter(Boolean) as ScreenMetricView[];
+}
+
+export async function refreshMetric(metricId: string): Promise<MetricRefreshResponse> {
+  if (IS_TAURI) {
+    return tauriInvoke("refresh_metric", { metricId });
+  }
+  const snap: MetricSnapshot = {
+    id: uid("snap"),
+    metricId,
+    valuesJson: {},
+    renderedHtml: "<div>Mock metric data</div>",
+    status: "completed",
+    createdAt: nowIso(),
+    completedAt: nowIso()
+  };
+  mockStore.metricSnapshots.unshift(snap);
+  persistMockStore();
+  return { metricId, snapshotId: snap.id };
+}
+
+export async function refreshScreenMetrics(screenId: string): Promise<MetricRefreshResponse[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("refresh_screen_metrics", { screenId });
+  }
+  const views = await getScreenMetrics(screenId);
+  const results: MetricRefreshResponse[] = [];
+  for (const view of views) {
+    if (view.isStale && !view.refreshInProgress) {
+      const result = await refreshMetric(view.definition.id);
+      results.push(result);
+    }
+  }
+  return results;
 }

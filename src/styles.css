@@ -1,5 +1,5 @@
 /* ===================================================================
-   BASE STYLES  –  Chat-first, minimal chrome
+   BASE STYLES  –  Corporate dashboard with sidebar navigation
    =================================================================== */
 
 :root {
@@ -14,6 +14,7 @@
   --danger-bg: #fce8e7;
   --info-bg: #e8f3f0;
   --shadow: 0 12px 24px rgba(38, 24, 8, 0.1);
+  --sidebar-width: 260px;
 }
 
 * { box-sizing: border-box; }
@@ -36,80 +37,272 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
 }
 
 /* ===================================================================
-   SHELL  –  topbar + content, that's it
+   SHELL  –  sidebar + content area
    =================================================================== */
 
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: var(--sidebar-width) 1fr;
 }
 
-/* ---- Topbar: logo left, gear right, nothing else ---- */
+/* ===================================================================
+   SIDEBAR
+   =================================================================== */
 
-.topbar {
+.sidebar {
   position: sticky;
   top: 0;
-  z-index: 100;
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: linear-gradient(180deg, rgba(255, 245, 213, 0.95), rgba(255, 252, 244, 0.98));
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  z-index: 200;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.sidebar-logo {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+.sidebar-brand {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.sidebar-nav {
+  overflow-y: auto;
+  padding: 0.5rem 0;
+}
+
+.sidebar-drag-handle {
+  font-size: 0.85rem;
+  opacity: 0;
+  cursor: grab;
+  user-select: none;
+  transition: opacity 150ms;
+  width: 0.7rem;
+  text-align: center;
+  flex-shrink: 0;
+  margin-left: -0.6rem;
+  margin-right: -0.15rem;
+  touch-action: none;
+}
+
+.sidebar-group-header:hover .sidebar-drag-handle,
+.sidebar-item:hover .sidebar-drag-handle {
+  opacity: 0.35;
+}
+
+.sidebar-drag-handle:hover {
+  opacity: 0.7 !important;
+}
+
+.sidebar-drag-handle:active {
+  cursor: grabbing;
+}
+
+.sidebar-group.drag-overlay {
+  background: var(--panel);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  opacity: 0.92;
+}
+
+.sidebar-group.drag-overlay .sidebar-drag-handle {
+  opacity: 0.5;
+}
+
+.sidebar-group {
+  margin-bottom: 0.15rem;
+}
+
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.4rem 1rem;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color 100ms;
+}
+
+.sidebar-group-header:hover { color: var(--ink); }
+.sidebar-group-header.has-active { color: var(--accent-strong); }
+
+.sidebar-group-icon {
+  font-size: 0.82rem;
+  width: 1.1rem;
+  text-align: center;
+}
+
+.sidebar-group-label { flex: 1; text-align: left; }
+
+.sidebar-chevron {
+  font-size: 1rem;
+  transition: transform 150ms ease;
+  transform: rotate(0deg);
+}
+
+.sidebar-chevron.open {
+  transform: rotate(90deg);
+}
+
+.sidebar-group-items {
+  padding: 0.1rem 0 0.3rem;
+}
+
+.sidebar-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.45rem 1rem;
-  border-bottom: 1px solid var(--line);
-  background: linear-gradient(120deg, rgba(255, 245, 213, 0.95), rgba(255, 255, 255, 0.9));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  height: 48px;
-}
-
-.topbar-spacer { flex: 1; }
-
-.topbar-back {
+  width: 100%;
+  padding: 0.38rem 1rem 0.38rem 1.6rem;
   background: none;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.78rem;
+  border: none;
+  border-radius: 0;
+  font-size: 0.82rem;
   color: var(--ink-muted);
+  text-align: left;
   cursor: pointer;
+  transition: color 100ms, background 100ms;
 }
 
-.topbar-back:hover { color: var(--ink); border-color: var(--ink-muted); }
-
-.topbar-icon-btn {
-  width: 34px;
-  height: 34px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: none;
-  font-size: 1.15rem;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  color: var(--ink-muted);
-  transition: color 120ms, background 120ms;
+.sidebar-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--ink);
 }
 
-.topbar-icon-btn:hover { background: rgba(0, 0, 0, 0.04); color: var(--ink); }
-.topbar-icon-btn.active { background: rgba(15, 125, 102, 0.08); color: var(--accent-strong); border-color: rgba(15, 125, 102, 0.15); }
+.sidebar-item.active {
+  background: rgba(15, 125, 102, 0.08);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.sidebar-item-icon {
+  font-size: 0.9rem;
+  width: 1.1rem;
+  text-align: center;
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0.8rem;
+}
+
+.sidebar-overlay {
+  display: none;
+}
 
 /* ===================================================================
-   SETTINGS DRAWER  –  slides down from topbar
+   CONTENT AREA
    =================================================================== */
 
-.settings-drawer {
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 252, 244, 0.98);
-  padding: 1rem 1.2rem 1.2rem;
-  max-height: 70vh;
-  overflow-y: auto;
-  animation: drawer-in 150ms ease-out;
+.content-area {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
-@keyframes drawer-in {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+.content-header {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 1.2rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 252, 244, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
+
+.content-header-text h1 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.content-header-text p {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ink-muted);
+}
+
+.mobile-menu-btn {
+  display: none;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  place-items: center;
+  color: var(--ink-muted);
+}
+
+/* ===================================================================
+   INLINE THEME SWITCHER (sidebar footer)
+   =================================================================== */
+
+.theme-switcher-inline {
+  display: flex;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+.theme-swatch-btn {
+  width: 26px;
+  height: 26px;
+  padding: 3px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  transition: border-color 100ms;
+}
+
+.theme-swatch-btn:hover { border-color: var(--ink-muted); }
+.theme-swatch-btn.active-theme { border-color: var(--accent); }
+
+.theme-swatch-btn .theme-swatch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+/* ===================================================================
+   SETTINGS (now a full page)
+   =================================================================== */
 
 .settings-content {
   max-width: 560px;
@@ -201,31 +394,6 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
   margin: 0;
 }
 
-.settings-advanced-nav {
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--line);
-  display: grid;
-  gap: 0.4rem;
-}
-
-.settings-nav-grid {
-  display: flex;
-  gap: 0.3rem;
-  flex-wrap: wrap;
-}
-
-.settings-nav-btn {
-  font-size: 0.78rem;
-  padding: 0.3rem 0.55rem;
-  border-radius: 6px;
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--ink-muted);
-  cursor: pointer;
-}
-
-.settings-nav-btn:hover { color: var(--ink); border-color: var(--ink-muted); }
-
 /* ===================================================================
    CONTENT
    =================================================================== */
@@ -235,6 +403,7 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
   min-width: 0;
   width: 100%;
   margin: 0 auto;
+  overflow-y: auto;
 }
 
 /* Non-chat screens stay centered and readable */
@@ -255,6 +424,48 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
 .screen-header {
   display: grid;
   gap: 0.35rem;
+}
+
+/* ===================================================================
+   PLACEHOLDER SCREEN
+   =================================================================== */
+
+.placeholder-screen {
+  display: grid;
+  place-items: center;
+  min-height: 50vh;
+}
+
+.placeholder-card {
+  text-align: center;
+  border: 2px dashed var(--line);
+  border-radius: 16px;
+  padding: 2.5rem 3rem;
+  max-width: 400px;
+}
+
+.placeholder-emoji {
+  font-size: 2.4rem;
+  display: block;
+  margin-bottom: 0.8rem;
+}
+
+.placeholder-card h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.4rem;
+}
+
+.placeholder-card p {
+  font-size: 0.84rem;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.placeholder-hint {
+  margin-top: 0.8rem !important;
+  font-size: 0.76rem !important;
+  opacity: 0.6;
+  font-style: italic;
 }
 
 /* ===================================================================
@@ -377,7 +588,7 @@ button.primary {
    =================================================================== */
 
 .chat-screen {
-  height: calc(100vh - 48px);
+  height: 100%;
   display: grid;
   grid-template-columns: 250px 1fr;
   gap: 1rem;
@@ -743,10 +954,412 @@ button.primary {
 .grant-form input { flex: 1; }
 
 /* ===================================================================
-   RESPONSIVE
+   METRIC SYSTEM
    =================================================================== */
 
-@media (max-width: 640px) {
+/* ---- Metric Grid ---- */
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.8rem;
+}
+
+.metric-grid .metric-card.wide { grid-column: span 2; }
+.metric-grid .metric-card.full { grid-column: 1 / -1; }
+
+/* ---- Metric Card ---- */
+
+.metric-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 252, 244, 0.92);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.metric-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.metric-card-header strong {
+  font-size: 0.82rem;
+}
+
+.metric-card-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.metric-card-header small {
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+}
+
+.metric-card-header button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.metric-card-header button:hover {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+.metric-card-body {
+  padding: 0.8rem;
+  min-height: 80px;
+}
+
+.metric-stale {
+  border-left: 3px solid #d7a13f;
+}
+
+/* Loading shimmer */
+.metric-loading {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+}
+
+.metric-shimmer {
+  height: 14px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(0,0,0,0.04) 25%, rgba(0,0,0,0.08) 50%, rgba(0,0,0,0.04) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.metric-shimmer:nth-child(2) { width: 70%; }
+.metric-shimmer:nth-child(3) { width: 45%; }
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Error state */
+.metric-error {
+  display: grid;
+  gap: 0.4rem;
+  text-align: center;
+  padding: 0.6rem 0;
+}
+
+.metric-error-text {
+  font-size: 0.78rem;
+  color: var(--danger);
+}
+
+.metric-empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 30vh;
+  text-align: center;
+  gap: 0.4rem;
+}
+
+.metric-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.metric-link-btn:hover { color: var(--accent-strong); }
+
+/* ---- Metric Admin ---- */
+
+.metric-admin {
+  max-width: 720px;
+}
+
+.metric-admin-tabs {
+  display: flex;
+  gap: 0.3rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.5rem;
+}
+
+.metric-admin-tabs button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.metric-admin-tabs button:hover { color: var(--ink); }
+
+.metric-admin-tabs button.active {
+  background: rgba(15, 125, 102, 0.08);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.metric-admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.metric-admin-header h3 {
+  font-size: 0.88rem;
+}
+
+.metric-admin-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.metric-admin-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem;
+  background: #fff;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.metric-admin-item.archived {
+  opacity: 0.55;
+}
+
+.metric-admin-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.metric-admin-item-header strong {
+  font-size: 0.84rem;
+}
+
+.metric-slug {
+  margin-left: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  background: rgba(0,0,0,0.04);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
+
+.metric-admin-item-badges {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.metric-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(0,0,0,0.02);
+  color: var(--ink-muted);
+}
+
+.metric-badge.enabled { border-color: var(--accent); color: var(--accent-strong); }
+.metric-badge.disabled { border-color: var(--danger); color: var(--danger); }
+.metric-badge.proactive { border-color: #b57d18; color: #8a6107; background: #fff6de; }
+.metric-badge.completed { border-color: var(--accent); color: var(--accent-strong); background: var(--info-bg); }
+.metric-badge.failed { border-color: var(--danger); color: var(--danger); background: var(--danger-bg); }
+.metric-badge.running { border-color: #3f7fd7; color: #1f5ca0; background: #e8f0ff; }
+.metric-badge.pending { border-color: #b57d18; color: #8a6107; background: #fff6de; }
+
+.metric-admin-instructions {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.metric-admin-item-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.metric-admin-item-actions button {
+  font-size: 0.76rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+}
+
+/* ---- Metric History ---- */
+
+.metric-history {
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.metric-history h4 {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.metric-history-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+
+/* ---- Metric Editor ---- */
+
+.metric-editor {
+  max-width: 560px;
+}
+
+.metric-editor h3 {
+  font-size: 0.92rem;
+}
+
+.metric-editor-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.metric-editor-checks {
+  display: flex;
+  gap: 1rem;
+}
+
+/* ---- Metric Binding Manager ---- */
+
+.metric-binding-manager {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.metric-binding-header label {
+  max-width: 300px;
+}
+
+.metric-binding-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.metric-binding-list h3 {
+  font-size: 0.84rem;
+}
+
+.metric-binding-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  background: #fff;
+  font-size: 0.82rem;
+}
+
+.metric-binding-item span { flex: 1; }
+
+.metric-binding-item small {
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+}
+
+.metric-binding-item button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.metric-binding-item button:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.metric-binding-add {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.metric-binding-add h3 {
+  font-size: 0.84rem;
+}
+
+.metric-binding-add-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-end;
+}
+
+.metric-binding-add-row select { flex: 1; }
+
+/* ===================================================================
+   RESPONSIVE  –  sidebar becomes off-canvas overlay on mobile
+   =================================================================== */
+
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: var(--sidebar-width);
+    transform: translateX(-100%);
+    transition: transform 200ms ease;
+    box-shadow: none;
+  }
+
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 199;
+  }
+
+  .mobile-menu-btn {
+    display: grid;
+  }
+
   .content-panel { padding: 0.8rem; }
   .chat-screen { grid-template-columns: 1fr; grid-template-rows: auto 1fr; gap: 0.6rem; }
   .chat-sidebar { max-height: 180px; }
@@ -758,4 +1371,9 @@ button.primary {
   .toolbar-grid,
   .meta-grid { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
+  .metric-grid { grid-template-columns: 1fr; }
+  .metric-grid .metric-card.wide,
+  .metric-grid .metric-card.full { grid-column: auto; }
+  .metric-editor-row { grid-template-columns: 1fr; }
+  .metric-binding-add-row { flex-wrap: wrap; }
 }
