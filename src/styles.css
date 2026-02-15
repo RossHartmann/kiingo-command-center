@@ -406,14 +406,19 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
   overflow-y: auto;
 }
 
-/* Non-chat screens stay centered and readable */
-.content-panel:has(.screen:not(.chat-screen)) {
+/* Non-chat, non-dashboard screens stay centered and readable */
+.content-panel:has(.screen:not(.chat-screen):not(.dashboard-screen)) {
   max-width: 960px;
 }
 
-/* Chat screen uses full width with tighter padding */
+/* Dashboard + chat use full width with tight padding */
 .content-panel:has(.chat-screen) {
   padding: 0.6rem;
+}
+
+.content-panel:has(.dashboard-screen) {
+  max-width: none;
+  padding: 0.4rem 0.5rem;
 }
 
 .screen {
@@ -966,6 +971,7 @@ button.primary {
 /* ---- Metric Card ---- */
 
 .metric-card {
+  position: relative;
   height: 100%;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -1122,15 +1128,100 @@ button.primary {
 
 .metric-link-btn:hover { color: var(--accent-strong); }
 
+.dashboard-screen {
+  gap: 0;
+  position: relative;
+}
+
 .dashboard-toolbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 50;
   display: flex;
-  justify-content: flex-end;
+  gap: 0.4rem;
+  align-items: center;
 }
 
 .dashboard-toolbar button {
-  font-size: 0.76rem;
-  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
   border-radius: 6px;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.dashboard-toolbar:hover button,
+.dashboard-toolbar button.primary {
+  opacity: 1;
+}
+
+/* Widget picker dropdown */
+.widget-picker-wrap {
+  position: relative;
+}
+
+.widget-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.widget-picker-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.widget-picker-item:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* Card remove button (edit mode) */
+.metric-card-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--ink-muted);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.metric-card-remove:hover {
+  opacity: 1;
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ---- Metric Admin ---- */

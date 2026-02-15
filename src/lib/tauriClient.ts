@@ -730,7 +730,7 @@ export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Pr
     gridX: payload.gridX ?? -1,
     gridY: payload.gridY ?? -1,
     gridW: payload.gridW ?? 4,
-    gridH: payload.gridH ?? 3
+    gridH: payload.gridH ?? 6
   };
   mockStore.screenMetrics.push(binding);
   persistMockStore();

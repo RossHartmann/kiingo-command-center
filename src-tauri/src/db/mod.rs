@@ -1356,7 +1356,7 @@ impl Database {
         let grid_x = payload.grid_x.unwrap_or(-1);
         let grid_y = payload.grid_y.unwrap_or(-1);
         let grid_w = payload.grid_w.unwrap_or(4);
-        let grid_h = payload.grid_h.unwrap_or(3);
+        let grid_h = payload.grid_h.unwrap_or(6);
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
@@ -1752,7 +1752,7 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
         // Bind to dashboard screen as a full-width card
         conn.execute(
             "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
-             VALUES (?1, ?2, ?3, 0, 'full', -1, -1, 12, 4)",
+             VALUES (?1, ?2, ?3, 0, 'full', -1, -1, 12, 8)",
             params![binding_id, "dashboard", metric_id],
         )?;
 
@@ -1868,17 +1868,37 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
             conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_x INTEGER DEFAULT -1", [])?;
             conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_y INTEGER DEFAULT -1", [])?;
             conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_w INTEGER DEFAULT 4", [])?;
-            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_h INTEGER DEFAULT 3", [])?;
+            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_h INTEGER DEFAULT 6", [])?;
 
             // Migrate existing layout_hint values to grid sizes
             conn.execute(
-                "UPDATE screen_metrics SET grid_w = 8, grid_h = 3 WHERE layout_hint = 'wide'",
+                "UPDATE screen_metrics SET grid_w = 8, grid_h = 6 WHERE layout_hint = 'wide'",
                 [],
             )?;
             conn.execute(
-                "UPDATE screen_metrics SET grid_w = 12, grid_h = 4 WHERE layout_hint = 'full'",
+                "UPDATE screen_metrics SET grid_w = 12, grid_h = 8 WHERE layout_hint = 'full'",
                 [],
             )?;
+        }
+
+        // One-time migration: double grid_h values for rowHeight change (80→40)
+        {
+            let migrated: i64 = conn.query_row(
+                "SELECT COUNT(1) FROM settings WHERE key = 'migration:grid_rowheight_v2'",
+                [],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            if migrated == 0 {
+                conn.execute(
+                    "UPDATE screen_metrics SET grid_h = grid_h * 2 WHERE grid_h <= 4",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO settings (key, value_json, updated_at) VALUES ('migration:grid_rowheight_v2', '\"done\"', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                    params![Utc::now().to_rfc3339()],
+                )?;
+            }
         }
 
         Ok(())

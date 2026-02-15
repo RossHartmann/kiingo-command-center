@@ -35,9 +35,10 @@ const LIVE_SCOPE = {
 
 interface MetricCardProps {
   view: ScreenMetricView;
+  onRemove?: () => void;
 }
 
-export function MetricCard({ view }: MetricCardProps): JSX.Element {
+export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
   const actions = useAppActions();
   const { definition, latestSnapshot, isStale, refreshInProgress } = view;
 
@@ -103,6 +104,11 @@ export function MetricCard({ view }: MetricCardProps): JSX.Element {
 
   return (
     <div className={`metric-card${isStale ? " metric-stale" : ""}`}>
+      {onRemove && (
+        <button type="button" className="metric-card-remove" onClick={onRemove} title="Remove widget">
+          {"\u2715"}
+        </button>
+      )}
       <div className="metric-card-header">
         <strong>{definition.name}</strong>
         <span className="metric-card-meta">
