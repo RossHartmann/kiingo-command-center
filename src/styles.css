@@ -1131,6 +1131,7 @@ button.primary {
 .dashboard-screen {
   gap: 0;
   position: relative;
+  min-height: 100%;
 }
 
 .dashboard-toolbar {
@@ -1156,43 +1157,183 @@ button.primary {
   opacity: 1;
 }
 
-/* Widget picker dropdown */
-.widget-picker-wrap {
-  position: relative;
-}
-
-.widget-picker-dropdown {
+/* Metric library drawer — overlays from right, doesn't affect grid width */
+.metric-drawer {
   position: absolute;
-  top: 100%;
+  top: 0;
   right: 0;
-  margin-top: 4px;
-  min-width: 220px;
-  max-height: 320px;
-  overflow-y: auto;
+  bottom: 0;
+  width: 280px;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 4px;
-  z-index: 100;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 40;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.2);
 }
 
-.widget-picker-item {
-  display: block;
-  width: 100%;
-  text-align: left;
+/* During mouse-based drag from sidebar, disable pointer events on drawer */
+body.metric-dragging .metric-drawer {
+  pointer-events: none;
+  opacity: 0.6;
+}
+body.metric-dragging {
+  cursor: grabbing !important;
+}
+
+.metric-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+
+.metric-drawer-close {
   background: none;
   border: none;
-  padding: 0.5rem 0.6rem;
-  font-size: 0.82rem;
-  color: var(--ink);
-  border-radius: 6px;
+  color: var(--ink-muted);
   cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 4px;
+  border-radius: 4px;
 }
 
-.widget-picker-item:hover {
-  background: var(--accent);
-  color: var(--bg);
+.metric-drawer-close:hover {
+  color: var(--ink);
+}
+
+.metric-drawer-search {
+  margin: 0.5rem 0.7rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.metric-drawer-search::placeholder {
+  color: var(--ink-muted);
+}
+
+.metric-drawer-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.3rem 0.5rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.metric-drawer-empty {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* Metric library card */
+.metric-library-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  transition: border-color 0.15s;
+}
+
+.metric-library-card[draggable="true"] {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.metric-library-card[draggable="true"] * {
+  cursor: inherit;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.metric-library-card[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.metric-library-card:hover {
+  border-color: var(--accent);
+}
+
+.metric-library-card.already-added {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.metric-library-card-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric-library-card-info strong {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-library-card-info small {
+  font-size: 0.68rem;
+  color: var(--ink-muted);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.metric-library-card-meta {
+  font-size: 0.64rem;
+  color: var(--ink-muted);
+  opacity: 0.7;
+}
+
+.metric-library-btn {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.metric-library-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.metric-library-btn.added {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.metric-library-btn.added:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* Card remove button (edit mode) */

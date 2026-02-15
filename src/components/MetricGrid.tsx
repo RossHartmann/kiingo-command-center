@@ -17,9 +17,10 @@ interface MetricGridProps {
   editMode: boolean;
   onLayoutChange?: (layouts: ScreenMetricLayoutItem[]) => void;
   onRemoveMetric?: (metricId: string) => void;
+  onDropMetric?: (metricId: string) => void;
 }
 
-export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric }: MetricGridProps): JSX.Element {
+export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, onDropMetric }: MetricGridProps): JSX.Element {
   const { width, containerRef, mounted } = useContainerWidth();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track which snapshot content we've already auto-sized to avoid loops
@@ -117,9 +118,34 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric }: 
     [onLayoutChange, editMode]
   );
 
-  if (views.length === 0) {
-    return <div ref={containerRef} />;
-  }
+  // Handle mouse-based drop from sidebar (mouseup over the grid)
+  const onDropMetricRef = useRef(onDropMetric);
+  onDropMetricRef.current = onDropMetric;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !editMode) return;
+
+    const handleMouseUp = (e: MouseEvent) => {
+      // Check if there's a metric being dragged (set by sidebar)
+      const metricId = (window as any).__draggingMetricId as string | undefined;
+      if (!metricId) return;
+      (window as any).__draggingMetricId = null;
+
+      // Remove ghost
+      const ghost = document.getElementById("metric-drag-ghost");
+      if (ghost) ghost.remove();
+      document.body.classList.remove("metric-dragging");
+
+      onDropMetricRef.current?.(metricId);
+    };
+
+    container.addEventListener("mouseup", handleMouseUp);
+    return () => container.removeEventListener("mouseup", handleMouseUp);
+  }, [editMode, containerRef]);
+
+  // Grid needs enough height to be a valid drop target even when empty
+  const gridStyle = editMode ? { minHeight: "calc(100vh - 100px)" } : undefined;
 
   return (
     <div ref={containerRef}>
@@ -131,6 +157,7 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric }: 
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480 }}
           cols={{ lg: 12, md: 10, sm: 6, xs: 4 }}
           rowHeight={ROW_HEIGHT}
+          style={gridStyle}
           dragConfig={
             editMode
               ? { enabled: true, handle: ".metric-card-header" }

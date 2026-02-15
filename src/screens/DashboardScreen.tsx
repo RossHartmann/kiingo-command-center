@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricGrid } from "../components/MetricGrid";
-import type { MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
+import type { MetricDefinition, MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
 
 interface DashboardScreenProps {
   screenId: string;
@@ -18,8 +18,8 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   const actions = useAppActions();
   const views = state.screenMetricViews[screenId] ?? [];
   const [editMode, setEditMode] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const pickerRef = useRef<HTMLDivElement>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     void actions.loadScreenMetrics(screenId);
@@ -39,18 +39,6 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     }
   }, [views, actions]);
 
-  // Close picker on outside click
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setPickerOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [pickerOpen]);
-
   const handleLayoutChange = useCallback(
     (layouts: ScreenMetricLayoutItem[]) => {
       void actions.updateScreenMetricLayout(screenId, layouts);
@@ -65,7 +53,16 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     [actions, screenId]
   );
 
+  const boundMetricIds = new Set(views.map((v) => v.definition.id));
+  const allMetrics = state.metricDefinitions.filter((d) => !d.archivedAt);
+  const filtered = allMetrics.filter(
+    (m) =>
+      m.name.toLowerCase().includes(search.toLowerCase()) ||
+      m.slug.toLowerCase().includes(search.toLowerCase())
+  );
+
   const handleAddMetric = async (metricId: string, hint: MetricLayoutHint = "card") => {
+    if (boundMetricIds.has(metricId)) return;
     const { gridW, gridH } = GRID_DEFAULTS[hint] ?? GRID_DEFAULTS.card;
     await actions.bindMetricToScreen({
       screenId,
@@ -75,12 +72,71 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
       gridW,
       gridH,
     });
-    setPickerOpen(false);
   };
 
-  const availableMetrics = state.metricDefinitions.filter(
-    (d) => !d.archivedAt && !views.some((v) => v.definition.id === d.id)
+  const handleDropMetric = useCallback(
+    (metricId: string) => {
+      if (boundMetricIds.has(metricId)) return;
+      void handleAddMetric(metricId);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boundMetricIds, screenId, actions, views.length]
   );
+
+  // Mouse-based drag from sidebar cards (bypasses HTML5 DnD issues in Tauri WebKit)
+  const handleMouseDownDrag = useCallback((e: React.MouseEvent, metricId: string, label: string) => {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let dragging = false;
+    let ghost: HTMLElement | null = null;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+
+      // Don't start drag until mouse moves 5px (allows click-to-add to work)
+      if (!dragging && Math.abs(dx) + Math.abs(dy) > 5) {
+        dragging = true;
+        (window as any).__draggingMetricId = metricId;
+        document.body.classList.add("metric-dragging");
+
+        ghost = document.createElement("div");
+        ghost.id = "metric-drag-ghost";
+        ghost.textContent = label;
+        ghost.style.cssText = `
+          position: fixed; left: ${ev.clientX - 40}px; top: ${ev.clientY - 14}px;
+          pointer-events: none; z-index: 9999; padding: 6px 14px; border-radius: 8px;
+          font-size: 0.75rem; font-weight: 600; background: var(--accent); color: #fff;
+          opacity: 0.9; box-shadow: 0 4px 12px rgba(0,0,0,0.3); white-space: nowrap;
+        `;
+        document.body.appendChild(ghost);
+      }
+
+      if (ghost) {
+        ghost.style.left = `${ev.clientX - 40}px`;
+        ghost.style.top = `${ev.clientY - 14}px`;
+      }
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+
+      if (!dragging) return; // Was a click, not a drag — let onClick handle it
+
+      // If the grid's mouseup handler didn't consume it, clean up
+      setTimeout(() => {
+        if ((window as any).__draggingMetricId) {
+          (window as any).__draggingMetricId = null;
+        }
+        if (ghost) ghost.remove();
+        document.body.classList.remove("metric-dragging");
+      }, 0);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
 
   if (views.length === 0 && !editMode) {
     return (
@@ -91,7 +147,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
             <button
               type="button"
               className="metric-link-btn"
-              onClick={() => setEditMode(true)}
+              onClick={() => { setEditMode(true); setDrawerOpen(true); }}
             >
               Add metrics
             </button>
@@ -112,44 +168,102 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   return (
     <div className={`screen dashboard-screen${editMode ? " dashboard-editing" : ""}`}>
       <div className="dashboard-toolbar">
-        {editMode && availableMetrics.length > 0 && (
-          <div className="widget-picker-wrap" ref={pickerRef}>
-            <button type="button" onClick={() => setPickerOpen(!pickerOpen)}>
-              + Add Widget
-            </button>
-            {pickerOpen && (
-              <div className="widget-picker-dropdown">
-                {availableMetrics.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className="widget-picker-item"
-                    onClick={() => handleAddMetric(m.id)}
-                  >
-                    {m.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+        {editMode && (
+          <button type="button" onClick={() => setDrawerOpen(!drawerOpen)}>
+            + Add Widget
+          </button>
         )}
         <button
           type="button"
           className={editMode ? "primary" : ""}
           onClick={() => {
             setEditMode(!editMode);
-            setPickerOpen(false);
+            setDrawerOpen(false);
+            setSearch("");
           }}
         >
           {editMode ? "Done" : "Edit"}
         </button>
       </div>
+
       <MetricGrid
         views={views}
         editMode={editMode}
         onLayoutChange={handleLayoutChange}
         onRemoveMetric={editMode ? handleRemoveMetric : undefined}
+        onDropMetric={editMode ? handleDropMetric : undefined}
       />
+
+      {editMode && drawerOpen && (
+        <aside className="metric-drawer">
+          <div className="metric-drawer-header">
+            <strong>Metric Library</strong>
+            <button
+              type="button"
+              className="metric-drawer-close"
+              onClick={() => setDrawerOpen(false)}
+            >
+              {"\u2715"}
+            </button>
+          </div>
+          <input
+            className="metric-drawer-search"
+            type="text"
+            placeholder="Search metrics..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <div className="metric-drawer-list">
+            {filtered.length === 0 && (
+              <p className="metric-drawer-empty">No metrics found</p>
+            )}
+            {filtered.map((m) => {
+              const added = boundMetricIds.has(m.id);
+              return (
+                <div
+                  key={m.id}
+                  className={`metric-library-card${added ? " already-added" : ""}`}
+                  onMouseDown={added ? undefined : (e) => handleMouseDownDrag(e, m.id, m.name)}
+                  onClick={added ? undefined : () => handleAddMetric(m.id)}
+                >
+                  <div className="metric-library-card-info">
+                    <strong>{m.name}</strong>
+                    {m.instructions && (
+                      <small>
+                        {m.instructions.length > 100
+                          ? m.instructions.slice(0, 100) + "..."
+                          : m.instructions}
+                      </small>
+                    )}
+                    <span className="metric-library-card-meta">
+                      {m.provider}
+                      {m.ttlSeconds ? ` \u00b7 ${formatTtl(m.ttlSeconds)}` : ""}
+                    </span>
+                  </div>
+                  {added ? (
+                    <button
+                      type="button"
+                      className="metric-library-btn added"
+                      onClick={(e) => { e.stopPropagation(); handleRemoveMetric(m.id); }}
+                      title="Remove from dashboard"
+                    >
+                      {"\u2713"}
+                    </button>
+                  ) : (
+                    <span className="metric-library-btn-hint">+</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
     </div>
   );
+}
+
+function formatTtl(seconds: number): string {
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m refresh`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h refresh`;
+  return `${Math.round(seconds / 86400)}d refresh`;
 }
