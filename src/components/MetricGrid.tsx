@@ -2,6 +2,7 @@ import { useMemo, useCallback, useRef, useEffect } from "react";
 import {
   ResponsiveGridLayout,
   noCompactor,
+  verticalCompactor,
   useContainerWidth,
 } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
@@ -15,12 +16,13 @@ const MARGIN = 12;
 interface MetricGridProps {
   views: ScreenMetricView[];
   editMode: boolean;
+  compact: boolean;
   onLayoutChange?: (layouts: ScreenMetricLayoutItem[]) => void;
   onRemoveWidget?: (bindingId: string) => void;
   onDropMetric?: (metricId: string) => void;
 }
 
-export function MetricGrid({ views, editMode, onLayoutChange, onRemoveWidget, onDropMetric }: MetricGridProps): JSX.Element {
+export function MetricGrid({ views, editMode, compact, onLayoutChange, onRemoveWidget, onDropMetric }: MetricGridProps): JSX.Element {
   const { width, containerRef, mounted } = useContainerWidth();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track which snapshot content we've already auto-sized to avoid loops
@@ -195,7 +197,7 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveWidget, on
               ? { enabled: true, handles: ["se", "s", "e"] as const }
               : { enabled: false }
           }
-          compactor={noCompactor}
+          compactor={compact ? verticalCompactor : noCompactor}
           margin={[MARGIN, MARGIN] as const}
           onLayoutChange={handleLayoutChange}
         >

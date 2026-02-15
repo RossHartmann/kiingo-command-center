@@ -36,6 +36,7 @@ impl Database {
 
         db.ensure_schema_extensions()?;
         db.seed_default_metrics()?;
+        db.seed_revenue_metrics()?;
         db.ensure_default_settings()?;
         db.ensure_default_retention()?;
 
@@ -1761,6 +1762,569 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
              VALUES (?1, ?2, ?3, 0, 'full', -1, -1, 12, 8)",
             params![binding_id, "dashboard", metric_id],
         )?;
+
+        Ok(())
+    }
+
+    fn seed_revenue_metrics(&self) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+
+        // Guard: skip if any revenue metric already exists
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM metric_definitions WHERE slug = 'monthly-revenue'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if exists {
+            return Ok(());
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // ─── Helper: insert one metric + snapshot + binding ───────────────
+        struct MetricSeed<'a> {
+            slug: &'a str,
+            name: &'a str,
+            instructions: &'a str,
+            template_jsx: &'a str,
+            initial_values: &'a str,
+            initial_html: &'a str,
+            ttl: i32,
+            layout_hint: &'a str,
+            grid_w: i32,
+            grid_h: i32,
+            grid_y: i32,
+        }
+
+        let seeds = vec![
+            // ═══════════════════════════════════════════════════════════════
+            // 1. Monthly Revenue Invoiced
+            // ═══════════════════════════════════════════════════════════════
+            MetricSeed {
+                slug: "monthly-revenue",
+                name: "Monthly Revenue Invoiced",
+                instructions: r#"Retrieve monthly invoiced revenue from QuickBooks invoices.
+
+## Data Source
+QuickBooks Online Invoices via Kiingo MCP `quickbooks.query()`.
+
+## Retrieval Steps
+1. Query all invoices for the trailing 12 months:
+   `quickbooks.query({ query: "SELECT TxnDate, TotalAmt, Balance FROM Invoice WHERE TxnDate >= '<12 months ago, 1st of month>' AND TxnDate <= '<last day of current month>' ORDERBY TxnDate", maxResults: 1000 })`.
+2. Group invoices by month (from TxnDate). For each month compute:
+   - `invoiced`: sum of TotalAmt (total invoiced)
+   - `collected`: sum of (TotalAmt - Balance) (amount already paid)
+   - `count`: number of invoices
+3. Build monthly data array with { month (short label e.g. "Mar 25"), invoiced, collected, count }.
+4. Compute currentMonth, priorMonth, and ltmTotal from the invoiced amounts.
+
+## Narrative Context
+- This metric tracks invoiced revenue (what was billed), not P&L recognized revenue.
+- The difference between invoiced and collected shows outstanding AR aging.
+- A large gap between invoiced and collected in recent months is normal; older months should be mostly collected.
+
+## Values to Return
+- `monthlyData`: array of { month, invoiced, collected, count }
+- `currentMonth`: invoiced total for current (partial) month
+- `priorMonth`: invoiced total for prior full month
+- `ltmTotal`: sum of all 12 months invoiced"#,
+                template_jsx: r##"(() => {
+  const data = DATA_PLACEHOLDER;
+  const currentMonth = CURRENT_MONTH_PLACEHOLDER;
+  const priorMonth = PRIOR_MONTH_PLACEHOLDER;
+  const ltmTotal = LTM_PLACEHOLDER;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Month" value={'$' + (currentMonth / 1000).toFixed(0) + 'K'} subtitle="Invoiced" />
+        <StatCard label="Last Month" value={'$' + (priorMonth / 1000).toFixed(0) + 'K'} subtitle="Invoiced" />
+        <StatCard label="LTM Invoiced" value={'$' + (ltmTotal / 1000).toFixed(0) + 'K'} subtitle="Last 12 months" />
+      </MetricRow>
+      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <Bar dataKey="invoiced" name="Invoiced" fill={theme.accent} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="collected" name="Collected" fill={theme.accentStrong} radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Source: QuickBooks Invoices via Kiingo MCP</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                initial_values: r#"{"currentMonth":152193,"priorMonth":209568,"ltmTotal":1925712,"monthlyData":[{"month":"Mar 25","invoiced":190174,"collected":190174,"count":66},{"month":"Apr 25","invoiced":106283,"collected":106283,"count":62},{"month":"May 25","invoiced":125354,"collected":125354,"count":34},{"month":"Jun 25","invoiced":139671,"collected":139671,"count":61},{"month":"Jul 25","invoiced":98864,"collected":98864,"count":48},{"month":"Aug 25","invoiced":114698,"collected":114698,"count":51},{"month":"Sep 25","invoiced":263725,"collected":263725,"count":56},{"month":"Oct 25","invoiced":197685,"collected":197685,"count":48},{"month":"Nov 25","invoiced":206919,"collected":201269,"count":48},{"month":"Dec 25","invoiced":120579,"collected":115088,"count":60},{"month":"Jan 26","invoiced":209568,"collected":127830,"count":57},{"month":"Feb 26","invoiced":152193,"collected":39157,"count":25}]}"#,
+                initial_html: r##"(() => {
+  const data = [{"month":"Mar 25","invoiced":190174,"collected":190174,"count":66},{"month":"Apr 25","invoiced":106283,"collected":106283,"count":62},{"month":"May 25","invoiced":125354,"collected":125354,"count":34},{"month":"Jun 25","invoiced":139671,"collected":139671,"count":61},{"month":"Jul 25","invoiced":98864,"collected":98864,"count":48},{"month":"Aug 25","invoiced":114698,"collected":114698,"count":51},{"month":"Sep 25","invoiced":263725,"collected":263725,"count":56},{"month":"Oct 25","invoiced":197685,"collected":197685,"count":48},{"month":"Nov 25","invoiced":206919,"collected":201269,"count":48},{"month":"Dec 25","invoiced":120579,"collected":115088,"count":60},{"month":"Jan 26","invoiced":209568,"collected":127830,"count":57},{"month":"Feb 26","invoiced":152193,"collected":39157,"count":25}];
+  const currentMonth = 152193;
+  const priorMonth = 209568;
+  const ltmTotal = 1925712;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Month" value={'$' + (currentMonth / 1000).toFixed(0) + 'K'} subtitle="Invoiced" />
+        <StatCard label="Last Month" value={'$' + (priorMonth / 1000).toFixed(0) + 'K'} subtitle="Invoiced" />
+        <StatCard label="LTM Invoiced" value={'$' + (ltmTotal / 1000).toFixed(0) + 'K'} subtitle="Last 12 months" />
+      </MetricRow>
+      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <Bar dataKey="invoiced" name="Invoiced" fill={theme.accent} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="collected" name="Collected" fill={theme.accentStrong} radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Source: QuickBooks Invoices via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                ttl: 86400,
+                layout_hint: "full",
+                grid_w: 12,
+                grid_h: 8,
+                grid_y: 0,
+            },
+
+            // ═══════════════════════════════════════════════════════════════
+            // 2. Monthly Net Income
+            // ═══════════════════════════════════════════════════════════════
+            MetricSeed {
+                slug: "monthly-net-income",
+                name: "Monthly Net Income",
+                instructions: r#"Retrieve monthly net income from QuickBooks P&L.
+
+## Data Source
+QuickBooks Online P&L via Kiingo MCP `quickbooks.profitAndLoss()`.
+
+## Retrieval Steps
+1. Call `quickbooks.profitAndLoss({ params: { start_date: '<12 months ago, 1st of month>', end_date: '<last day of current month>', summarize_column_by: 'Month' } })`.
+2. Parse the Rows tree. Extract "Net Income" row for each month column.
+3. Also extract "Gross Profit" and "Total Expenses" for context.
+4. Compute trailing 3-month average of net income.
+
+## Values to Return
+- `monthlyData`: array of { month (short label), netIncome, grossProfit, expenses }
+- `currentMonth`: net income for current (partial) month
+- `priorMonth`: net income for prior full month
+- `trailing3Avg`: average net income for last 3 full months
+- `ltmTotal`: sum of last 12 months net income"#,
+                template_jsx: r##"(() => {
+  const data = DATA_PLACEHOLDER;
+  const currentMonth = CURRENT_MONTH_PLACEHOLDER;
+  const trailing3Avg = TRAILING3_PLACEHOLDER;
+  const ltmTotal = LTM_PLACEHOLDER;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Month" value={'$' + (currentMonth / 1000).toFixed(0) + 'K'} subtitle="In progress" />
+        <StatCard label="3-Mo Avg" value={'$' + (trailing3Avg / 1000).toFixed(0) + 'K'} subtitle="Trailing avg" />
+        <StatCard label="LTM Net Income" value={'$' + (ltmTotal / 1000).toFixed(0) + 'K'} subtitle="Last 12 months" />
+      </MetricRow>
+      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="niGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={theme.gradientFrom} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={theme.gradientFrom} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <ReferenceLine y={0} stroke={theme.danger} strokeWidth={1.5} />
+            <Area type="monotone" dataKey="netIncome" name="Net Income" stroke={theme.accent} strokeWidth={2.5} fill="url(#niGrad)" dot={{ fill: theme.accent, r: 3, strokeWidth: 0 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Source: QuickBooks P&L (Accrual) via Kiingo MCP</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                initial_values: r#"{"currentMonth":-56498,"priorMonth":9749,"trailing3Avg":-18821,"ltmTotal":637991,"monthlyData":[{"month":"Mar 25","netIncome":133329},{"month":"Apr 25","netIncome":34326},{"month":"May 25","netIncome":58996},{"month":"Jun 25","netIncome":62925},{"month":"Jul 25","netIncome":18712},{"month":"Aug 25","netIncome":25139},{"month":"Sep 25","netIncome":161054},{"month":"Oct 25","netIncome":99890},{"month":"Nov 25","netIncome":100082},{"month":"Dec 25","netIncome":-9713},{"month":"Jan 26","netIncome":9749},{"month":"Feb 26","netIncome":-56498}]}"#,
+                initial_html: r##"(() => {
+  const data = [{"month":"Mar 25","netIncome":133329},{"month":"Apr 25","netIncome":34326},{"month":"May 25","netIncome":58996},{"month":"Jun 25","netIncome":62925},{"month":"Jul 25","netIncome":18712},{"month":"Aug 25","netIncome":25139},{"month":"Sep 25","netIncome":161054},{"month":"Oct 25","netIncome":99890},{"month":"Nov 25","netIncome":100082},{"month":"Dec 25","netIncome":-9713},{"month":"Jan 26","netIncome":9749},{"month":"Feb 26","netIncome":-56498}];
+  const currentMonth = -56498;
+  const trailing3Avg = -18821;
+  const ltmTotal = 637991;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Month" value={'$' + (currentMonth / 1000).toFixed(0) + 'K'} subtitle="In progress" />
+        <StatCard label="3-Mo Avg" value={'$' + (trailing3Avg / 1000).toFixed(0) + 'K'} subtitle="Trailing avg" />
+        <StatCard label="LTM Net Income" value={'$' + (ltmTotal / 1000).toFixed(0) + 'K'} subtitle="Last 12 months" />
+      </MetricRow>
+      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="niGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={theme.gradientFrom} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={theme.gradientFrom} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <ReferenceLine y={0} stroke={theme.danger} strokeWidth={1.5} />
+            <Area type="monotone" dataKey="netIncome" name="Net Income" stroke={theme.accent} strokeWidth={2.5} fill="url(#niGrad)" dot={{ fill: theme.accent, r: 3, strokeWidth: 0 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Source: QuickBooks P&L (Accrual) via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                ttl: 86400,
+                layout_hint: "full",
+                grid_w: 12,
+                grid_h: 8,
+                grid_y: 9,
+            },
+
+            // ═══════════════════════════════════════════════════════════════
+            // 3. Sales Pipeline Value
+            // ═══════════════════════════════════════════════════════════════
+            MetricSeed {
+                slug: "sales-pipeline-value",
+                name: "Sales Pipeline Value",
+                instructions: r#"Retrieve open deal pipeline from HubSpot and display by stage.
+
+## Data Source
+HubSpot Deals via Kiingo MCP `hubspot.listDeals()`.
+
+## Retrieval Steps
+1. Paginate through ALL deals: `hubspot.listDeals({ limit: 100, properties: ['dealname', 'amount', 'dealstage', 'pipeline', 'closedate', 'hs_deal_stage_probability', 'hs_is_closed_won', 'hs_is_closed'], after })`.
+2. Filter to open deals (hs_is_closed !== 'true') in sales pipelines: 'default' (New Business), '798580396' (Upsells), '796136972' (Partnership).
+3. Group by stage. For each stage, compute count, total amount, and weighted amount (amount * hs_deal_stage_probability).
+4. Also compute closing-this-month and closing-next-month totals by checking closedate.
+5. Map stage IDs to labels: 161270894 = "Proposal Sent", appointmentscheduled = "Discovery Call", 161298562 = "On Hold", 1166399563 = "Cold", 1172014718 = "Outreach (Upsell)", 1172014719 = "Proposal (Upsell)", 1172014717 = "Discovery (Upsell)".
+
+## Values to Return
+- `totalUnweighted`: total open pipeline value
+- `totalWeighted`: probability-weighted pipeline value
+- `dealCount`: number of open deals
+- `closingThisMonth`: value of deals closing this month
+- `closingNextMonth`: value of deals closing next month
+- `byStage`: array of { stage (label), count, amount, weighted } sorted by amount desc"#,
+                template_jsx: r##"(() => {
+  const data = DATA_PLACEHOLDER;
+  const totalUnweighted = UNWEIGHTED_PLACEHOLDER;
+  const totalWeighted = WEIGHTED_PLACEHOLDER;
+  const dealCount = COUNT_PLACEHOLDER;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="Open Pipeline" value={'$' + (totalUnweighted / 1000).toFixed(0) + 'K'} subtitle={dealCount + ' deals'} />
+        <StatCard label="Weighted" value={'$' + (totalWeighted / 1000).toFixed(0) + 'K'} subtitle="Probability-adjusted" />
+      </MetricRow>
+      <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} layout="vertical" margin={{ top: 5, right: 10, left: 100, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} horizontal={false} />
+            <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <YAxis type="category" dataKey="stage" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={95} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <Bar dataKey="amount" name="Pipeline Value" fill={theme.accent} radius={[0, 4, 4, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Open sales deals (New Business + Upsells + Partnership) · Source: HubSpot CRM via Kiingo MCP</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                initial_values: r#"{"totalUnweighted":1070629,"totalWeighted":370078,"dealCount":264,"closingThisMonth":269394,"closingNextMonth":228249,"byStage":[{"stage":"Proposal Sent","count":80,"amount":533690,"weighted":266845},{"stage":"On Hold","count":71,"amount":370747,"weighted":37075},{"stage":"Proposal (Upsell)","count":17,"amount":106998,"weighted":53499},{"stage":"Discovery Call","count":24,"amount":32850,"weighted":9855},{"stage":"Outreach (Upsell)","count":27,"amount":7298,"weighted":730},{"stage":"Cold (Upsell)","count":9,"amount":11498,"weighted":1150}]}"#,
+                initial_html: r##"(() => {
+  const data = [{"stage":"Proposal Sent","count":80,"amount":533690,"weighted":266845},{"stage":"On Hold","count":71,"amount":370747,"weighted":37075},{"stage":"Proposal (Upsell)","count":17,"amount":106998,"weighted":53499},{"stage":"Discovery Call","count":24,"amount":32850,"weighted":9855},{"stage":"Cold (Upsell)","count":9,"amount":11498,"weighted":1150},{"stage":"Outreach (Upsell)","count":27,"amount":7298,"weighted":730}];
+  const totalUnweighted = 1070629;
+  const totalWeighted = 370078;
+  const dealCount = 264;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="Open Pipeline" value={'$' + (totalUnweighted / 1000).toFixed(0) + 'K'} subtitle={dealCount + ' deals'} />
+        <StatCard label="Weighted" value={'$' + (totalWeighted / 1000).toFixed(0) + 'K'} subtitle="Probability-adjusted" />
+      </MetricRow>
+      <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} layout="vertical" margin={{ top: 5, right: 10, left: 100, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} horizontal={false} />
+            <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <YAxis type="category" dataKey="stage" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={95} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <Bar dataKey="amount" name="Pipeline Value" fill={theme.accent} radius={[0, 4, 4, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Open sales deals (New Business + Upsells + Partnership) · Source: HubSpot CRM via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                ttl: 3600,
+                layout_hint: "wide",
+                grid_w: 6,
+                grid_h: 8,
+                grid_y: 18,
+            },
+
+            // ═══════════════════════════════════════════════════════════════
+            // 4. Closed Won Revenue by Month
+            // ═══════════════════════════════════════════════════════════════
+            MetricSeed {
+                slug: "closed-won-monthly",
+                name: "Closed Won Revenue by Month",
+                instructions: r#"Retrieve closed-won deals from HubSpot and display revenue by month.
+
+## Data Source
+HubSpot Deals via Kiingo MCP `hubspot.listDeals()`.
+
+## Retrieval Steps
+1. Paginate through ALL deals with `hubspot.listDeals({ limit: 100, properties: ['amount', 'closedate', 'pipeline', 'hs_is_closed_won'], after })`.
+2. Filter to closed-won deals (hs_is_closed_won === 'true').
+3. Group by close-date month. Sum amounts per month.
+4. Compute current month total, best month, trailing average.
+
+## Values to Return
+- `monthlyData`: array of { month (short label), amount, count }
+- `currentMonth`: amount closed this month
+- `bestMonth`: { month, amount } - highest revenue month
+- `trailingAvg`: average monthly closed-won over all months with data
+- `totalWon`: total closed-won amount"#,
+                template_jsx: r##"(() => {
+  const data = DATA_PLACEHOLDER;
+  const currentMonth = CURRENT_PLACEHOLDER;
+  const bestMonth = BEST_PLACEHOLDER;
+  const trailingAvg = AVG_PLACEHOLDER;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Month" value={'$' + (currentMonth / 1000).toFixed(0) + 'K'} subtitle="Closed won" />
+        <StatCard label="Best Month" value={'$' + (bestMonth / 1000).toFixed(0) + 'K'} subtitle="Peak" />
+        <StatCard label="Monthly Avg" value={'$' + (trailingAvg / 1000).toFixed(0) + 'K'} subtitle="Average" />
+      </MetricRow>
+      <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <ReferenceLine y={trailingAvg} stroke={theme.line} strokeDasharray="6 4" />
+            <Bar dataKey="amount" name="Closed Won" fill={theme.accent} radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>HubSpot closed-won deals across all sales pipelines · Source: HubSpot CRM via Kiingo MCP</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                initial_values: r#"{"currentMonth":130899,"bestMonth":369676,"trailingAvg":173524,"totalWon":1567217,"monthlyData":[{"month":"Jun 25","amount":19420,"count":6},{"month":"Jul 25","amount":25387,"count":10},{"month":"Aug 25","amount":106600,"count":34},{"month":"Sep 25","amount":212700,"count":39},{"month":"Oct 25","amount":369676,"count":117},{"month":"Nov 25","amount":247744,"count":63},{"month":"Dec 25","amount":152094,"count":61},{"month":"Jan 26","amount":299297,"count":53},{"month":"Feb 26","amount":130899,"count":28}]}"#,
+                initial_html: r##"(() => {
+  const data = [{"month":"Jun 25","amount":19420,"count":6},{"month":"Jul 25","amount":25387,"count":10},{"month":"Aug 25","amount":106600,"count":34},{"month":"Sep 25","amount":212700,"count":39},{"month":"Oct 25","amount":369676,"count":117},{"month":"Nov 25","amount":247744,"count":63},{"month":"Dec 25","amount":152094,"count":61},{"month":"Jan 26","amount":299297,"count":53},{"month":"Feb 26","amount":130899,"count":28}];
+  const currentMonth = 130899;
+  const bestMonth = 369676;
+  const trailingAvg = 173524;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Month" value={'$' + (currentMonth / 1000).toFixed(0) + 'K'} subtitle="Closed won" />
+        <StatCard label="Best Month" value={'$' + (bestMonth / 1000).toFixed(0) + 'K'} subtitle="Peak" />
+        <StatCard label="Monthly Avg" value={'$' + (trailingAvg / 1000).toFixed(0) + 'K'} subtitle="Average" />
+      </MetricRow>
+      <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <ReferenceLine y={trailingAvg} stroke={theme.line} strokeDasharray="6 4" />
+            <Bar dataKey="amount" name="Closed Won" fill={theme.accent} radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>HubSpot closed-won deals across all sales pipelines · Source: HubSpot CRM via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                ttl: 3600,
+                layout_hint: "wide",
+                grid_w: 6,
+                grid_h: 8,
+                grid_y: 18,
+            },
+
+            // ═══════════════════════════════════════════════════════════════
+            // 5. Cash Position & AR
+            // ═══════════════════════════════════════════════════════════════
+            MetricSeed {
+                slug: "cash-position-ar",
+                name: "Cash Position & AR",
+                instructions: r#"Retrieve current cash position and accounts receivable from QuickBooks, with cash flow split by operating vs financing activities.
+
+## Data Source
+QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cashFlow()`.
+
+## Retrieval Steps
+1. Call `quickbooks.balanceSheet({ params: { start_date: '<1st of current month>', end_date: '<today>' } })`.
+2. Parse the Rows tree. Find "Total Bank Accounts" for cash and "Total Accounts Receivable" for AR.
+3. Call `quickbooks.cashFlow({ params: { start_date: '<6 months ago>', end_date: '<last day of current month>', summarize_column_by: 'Month' } })`.
+4. For each month column, extract:
+   - "Net cash provided by operating activities" → `operating`
+   - "Net cash provided by financing activities" → `financing`
+   - "Net cash increase for period" → `net`
+
+## Values to Return
+- `cash`: current cash balance
+- `ar`: current accounts receivable
+- `totalLiquid`: cash + AR
+- `cashFlowByMonth`: array of { month, operating, financing, net } for last 6 months"#,
+                template_jsx: r##"(() => {
+  const cash = CASH_PLACEHOLDER;
+  const ar = AR_PLACEHOLDER;
+  const totalLiquid = TOTAL_PLACEHOLDER;
+  const data = DATA_PLACEHOLDER;
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="Cash" value={'$' + (cash / 1000).toFixed(0) + 'K'} subtitle="Bank accounts" />
+        <StatCard label="Receivables" value={'$' + (ar / 1000).toFixed(0) + 'K'} subtitle="Accounts receivable" />
+        <StatCard label="Total Liquid" value={'$' + (totalLiquid / 1000).toFixed(0) + 'K'} subtitle="Cash + AR" />
+      </MetricRow>
+      <div style={{ height: 220, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <Legend wrapperStyle={{ fontSize: 11, color: theme.inkMuted }} />
+            <ReferenceLine y={0} stroke={theme.inkMuted} strokeWidth={1} strokeDasharray="3 3" />
+            <Bar dataKey="operating" name="Operating" fill={theme.accent} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="financing" name="Financing" fill={theme.danger} radius={[4, 4, 0, 0]} />
+            <Line type="monotone" dataKey="net" name="Net" stroke={theme.inkMuted} strokeWidth={2} dot={{ r: 3, fill: theme.inkMuted }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Source: QuickBooks Balance Sheet + Cash Flow via Kiingo MCP</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                initial_values: r#"{"cash":283681,"ar":187987,"totalLiquid":471668,"cashFlowByMonth":[{"month":"Sep 25","operating":66097,"financing":-63000,"net":3097},{"month":"Oct 25","operating":76407,"financing":0,"net":76407},{"month":"Nov 25","operating":97239,"financing":0,"net":97239},{"month":"Dec 25","operating":92473,"financing":-233037,"net":-140564},{"month":"Jan 26","operating":5786,"financing":0,"net":5786},{"month":"Feb 26","operating":33695,"financing":0,"net":33695}]}"#,
+                initial_html: r##"(() => {
+  const cash = 283681;
+  const ar = 187987;
+  const totalLiquid = 471668;
+  const data = [{"month":"Sep 25","operating":66097,"financing":-63000,"net":3097},{"month":"Oct 25","operating":76407,"financing":0,"net":76407},{"month":"Nov 25","operating":97239,"financing":0,"net":97239},{"month":"Dec 25","operating":92473,"financing":-233037,"net":-140564},{"month":"Jan 26","operating":5786,"financing":0,"net":5786},{"month":"Feb 26","operating":33695,"financing":0,"net":33695}];
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="Cash" value={'$' + (cash / 1000).toFixed(0) + 'K'} subtitle="Bank accounts" />
+        <StatCard label="Receivables" value={'$' + (ar / 1000).toFixed(0) + 'K'} subtitle="Accounts receivable" />
+        <StatCard label="Total Liquid" value={'$' + (totalLiquid / 1000).toFixed(0) + 'K'} subtitle="Cash + AR" />
+      </MetricRow>
+      <div style={{ height: 220, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
+            <Legend wrapperStyle={{ fontSize: 11, color: theme.inkMuted }} />
+            <ReferenceLine y={0} stroke={theme.inkMuted} strokeWidth={1} strokeDasharray="3 3" />
+            <Bar dataKey="operating" name="Operating" fill={theme.accent} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="financing" name="Financing" fill={theme.danger} radius={[4, 4, 0, 0]} />
+            <Line type="monotone" dataKey="net" name="Net" stroke={theme.inkMuted} strokeWidth={2} dot={{ r: 3, fill: theme.inkMuted }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <MetricNote>Source: QuickBooks Balance Sheet + Cash Flow via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>
+    </MetricSection>
+  );
+})()"##,
+                ttl: 86400,
+                layout_hint: "full",
+                grid_w: 12,
+                grid_h: 7,
+                grid_y: 27,
+            },
+        ];
+
+        for (pos, seed) in seeds.iter().enumerate() {
+            let metric_id = Uuid::new_v4().to_string();
+            let snapshot_id = Uuid::new_v4().to_string();
+            let binding_id = Uuid::new_v4().to_string();
+
+            conn.execute(
+                "INSERT INTO metric_definitions (id, name, slug, instructions, template_html,
+                 ttl_seconds, provider, enabled, proactive, metadata_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                params![
+                    metric_id,
+                    seed.name,
+                    seed.slug,
+                    seed.instructions,
+                    seed.template_jsx,
+                    seed.ttl,
+                    "claude",
+                    1,    // enabled
+                    0,    // not proactive
+                    "{}",
+                    now,
+                ],
+            )?;
+
+            conn.execute(
+                "INSERT INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at)
+                 VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?5)",
+                params![
+                    snapshot_id,
+                    metric_id,
+                    seed.initial_values,
+                    seed.initial_html,
+                    now,
+                ],
+            )?;
+
+            conn.execute(
+                "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
+                 VALUES (?1, 'revenue', ?2, ?3, ?4, -1, ?5, ?6, ?7)",
+                params![
+                    binding_id,
+                    metric_id,
+                    pos as i32,
+                    seed.layout_hint,
+                    seed.grid_y,
+                    seed.grid_w,
+                    seed.grid_h,
+                ],
+            )?;
+        }
 
         Ok(())
     }

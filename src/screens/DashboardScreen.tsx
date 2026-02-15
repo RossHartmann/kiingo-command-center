@@ -20,6 +20,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   const [editMode, setEditMode] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [compact, setCompact] = useState(false);
 
   useEffect(() => {
     void actions.loadScreenMetrics(screenId);
@@ -170,9 +171,19 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     <div className={`screen dashboard-screen${editMode ? " dashboard-editing" : ""}`}>
       <div className="dashboard-toolbar">
         {editMode && (
-          <button type="button" onClick={() => setDrawerOpen(!drawerOpen)}>
-            + Add Widget
-          </button>
+          <>
+            <button type="button" onClick={() => setDrawerOpen(!drawerOpen)}>
+              + Add Widget
+            </button>
+            <button
+              type="button"
+              className={compact ? "active" : ""}
+              onClick={() => setCompact(!compact)}
+              title={compact ? "Switch to free-form layout" : "Switch to vertical compaction"}
+            >
+              {compact ? "Compact" : "Free-form"}
+            </button>
+          </>
         )}
         <button
           type="button"
@@ -190,6 +201,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
       <MetricGrid
         views={views}
         editMode={editMode}
+        compact={compact}
         onLayoutChange={handleLayoutChange}
         onRemoveWidget={editMode ? handleRemoveWidget : undefined}
         onDropMetric={editMode ? handleDropMetric : undefined}
