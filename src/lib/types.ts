@@ -692,6 +692,11 @@ export interface SetTaskStatusRequest {
   reason?: string;
 }
 
+export interface TaskReopenRequest {
+  expectedRevision: number;
+  status?: "todo" | "doing" | "blocked";
+}
+
 export interface ArchiveAtomRequest {
   expectedRevision: number;
   reason?: string;

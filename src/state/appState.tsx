@@ -167,7 +167,7 @@ type Action =
   | { type: "set_pending_chat_context"; context: { systemPrompt: string; initialMessage: string } | null };
 
 const initialState: State = {
-  selectedScreen: "dashboard",
+  selectedScreen: "chat",
   runs: [],
   runDetails: {},
   conversations: [],

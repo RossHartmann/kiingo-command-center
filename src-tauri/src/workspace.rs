@@ -1,7 +1,7 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    ArchiveAtomRequest, AtomFacets, AtomRecord, AtomRelations, BodyPatch, BooleanResponse, CaptureSource,
-    ClassificationResult, ClassificationSource, CommitmentLevel, CreateAtomRequest, EncryptionScope, FacetKind,
+    ArchiveAtomRequest, AtomFacets, AtomRecord, AtomRelations, BodyPatch, BooleanResponse,
+    ClassificationResult, ClassificationSource, CreateAtomRequest, EncryptionScope, FacetKind,
     GovernanceMeta, ListAtomsRequest, ListEventsRequest, NotepadFilter, NotepadSort, NotepadViewDefinition,
     NotepadViewDefinitionInput, PageResponse, SaveNotepadViewRequest, SensitivityLevel, SetTaskStatusRequest,
     TaskFacet, TaskReopenRequest, TaskStatus, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord,
@@ -176,7 +176,7 @@ pub fn atom_update(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> Ap
     atom.revision += 1;
     atom.updated_at = Utc::now();
 
-    write_atom(root, previous_status, &atom)?;
+    write_atom(root, Some(previous_status), &atom)?;
     append_event(
         root,
         build_event(
@@ -206,7 +206,7 @@ pub fn atom_archive(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -> 
     atom.revision += 1;
     atom.updated_at = now;
 
-    write_atom(root, previous_status, &atom)?;
+    write_atom(root, Some(previous_status), &atom)?;
     append_event(
         root,
         build_event(
@@ -238,7 +238,7 @@ pub fn atom_unarchive(root: &Path, atom_id: &str, expected_revision: i64) -> App
     atom.revision += 1;
     atom.updated_at = now;
 
-    write_atom(root, previous_status, &atom)?;
+    write_atom(root, Some(previous_status), &atom)?;
     append_event(root, build_event("atom.updated", Some(&atom.id), json!({"atom": atom.clone()})))?;
 
     Ok(atom)
@@ -273,7 +273,7 @@ pub fn task_status_set(root: &Path, atom_id: &str, request: SetTaskStatusRequest
     atom.revision += 1;
     atom.updated_at = now;
 
-    write_atom(root, previous_status, &atom)?;
+    write_atom(root, Some(previous_status), &atom)?;
     append_event(
         root,
         build_event(
@@ -516,7 +516,7 @@ pub fn atom_classify(
 
     atom.revision += 1;
     atom.updated_at = Utc::now();
-    write_atom(root, previous_status, &atom)?;
+    write_atom(root, Some(previous_status), &atom)?;
 
     append_event(
         root,

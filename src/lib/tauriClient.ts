@@ -1050,9 +1050,11 @@ export async function atomCreate(payload: CreateAtomRequest): Promise<AtomRecord
   }
   const now = nowIso();
   const result = classifyRawText(payload.rawText);
-  const facets = payload.initialFacets?.length
-    ? [...payload.initialFacets]
-    : [result.primaryFacet === "task" ? "task" : result.primaryFacet];
+  const fallbackFacet: "task" | "note" | "meta" =
+    result.primaryFacet === "task" || result.primaryFacet === "note" || result.primaryFacet === "meta"
+      ? result.primaryFacet
+      : "task";
+  const facets: AtomRecord["facets"] = payload.initialFacets?.length ? [...payload.initialFacets] : [fallbackFacet];
   const atom: AtomRecord = {
     id: atomId(),
     schemaVersion: 1,

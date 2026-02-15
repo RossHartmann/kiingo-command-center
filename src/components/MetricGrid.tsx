@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useRef, useEffect } from "react";
+import { useMemo, useCallback, useRef, useEffect, type RefObject } from "react";
 import {
   ResponsiveGridLayout,
   noCompactor,
@@ -155,7 +155,7 @@ export function MetricGrid({ views, editMode, compact, onLayoutChange, onRemoveW
     const container = containerRef.current;
     if (!container || !editMode) return;
 
-    const handleMouseUp = (e: MouseEvent) => {
+    const handleMouseUp = () => {
       // Check if there's a metric being dragged (set by sidebar)
       const metricId = (window as any).__draggingMetricId as string | undefined;
       if (!metricId) return;
@@ -175,9 +175,10 @@ export function MetricGrid({ views, editMode, compact, onLayoutChange, onRemoveW
 
   // Grid needs enough height to be a valid drop target even when empty
   const gridStyle = editMode ? { minHeight: "calc(100vh - 100px)" } : undefined;
+  const rootRef = containerRef as RefObject<HTMLDivElement>;
 
   return (
-    <div ref={containerRef}>
+    <div ref={rootRef}>
       {mounted && (
         <ResponsiveGridLayout
           width={width}

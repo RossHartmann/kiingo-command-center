@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricGrid } from "../components/MetricGrid";
-import type { MetricDefinition, MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
+import type { MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
 
 interface DashboardScreenProps {
   screenId: string;
