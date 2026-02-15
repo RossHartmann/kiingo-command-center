@@ -41,21 +41,37 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveWidget, on
     });
   }, [views]);
 
+  // Keep refs to current values so effects/callbacks can access them without re-triggering
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+
+  // Stable content key: only changes when bindings or snapshots change, NOT on layout updates
+  const contentKey = useMemo(() => {
+    return views
+      .map((v) => `${v.binding.id}:${v.latestSnapshot?.id ?? "none"}`)
+      .join(",");
+  }, [views]);
+
   // Auto-size: after content renders, detect overflow and bump grid height
   useEffect(() => {
-    if (!containerRef.current || !mounted || !onLayoutChange) return;
-
-    // Build a content-key per binding so we only auto-size once per content change
-    const contentKeys: Record<string, string> = {};
-    for (const v of views) {
-      const snapId = v.latestSnapshot?.id ?? "none";
-      contentKeys[v.binding.id] = snapId;
-    }
+    if (!containerRef.current || !mounted || !onLayoutChangeRef.current) return;
 
     // Wait for react-live to finish rendering
     const timer = setTimeout(() => {
       const container = containerRef.current;
-      if (!container) return;
+      const curLayout = layoutRef.current;
+      const curOnLayoutChange = onLayoutChangeRef.current;
+      if (!container || !curOnLayoutChange) return;
+
+      // Build content-keys from current views
+      const contentKeys: Record<string, string> = {};
+      for (const v of viewsRef.current) {
+        contentKeys[v.binding.id] = v.latestSnapshot?.id ?? "none";
+      }
 
       const gridItems = container.querySelectorAll<HTMLElement>("[data-binding-id]");
       const heightUpdates: Record<string, number> = {};
@@ -74,7 +90,7 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveWidget, on
         // Check if content overflows the card body
         if (body.scrollHeight > body.clientHeight + 5) {
           const overflow = body.scrollHeight - body.clientHeight;
-          const currentItem = layout.find((l) => l.i === bindingId);
+          const currentItem = curLayout.find((l) => l.i === bindingId);
           if (!currentItem) return;
 
           const additionalRows = Math.ceil(overflow / (ROW_HEIGHT + MARGIN));
@@ -86,23 +102,34 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveWidget, on
       });
 
       if (Object.keys(heightUpdates).length > 0) {
-        const items: ScreenMetricLayoutItem[] = layout.map((l) => ({
+        const items: ScreenMetricLayoutItem[] = curLayout.map((l) => ({
           bindingId: l.i,
           gridX: l.x,
           gridY: l.y,
           gridW: l.w,
           gridH: heightUpdates[l.i] ?? l.h,
         }));
-        onLayoutChange(items);
+        curOnLayoutChange(items);
       }
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [mounted, views, layout, onLayoutChange]);
+  }, [mounted, contentKey]);
 
   const handleLayoutChange = useCallback(
     (newLayout: Layout) => {
       if (!onLayoutChange || !editMode) return;
+
+      // Skip if layout values haven't actually changed (prevents feedback loops)
+      const cur = layoutRef.current;
+      const unchanged =
+        newLayout.length === cur.length &&
+        newLayout.every((l) => {
+          const c = cur.find((item) => item.i === l.i);
+          return c && c.x === l.x && c.y === l.y && c.w === l.w && c.h === l.h;
+        });
+      if (unchanged) return;
+
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         const items: ScreenMetricLayoutItem[] = newLayout.map((l) => ({

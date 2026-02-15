@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { LiveProvider, LivePreview, LiveError } from "react-live";
 import * as Recharts from "recharts";
 import { useAppActions } from "../state/appState";
@@ -32,6 +32,18 @@ const LIVE_SCOPE = {
   MetricNote,
   theme: METRIC_THEME,
 };
+
+// Memoized wrapper: only re-renders when the code string changes.
+// This prevents react-live from re-executing the code on every parent re-render,
+// which would create new data arrays and cause Recharts to restart its animations.
+const MemoizedLiveChart = React.memo(function MemoizedLiveChart({ code }: { code: string }) {
+  return (
+    <LiveProvider code={code} scope={LIVE_SCOPE} noInline={false}>
+      <LivePreview />
+      <LiveError className="metric-live-error" />
+    </LiveProvider>
+  );
+});
 
 interface MetricCardProps {
   view: ScreenMetricView;
@@ -119,10 +131,7 @@ export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
         </span>
       </div>
       <div className="metric-card-body">
-        <LiveProvider code={latestSnapshot.renderedHtml} scope={LIVE_SCOPE} noInline={false}>
-          <LivePreview />
-          <LiveError className="metric-live-error" />
-        </LiveProvider>
+        <MemoizedLiveChart code={latestSnapshot.renderedHtml} />
       </div>
     </div>
   );

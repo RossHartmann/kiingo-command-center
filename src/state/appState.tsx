@@ -142,7 +142,8 @@ type Action =
   | { type: "set_metric_definitions"; definitions: MetricDefinition[] }
   | { type: "set_screen_metric_views"; screenId: string; views: ScreenMetricView[] }
   | { type: "set_metric_refresh"; metricId: string; snapshotId: string }
-  | { type: "clear_metric_refresh"; metricId: string };
+  | { type: "clear_metric_refresh"; metricId: string }
+  | { type: "patch_screen_metric_layouts"; screenId: string; layouts: ScreenMetricLayoutItem[] };
 
 const initialState: State = {
   selectedScreen: "dashboard",
@@ -258,6 +259,30 @@ function reducer(state: State, action: Action): State {
     case "clear_metric_refresh": {
       const { [action.metricId]: _, ...rest } = state.metricRefreshes;
       return { ...state, metricRefreshes: rest };
+    }
+    case "patch_screen_metric_layouts": {
+      const existing = state.screenMetricViews[action.screenId];
+      if (!existing) return state;
+      const updated = existing.map((v) => {
+        const layout = action.layouts.find((l) => l.bindingId === v.binding.id);
+        if (!layout) return v;
+        if (
+          v.binding.gridX === layout.gridX &&
+          v.binding.gridY === layout.gridY &&
+          v.binding.gridW === layout.gridW &&
+          v.binding.gridH === layout.gridH
+        ) return v; // no change — keep same reference
+        return {
+          ...v,
+          binding: { ...v.binding, gridX: layout.gridX, gridY: layout.gridY, gridW: layout.gridW, gridH: layout.gridH }
+        };
+      });
+      // If no view actually changed, keep the same array reference
+      if (updated.every((v, i) => v === existing[i])) return state;
+      return {
+        ...state,
+        screenMetricViews: { ...state.screenMetricViews, [action.screenId]: updated }
+      };
     }
     default:
       return state;
@@ -611,8 +636,10 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       },
       updateScreenMetricLayout: async (screenId, layouts) => {
         await updateScreenMetricLayout({ screenId, layouts });
-        const views = await getScreenMetrics(screenId);
-        safeDispatch({ type: "set_screen_metric_views", screenId, views });
+        // Patch layout positions locally — do NOT reload views from backend.
+        // Reloading would pick up side-effect snapshot changes and trigger
+        // cascading stale-refresh → auto-size → layout-save loops.
+        safeDispatch({ type: "patch_screen_metric_layouts", screenId, layouts });
       }
     };
   }, [refreshAll, safeDispatch, state.selectedConversationByProvider]);

@@ -34,7 +34,11 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   useEffect(() => {
     if (views.length === 0) return;
     const staleMetrics = views.filter((v) => v.isStale && !v.refreshInProgress);
+    // Deduplicate by metricId — multiple widgets of the same metric should only trigger one refresh
+    const seen = new Set<string>();
     for (const view of staleMetrics) {
+      if (seen.has(view.definition.id)) continue;
+      seen.add(view.definition.id);
       void actions.refreshMetric(view.definition.id).catch(() => {});
     }
   }, [views, actions]);
