@@ -16,7 +16,7 @@ use crate::models::{
     Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveMetricDefinitionPayload,
     SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
     SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
-    UpdateScreenMetricLayoutPayload, WorkspaceGrant,
+    UnbindMetricResponse, UpdateScreenMetricLayoutPayload, WorkspaceGrant,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -346,10 +346,9 @@ fn update_screen_metric_layout(
 #[tauri::command]
 fn unbind_metric_from_screen(
     state: tauri::State<'_, AppState>,
-    screen_id: String,
-    metric_id: String,
-) -> Result<BooleanResponse, String> {
-    state.runner.unbind_metric_from_screen(&screen_id, &metric_id).map_err(to_client_error)
+    binding_id: String,
+) -> Result<UnbindMetricResponse, String> {
+    state.runner.unbind_metric_from_screen(&binding_id).map_err(to_client_error)
 }
 
 #[tauri::command]

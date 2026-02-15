@@ -409,7 +409,7 @@ export interface UpdateScreenMetricLayoutPayload {
 }
 
 export interface ScreenMetricLayoutItem {
-  metricId: string;
+  bindingId: string;
   gridX: number;
   gridY: number;
   gridW: number;

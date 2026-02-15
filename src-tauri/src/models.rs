@@ -662,7 +662,7 @@ pub struct UpdateScreenMetricLayoutPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenMetricLayoutItem {
-    pub metric_id: String,
+    pub binding_id: String,
     pub grid_x: i32,
     pub grid_y: i32,
     pub grid_w: i32,
@@ -677,6 +677,13 @@ pub struct ScreenMetricView {
     pub latest_snapshot: Option<MetricSnapshot>,
     pub is_stale: bool,
     pub refresh_in_progress: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnbindMetricResponse {
+    pub success: bool,
+    pub screen_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1265,11 +1265,6 @@ body.metric-dragging {
   border-color: var(--accent);
 }
 
-.metric-library-card.already-added {
-  opacity: 0.65;
-  cursor: default;
-}
-
 .metric-library-card-info {
   flex: 1;
   min-width: 0;

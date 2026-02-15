@@ -708,19 +708,6 @@ export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Pr
   if (IS_TAURI) {
     return tauriInvoke("bind_metric_to_screen", { payload });
   }
-  const existing = mockStore.screenMetrics.find(
-    (b) => b.screenId === payload.screenId && b.metricId === payload.metricId
-  );
-  if (existing) {
-    existing.position = payload.position ?? existing.position;
-    existing.layoutHint = payload.layoutHint ?? existing.layoutHint;
-    existing.gridX = payload.gridX ?? existing.gridX;
-    existing.gridY = payload.gridY ?? existing.gridY;
-    existing.gridW = payload.gridW ?? existing.gridW;
-    existing.gridH = payload.gridH ?? existing.gridH;
-    persistMockStore();
-    return existing;
-  }
   const binding: ScreenMetricBinding = {
     id: uid("sm"),
     screenId: payload.screenId,
@@ -737,26 +724,25 @@ export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Pr
   return binding;
 }
 
-export async function unbindMetricFromScreen(screenId: string, metricId: string): Promise<{ success: boolean }> {
+export async function unbindMetricFromScreen(bindingId: string): Promise<{ success: boolean; screenId?: string }> {
   if (IS_TAURI) {
-    return tauriInvoke("unbind_metric_from_screen", { screenId, metricId });
+    return tauriInvoke("unbind_metric_from_screen", { bindingId });
   }
-  const idx = mockStore.screenMetrics.findIndex(
-    (b) => b.screenId === screenId && b.metricId === metricId
-  );
+  const idx = mockStore.screenMetrics.findIndex((b) => b.id === bindingId);
   if (idx === -1) return { success: false };
+  const screenId = mockStore.screenMetrics[idx].screenId;
   mockStore.screenMetrics.splice(idx, 1);
   persistMockStore();
-  return { success: true };
+  return { success: true, screenId };
 }
 
-export async function reorderScreenMetrics(screenId: string, metricIds: string[]): Promise<{ success: boolean }> {
+export async function reorderScreenMetrics(screenId: string, bindingIds: string[]): Promise<{ success: boolean }> {
   if (IS_TAURI) {
-    return tauriInvoke("reorder_screen_metrics", { screenId, metricIds });
+    return tauriInvoke("reorder_screen_metrics", { screenId, metricIds: bindingIds });
   }
-  metricIds.forEach((id, i) => {
+  bindingIds.forEach((id, i) => {
     const binding = mockStore.screenMetrics.find(
-      (b) => b.screenId === screenId && b.metricId === id
+      (b) => b.screenId === screenId && b.id === id
     );
     if (binding) binding.position = i;
   });
@@ -770,7 +756,7 @@ export async function updateScreenMetricLayout(payload: UpdateScreenMetricLayout
   }
   for (const item of payload.layouts) {
     const binding = mockStore.screenMetrics.find(
-      (b) => b.screenId === payload.screenId && b.metricId === item.metricId
+      (b) => b.screenId === payload.screenId && b.id === item.bindingId
     );
     if (binding) {
       binding.gridX = item.gridX;

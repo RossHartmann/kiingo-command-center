@@ -307,7 +307,7 @@ interface Actions {
   refreshScreenMetrics: (screenId: string) => Promise<void>;
   refreshMetric: (metricId: string) => Promise<void>;
   bindMetricToScreen: (payload: BindMetricToScreenPayload) => Promise<void>;
-  unbindMetricFromScreen: (screenId: string, metricId: string) => Promise<void>;
+  unbindMetricFromScreen: (screenId: string, bindingId: string) => Promise<void>;
   reorderScreenMetrics: (screenId: string, metricIds: string[]) => Promise<void>;
   updateScreenMetricLayout: (screenId: string, layouts: ScreenMetricLayoutItem[]) => Promise<void>;
 }
@@ -599,8 +599,8 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         const views = await getScreenMetrics(payload.screenId);
         safeDispatch({ type: "set_screen_metric_views", screenId: payload.screenId, views });
       },
-      unbindMetricFromScreen: async (screenId, metricId) => {
-        await unbindMetricFromScreen(screenId, metricId);
+      unbindMetricFromScreen: async (screenId, bindingId) => {
+        await unbindMetricFromScreen(bindingId);
         const views = await getScreenMetrics(screenId);
         safeDispatch({ type: "set_screen_metric_views", screenId, views });
       },

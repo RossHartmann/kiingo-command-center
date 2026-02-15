@@ -46,14 +46,13 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     [actions, screenId]
   );
 
-  const handleRemoveMetric = useCallback(
-    (metricId: string) => {
-      void actions.unbindMetricFromScreen(screenId, metricId);
+  const handleRemoveWidget = useCallback(
+    (bindingId: string) => {
+      void actions.unbindMetricFromScreen(screenId, bindingId);
     },
     [actions, screenId]
   );
 
-  const boundMetricIds = new Set(views.map((v) => v.definition.id));
   const allMetrics = state.metricDefinitions.filter((d) => !d.archivedAt);
   const filtered = allMetrics.filter(
     (m) =>
@@ -62,7 +61,6 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   );
 
   const handleAddMetric = async (metricId: string, hint: MetricLayoutHint = "card") => {
-    if (boundMetricIds.has(metricId)) return;
     const { gridW, gridH } = GRID_DEFAULTS[hint] ?? GRID_DEFAULTS.card;
     await actions.bindMetricToScreen({
       screenId,
@@ -76,11 +74,10 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
 
   const handleDropMetric = useCallback(
     (metricId: string) => {
-      if (boundMetricIds.has(metricId)) return;
       void handleAddMetric(metricId);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boundMetricIds, screenId, actions, views.length]
+    [screenId, actions, views.length]
   );
 
   // Mouse-based drag from sidebar cards (bypasses HTML5 DnD issues in Tauri WebKit)
@@ -190,7 +187,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
         views={views}
         editMode={editMode}
         onLayoutChange={handleLayoutChange}
-        onRemoveMetric={editMode ? handleRemoveMetric : undefined}
+        onRemoveWidget={editMode ? handleRemoveWidget : undefined}
         onDropMetric={editMode ? handleDropMetric : undefined}
       />
 
@@ -217,14 +214,12 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
             {filtered.length === 0 && (
               <p className="metric-drawer-empty">No metrics found</p>
             )}
-            {filtered.map((m) => {
-              const added = boundMetricIds.has(m.id);
-              return (
+            {filtered.map((m) => (
                 <div
                   key={m.id}
-                  className={`metric-library-card${added ? " already-added" : ""}`}
-                  onMouseDown={added ? undefined : (e) => handleMouseDownDrag(e, m.id, m.name)}
-                  onClick={added ? undefined : () => handleAddMetric(m.id)}
+                  className="metric-library-card"
+                  onMouseDown={(e) => handleMouseDownDrag(e, m.id, m.name)}
+                  onClick={() => handleAddMetric(m.id)}
                 >
                   <div className="metric-library-card-info">
                     <strong>{m.name}</strong>
@@ -240,21 +235,9 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
                       {m.ttlSeconds ? ` \u00b7 ${formatTtl(m.ttlSeconds)}` : ""}
                     </span>
                   </div>
-                  {added ? (
-                    <button
-                      type="button"
-                      className="metric-library-btn added"
-                      onClick={(e) => { e.stopPropagation(); handleRemoveMetric(m.id); }}
-                      title="Remove from dashboard"
-                    >
-                      {"\u2713"}
-                    </button>
-                  ) : (
-                    <span className="metric-library-btn-hint">+</span>
-                  )}
+                  <span className="metric-library-btn-hint">+</span>
                 </div>
-              );
-            })}
+            ))}
           </div>
         </aside>
       )}

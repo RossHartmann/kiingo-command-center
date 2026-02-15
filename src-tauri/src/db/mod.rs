@@ -1360,8 +1360,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(screen_id, metric_id) DO UPDATE SET position=excluded.position, layout_hint=excluded.layout_hint, grid_x=excluded.grid_x, grid_y=excluded.grid_y, grid_w=excluded.grid_w, grid_h=excluded.grid_h",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![id, payload.screen_id, payload.metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h],
         )?;
         Ok(ScreenMetricBinding {
@@ -1377,13 +1376,20 @@ impl Database {
         })
     }
 
-    pub fn unbind_metric_from_screen(&self, screen_id: &str, metric_id: &str) -> AppResult<bool> {
+    pub fn unbind_metric_from_screen(&self, binding_id: &str) -> AppResult<Option<String>> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
-        let changed = conn.execute(
-            "DELETE FROM screen_metrics WHERE screen_id = ?1 AND metric_id = ?2",
-            params![screen_id, metric_id],
+        let screen_id: Option<String> = conn
+            .query_row(
+                "SELECT screen_id FROM screen_metrics WHERE id = ?1",
+                [binding_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        conn.execute(
+            "DELETE FROM screen_metrics WHERE id = ?1",
+            [binding_id],
         )?;
-        Ok(changed > 0)
+        Ok(screen_id)
     }
 
     pub fn list_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<ScreenMetricView>> {
@@ -1482,12 +1488,12 @@ impl Database {
         Ok(views)
     }
 
-    pub fn reorder_screen_metrics(&self, screen_id: &str, metric_ids: &[String]) -> AppResult<()> {
+    pub fn reorder_screen_metrics(&self, screen_id: &str, binding_ids: &[String]) -> AppResult<()> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
-        for (i, metric_id) in metric_ids.iter().enumerate() {
+        for (i, binding_id) in binding_ids.iter().enumerate() {
             conn.execute(
-                "UPDATE screen_metrics SET position = ?1 WHERE screen_id = ?2 AND metric_id = ?3",
-                params![i as i32, screen_id, metric_id],
+                "UPDATE screen_metrics SET position = ?1 WHERE id = ?2 AND screen_id = ?3",
+                params![i as i32, binding_id, screen_id],
             )?;
         }
         Ok(())
@@ -1497,8 +1503,8 @@ impl Database {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         for item in layouts {
             conn.execute(
-                "UPDATE screen_metrics SET grid_x = ?1, grid_y = ?2, grid_w = ?3, grid_h = ?4 WHERE screen_id = ?5 AND metric_id = ?6",
-                params![item.grid_x, item.grid_y, item.grid_w, item.grid_h, screen_id, item.metric_id],
+                "UPDATE screen_metrics SET grid_x = ?1, grid_y = ?2, grid_w = ?3, grid_h = ?4 WHERE id = ?5 AND screen_id = ?6",
+                params![item.grid_x, item.grid_y, item.grid_w, item.grid_h, item.binding_id, screen_id],
             )?;
         }
         Ok(())
@@ -1895,6 +1901,41 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
                 )?;
                 conn.execute(
                     "INSERT INTO settings (key, value_json, updated_at) VALUES ('migration:grid_rowheight_v2', '\"done\"', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                    params![Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+
+        // Drop UNIQUE(screen_id, metric_id) to allow multiple widgets of the same metric
+        {
+            let migrated: i64 = conn.query_row(
+                "SELECT COUNT(1) FROM settings WHERE key = 'migration:screen_metrics_multi_widget'",
+                [],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            if migrated == 0 {
+                conn.execute_batch(
+                    "CREATE TABLE screen_metrics_new (
+                       id TEXT PRIMARY KEY,
+                       screen_id TEXT NOT NULL,
+                       metric_id TEXT NOT NULL,
+                       position INTEGER DEFAULT 0,
+                       layout_hint TEXT DEFAULT 'card',
+                       grid_x INTEGER DEFAULT -1,
+                       grid_y INTEGER DEFAULT -1,
+                       grid_w INTEGER DEFAULT 4,
+                       grid_h INTEGER DEFAULT 6,
+                       FOREIGN KEY(metric_id) REFERENCES metric_definitions(id) ON DELETE CASCADE
+                     );
+                     INSERT INTO screen_metrics_new SELECT id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h FROM screen_metrics;
+                     DROP TABLE screen_metrics;
+                     ALTER TABLE screen_metrics_new RENAME TO screen_metrics;
+                     CREATE INDEX IF NOT EXISTS idx_screen_metrics_screen ON screen_metrics(screen_id, position);
+                     CREATE INDEX IF NOT EXISTS idx_screen_metrics_metric ON screen_metrics(metric_id);",
+                )?;
+                conn.execute(
+                    "INSERT INTO settings (key, value_json, updated_at) VALUES ('migration:screen_metrics_multi_widget', '\"done\"', ?1)
                      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
                     params![Utc::now().to_rfc3339()],
                 )?;

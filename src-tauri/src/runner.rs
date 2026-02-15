@@ -21,6 +21,7 @@ use crate::models::{
     MetricSnapshot, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
     ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
+    UnbindMetricResponse,
     StartRunPayload, StartRunResponse, StreamEnvelope, WorkspaceGrant,
 };
 use crate::policy::PolicyEngine;
@@ -2125,9 +2126,12 @@ impl RunnerCore {
         self.db.bind_metric_to_screen(&payload)
     }
 
-    pub fn unbind_metric_from_screen(&self, screen_id: &str, metric_id: &str) -> AppResult<BooleanResponse> {
-        let success = self.db.unbind_metric_from_screen(screen_id, metric_id)?;
-        Ok(BooleanResponse { success })
+    pub fn unbind_metric_from_screen(&self, binding_id: &str) -> AppResult<UnbindMetricResponse> {
+        let screen_id = self.db.unbind_metric_from_screen(binding_id)?;
+        Ok(UnbindMetricResponse {
+            success: screen_id.is_some(),
+            screen_id,
+        })
     }
 
     pub fn reorder_screen_metrics(&self, screen_id: &str, metric_ids: &[String]) -> AppResult<BooleanResponse> {

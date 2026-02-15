@@ -16,11 +16,11 @@ interface MetricGridProps {
   views: ScreenMetricView[];
   editMode: boolean;
   onLayoutChange?: (layouts: ScreenMetricLayoutItem[]) => void;
-  onRemoveMetric?: (metricId: string) => void;
+  onRemoveWidget?: (bindingId: string) => void;
   onDropMetric?: (metricId: string) => void;
 }
 
-export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, onDropMetric }: MetricGridProps): JSX.Element {
+export function MetricGrid({ views, editMode, onLayoutChange, onRemoveWidget, onDropMetric }: MetricGridProps): JSX.Element {
   const { width, containerRef, mounted } = useContainerWidth();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track which snapshot content we've already auto-sized to avoid loops
@@ -30,7 +30,7 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, on
     return views.map((view, index) => {
       const b = view.binding;
       return {
-        i: b.metricId,
+        i: b.id,
         x: b.gridX >= 0 ? b.gridX : (index * 4) % 12,
         y: b.gridY >= 0 ? b.gridY : Math.floor((index * 4) / 12) * 3,
         w: b.gridW,
@@ -45,11 +45,11 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, on
   useEffect(() => {
     if (!containerRef.current || !mounted || !onLayoutChange) return;
 
-    // Build a content-key per metric so we only auto-size once per content change
+    // Build a content-key per binding so we only auto-size once per content change
     const contentKeys: Record<string, string> = {};
     for (const v of views) {
       const snapId = v.latestSnapshot?.id ?? "none";
-      contentKeys[v.binding.metricId] = snapId;
+      contentKeys[v.binding.id] = snapId;
     }
 
     // Wait for react-live to finish rendering
@@ -57,16 +57,16 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, on
       const container = containerRef.current;
       if (!container) return;
 
-      const gridItems = container.querySelectorAll<HTMLElement>("[data-metric-id]");
+      const gridItems = container.querySelectorAll<HTMLElement>("[data-binding-id]");
       const heightUpdates: Record<string, number> = {};
 
       gridItems.forEach((el) => {
-        const metricId = el.dataset.metricId;
-        if (!metricId) return;
+        const bindingId = el.dataset.bindingId;
+        if (!bindingId) return;
 
         // Skip if we already auto-sized for this exact content
-        const key = contentKeys[metricId];
-        if (key && autoSizedRef.current[metricId] === key) return;
+        const key = contentKeys[bindingId];
+        if (key && autoSizedRef.current[bindingId] === key) return;
 
         const body = el.querySelector<HTMLElement>(".metric-card-body");
         if (!body) return;
@@ -74,20 +74,20 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, on
         // Check if content overflows the card body
         if (body.scrollHeight > body.clientHeight + 5) {
           const overflow = body.scrollHeight - body.clientHeight;
-          const currentItem = layout.find((l) => l.i === metricId);
+          const currentItem = layout.find((l) => l.i === bindingId);
           if (!currentItem) return;
 
           const additionalRows = Math.ceil(overflow / (ROW_HEIGHT + MARGIN));
-          heightUpdates[metricId] = currentItem.h + additionalRows;
+          heightUpdates[bindingId] = currentItem.h + additionalRows;
         }
 
         // Mark as auto-sized for this content
-        if (key) autoSizedRef.current[metricId] = key;
+        if (key) autoSizedRef.current[bindingId] = key;
       });
 
       if (Object.keys(heightUpdates).length > 0) {
         const items: ScreenMetricLayoutItem[] = layout.map((l) => ({
-          metricId: l.i,
+          bindingId: l.i,
           gridX: l.x,
           gridY: l.y,
           gridW: l.w,
@@ -106,7 +106,7 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, on
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         const items: ScreenMetricLayoutItem[] = newLayout.map((l) => ({
-          metricId: l.i,
+          bindingId: l.i,
           gridX: l.x,
           gridY: l.y,
           gridW: l.w,
@@ -173,10 +173,10 @@ export function MetricGrid({ views, editMode, onLayoutChange, onRemoveMetric, on
           onLayoutChange={handleLayoutChange}
         >
           {views.map((view) => (
-            <div key={view.binding.metricId} data-metric-id={view.binding.metricId}>
+            <div key={view.binding.id} data-binding-id={view.binding.id}>
               <MetricCard
                 view={view}
-                onRemove={editMode && onRemoveMetric ? () => onRemoveMetric(view.binding.metricId) : undefined}
+                onRemove={editMode && onRemoveWidget ? () => onRemoveWidget(view.binding.id) : undefined}
               />
             </div>
           ))}
