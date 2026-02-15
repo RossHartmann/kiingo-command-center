@@ -87,6 +87,13 @@ export const NAVIGATION: NavGroup[] = [
     ]
   },
   {
+    id: "workspace",
+    label: "The Workspace",
+    icon: "\u270E",
+    defaultExpanded: true,
+    items: [{ id: "tasks", label: "Tasks", icon: "\u2611" }]
+  },
+  {
     id: "ai-agent",
     label: "AI Agent",
     icon: "\u2726",
@@ -104,7 +111,8 @@ export const NAVIGATION: NavGroup[] = [
     label: "CEO Training Ground",
     icon: "\u2691",
     items: [
-      { id: "ceo-training", label: "Training Ground", icon: "\u2691" }
+      { id: "ceo-training", label: "Training Ground", icon: "\u2691" },
+      { id: "ceo-principles", label: "Principles", icon: "\u2696" }
     ]
   },
   {
@@ -155,6 +163,8 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   "team-scorecard": { title: "Scorecard", description: "Company scorecard with owner-level accountability metrics", group: "team" },
   "team-rocks": { title: "Rocks", description: "Quarterly priorities and progress", group: "team" },
 
+  tasks: { title: "Tasks", description: "Capture and manage workspace task atoms", group: "workspace" },
+
   chat: { title: "Chat", description: "AI coding assistant chat", group: "ai-agent" },
   composer: { title: "Composer", description: "Compose and launch runs", group: "ai-agent" },
   live: { title: "Live Run", description: "Monitor running sessions", group: "ai-agent" },
@@ -162,6 +172,7 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   queue: { title: "Queue", description: "Scheduled and queued jobs", group: "ai-agent" },
 
   "ceo-training": { title: "CEO Training Ground", description: "CEO-focused training scenarios and simulations", group: "ceo-training" },
+  "ceo-principles": { title: "CEO Principles", description: "Core operating principles and decision frameworks", group: "ceo-training" },
 
   settings: { title: "Settings", description: "Workspace and app configuration", group: "system" },
   profiles: { title: "Profiles", description: "Manage provider profiles", group: "system" },

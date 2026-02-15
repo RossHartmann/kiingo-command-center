@@ -13,6 +13,8 @@ import { MetricAdminScreen } from "./screens/MetricAdminScreen";
 import { ProfilesScreen } from "./screens/ProfilesScreen";
 import { QueueScreen } from "./screens/QueueScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { CeoPrinciplesScreen } from "./screens/CeoPrinciplesScreen";
+import { TasksScreen } from "./screens/TasksScreen";
 
 export default function App(): JSX.Element {
   const state = useAppState();
@@ -34,12 +36,16 @@ export default function App(): JSX.Element {
         return <CompatibilityScreen />;
       case "queue":
         return <QueueScreen />;
+      case "tasks":
+        return <TasksScreen />;
       case "settings":
         return <SettingsScreen />;
       case "chat":
         return state.settings?.conversationThreadsV1 ? <ChatScreen /> : <LegacyChatScreen />;
       case "metric-admin":
         return <MetricAdminScreen />;
+      case "ceo-principles":
+        return <CeoPrinciplesScreen />;
       default: {
         return <DashboardScreen screenId={state.selectedScreen} />;
       }

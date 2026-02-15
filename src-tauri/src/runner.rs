@@ -16,18 +16,22 @@ use crate::harness::shell_prelude::prepare_shell_prelude;
 use crate::harness::structured_output::{resolve_structured_output, validate_structured_output};
 use crate::models::{
     AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
+    ArchiveAtomRequest, AtomRecord, ClassificationResult, ClassificationSource, CreateAtomRequest,
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
-    ExportResponse, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
-    MetricSnapshot, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
+    ExportResponse, ListAtomsRequest, ListConversationsFilters, ListEventsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
+    MetricSnapshot, NotepadViewDefinition, PageResponse, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
+    SaveNotepadViewRequest, SetTaskStatusRequest, TaskReopenRequest,
     ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
     UnbindMetricResponse,
-    StartRunPayload, StartRunResponse, StreamEnvelope, WorkspaceGrant,
+    StartRunPayload, StartRunResponse, StreamEnvelope, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord,
+    WorkspaceGrant, WorkspaceHealth,
 };
 use crate::policy::PolicyEngine;
 use crate::redaction::Redactor;
 use crate::scheduler::{ScheduledRun, Scheduler};
 use crate::session::SessionManager;
+use crate::workspace;
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -637,6 +641,9 @@ impl RunnerCore {
         if !command_spec.env.contains_key("COLORTERM") {
             builder.env("COLORTERM", "truecolor");
         }
+        // Prevent the Claude CLI from detecting this as a nested session
+        // when the Tauri app is itself launched from a Claude Code shell.
+        builder.env_remove("CLAUDECODE");
 
         let mut child = match pair.slave.spawn_command(builder) {
             Ok(child) => child,
@@ -1180,6 +1187,9 @@ impl RunnerCore {
             for (key, value) in &command_spec.env {
                 command.env(key, value);
             }
+            // Prevent the Claude CLI from detecting this as a nested session
+            // when the Tauri app is itself launched from a Claude Code shell.
+            command.env_remove("CLAUDECODE");
 
             match command.spawn() {
                 Ok(child) => break child,
@@ -2085,6 +2095,122 @@ impl RunnerCore {
         })
     }
 
+    // ─── Workspace (Tasks + Notepad Platform) ─────────────────────────────
+
+    pub fn workspace_capabilities_get(&self) -> AppResult<WorkspaceCapabilities> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::capabilities(&root)
+    }
+
+    pub fn workspace_health_get(&self) -> AppResult<WorkspaceHealth> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::health(&root)
+    }
+
+    pub fn atoms_list(&self, request: ListAtomsRequest) -> AppResult<PageResponse<AtomRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atoms_list(&root, request)
+    }
+
+    pub fn atom_get(&self, atom_id: &str) -> AppResult<Option<AtomRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_get(&root, atom_id)
+    }
+
+    pub fn atom_create(&self, request: CreateAtomRequest) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_create(&root, request)
+    }
+
+    pub fn atom_update(&self, atom_id: &str, request: UpdateAtomRequest) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_update(&root, atom_id, request)
+    }
+
+    pub fn task_status_set(&self, atom_id: &str, request: SetTaskStatusRequest) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::task_status_set(&root, atom_id, request)
+    }
+
+    pub fn task_complete(&self, atom_id: &str, expected_revision: i64) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::task_complete(&root, atom_id, expected_revision)
+    }
+
+    pub fn task_reopen(&self, atom_id: &str, request: TaskReopenRequest) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::task_reopen(&root, atom_id, request)
+    }
+
+    pub fn atom_archive(&self, atom_id: &str, request: ArchiveAtomRequest) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_archive(&root, atom_id, request)
+    }
+
+    pub fn atom_unarchive(&self, atom_id: &str, expected_revision: i64) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_unarchive(&root, atom_id, expected_revision)
+    }
+
+    pub fn notepads_list(&self) -> AppResult<Vec<NotepadViewDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notepads_list(&root)
+    }
+
+    pub fn notepad_get(&self, notepad_id: &str) -> AppResult<Option<NotepadViewDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notepad_get(&root, notepad_id)
+    }
+
+    pub fn notepad_save(&self, request: SaveNotepadViewRequest) -> AppResult<NotepadViewDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notepad_save(&root, request)
+    }
+
+    pub fn notepad_delete(&self, notepad_id: &str) -> AppResult<BooleanResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notepad_delete(&root, notepad_id)
+    }
+
+    pub fn notepad_atoms_list(
+        &self,
+        notepad_id: &str,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<AtomRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notepad_atoms_list(&root, notepad_id, limit, cursor)
+    }
+
+    pub fn events_list(&self, request: ListEventsRequest) -> AppResult<PageResponse<WorkspaceEventRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::events_list(&root, request)
+    }
+
+    pub fn atom_events_list(
+        &self,
+        atom_id: &str,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<WorkspaceEventRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_events_list(&root, atom_id, limit, cursor)
+    }
+
+    pub fn classification_preview(&self, raw_text: String) -> AppResult<ClassificationResult> {
+        Ok(workspace::classification_preview(&raw_text))
+    }
+
+    pub fn atom_classify(
+        &self,
+        atom_id: &str,
+        source: ClassificationSource,
+        force_facet: Option<String>,
+    ) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_classify(&root, atom_id, source, force_facet)
+    }
+
     pub fn run_retention(&self) -> AppResult<()> {
         let settings = self.db.get_settings()?;
         self.db.run_retention_prune(&settings)
@@ -2773,6 +2899,16 @@ impl RunnerCore {
             .find(|grant| grant.revoked_at.is_none())
             .map(|grant| grant.path);
         active.ok_or_else(|| AppError::Policy("No workspace grant found. Configure one in Settings.".to_string()))
+    }
+
+    fn resolve_workspace_command_center_root(&self) -> AppResult<PathBuf> {
+        let grants = self.db.list_workspace_grants()?;
+        let active = grants
+            .into_iter()
+            .find(|grant| grant.revoked_at.is_none())
+            .map(|grant| grant.path)
+            .ok_or_else(|| AppError::Policy("No workspace grant found. Configure one in Settings.".to_string()))?;
+        Ok(Path::new(&active).join("command-center"))
     }
 
     async fn apply_runtime_settings(&self, settings: &AppSettings) {

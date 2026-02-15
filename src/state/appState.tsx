@@ -10,6 +10,10 @@ import {
   useRef
 } from "react";
 import {
+  atomArchive,
+  atomCreate,
+  atomUpdate,
+  atomsList,
   archiveConversation,
   archiveMetricDefinition,
   bindMetricToScreen,
@@ -17,6 +21,7 @@ import {
   createConversation,
   deleteMetricDefinition,
   getConversation,
+  notepadsList,
   getScreenMetrics,
   endSession,
   getRun,
@@ -42,17 +47,23 @@ import {
   sendSessionInput,
   startInteractiveSession,
   startRun,
+  taskStatusSet,
   unbindMetricFromScreen,
   updateScreenMetricLayout,
   updateSettings
 } from "../lib/tauriClient";
 import type {
+  ArchiveAtomRequest,
   AppSettings,
+  AtomRecord,
   BindMetricToScreenPayload,
   CapabilitySnapshot,
+  CreateAtomRequest,
   ConversationDetail,
   ConversationSummary,
+  ListAtomsRequest,
   MetricDefinition,
+  NotepadViewDefinition,
   Profile,
   Provider,
   RunDetail,
@@ -62,8 +73,10 @@ import type {
   SchedulerJob,
   ScreenMetricLayoutItem,
   ScreenMetricView,
+  SetTaskStatusRequest,
   StartRunPayload,
   StreamEnvelope,
+  UpdateAtomRequest,
   WorkspaceGrant
 } from "../lib/types";
 
@@ -89,6 +102,7 @@ export type Screen =
   | "dept-operations"
   | "team-scorecard"
   | "team-rocks"
+  | "tasks"
   | "chat"
   | "composer"
   | "live"
@@ -98,7 +112,8 @@ export type Screen =
   | "compatibility"
   | "queue"
   | "metric-admin"
-  | "ceo-training";
+  | "ceo-training"
+  | "ceo-principles";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 
@@ -118,6 +133,9 @@ interface State {
   metricDefinitions: MetricDefinition[];
   screenMetricViews: Record<string, ScreenMetricView[]>;
   metricRefreshes: Record<string, string>;
+  workspaceAtoms: AtomRecord[];
+  workspaceNotepads: NotepadViewDefinition[];
+  pendingChatContext: { systemPrompt: string; initialMessage: string } | null;
   loading: boolean;
   error?: string;
 }
@@ -143,7 +161,10 @@ type Action =
   | { type: "set_screen_metric_views"; screenId: string; views: ScreenMetricView[] }
   | { type: "set_metric_refresh"; metricId: string; snapshotId: string }
   | { type: "clear_metric_refresh"; metricId: string }
-  | { type: "patch_screen_metric_layouts"; screenId: string; layouts: ScreenMetricLayoutItem[] };
+  | { type: "patch_screen_metric_layouts"; screenId: string; layouts: ScreenMetricLayoutItem[] }
+  | { type: "set_workspace_atoms"; atoms: AtomRecord[] }
+  | { type: "set_workspace_notepads"; notepads: NotepadViewDefinition[] }
+  | { type: "set_pending_chat_context"; context: { systemPrompt: string; initialMessage: string } | null };
 
 const initialState: State = {
   selectedScreen: "dashboard",
@@ -159,6 +180,9 @@ const initialState: State = {
   metricDefinitions: [],
   screenMetricViews: {},
   metricRefreshes: {},
+  workspaceAtoms: [],
+  workspaceNotepads: [],
+  pendingChatContext: null,
   loading: true
 };
 
@@ -284,6 +308,12 @@ function reducer(state: State, action: Action): State {
         screenMetricViews: { ...state.screenMetricViews, [action.screenId]: updated }
       };
     }
+    case "set_workspace_atoms":
+      return { ...state, workspaceAtoms: action.atoms };
+    case "set_workspace_notepads":
+      return { ...state, workspaceNotepads: action.notepads };
+    case "set_pending_chat_context":
+      return { ...state, pendingChatContext: action.context };
     default:
       return state;
   }
@@ -335,6 +365,13 @@ interface Actions {
   unbindMetricFromScreen: (screenId: string, bindingId: string) => Promise<void>;
   reorderScreenMetrics: (screenId: string, metricIds: string[]) => Promise<void>;
   updateScreenMetricLayout: (screenId: string, layouts: ScreenMetricLayoutItem[]) => Promise<void>;
+  loadWorkspaceAtoms: (request?: ListAtomsRequest) => Promise<void>;
+  createWorkspaceAtom: (payload: CreateAtomRequest) => Promise<AtomRecord>;
+  updateWorkspaceAtom: (atomId: string, payload: UpdateAtomRequest) => Promise<AtomRecord>;
+  setWorkspaceTaskStatus: (atomId: string, payload: SetTaskStatusRequest) => Promise<AtomRecord>;
+  archiveWorkspaceAtom: (atomId: string, payload: ArchiveAtomRequest) => Promise<AtomRecord>;
+  loadWorkspaceNotepads: () => Promise<void>;
+  setPendingChatContext: (context: { systemPrompt: string; initialMessage: string } | null) => void;
 }
 
 const StateContext = createContext<State>(initialState);
@@ -361,14 +398,16 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   const refreshAll = useCallback(async () => {
     safeDispatch({ type: "loading", value: true });
     try {
-      const [runs, conversations, profiles, capabilities, jobs, grants, settings] = await Promise.all([
+      const [runs, conversations, profiles, capabilities, jobs, grants, settings, atomPage, notepads] = await Promise.all([
         listRuns({ limit: 200, offset: 0 }),
         listConversations({ limit: 200, offset: 0, includeArchived: true }),
         listProfiles(),
         listCapabilities(),
         listQueueJobs(),
         listWorkspaceGrants(),
-        getSettings()
+        getSettings(),
+        atomsList({ limit: 500, filter: { facet: "task", includeArchived: false }, sort: [{ field: "updatedAt", direction: "desc" }] }),
+        notepadsList()
       ]);
       safeDispatch({ type: "set_runs", runs });
       safeDispatch({ type: "set_conversations", conversations });
@@ -377,6 +416,8 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       safeDispatch({ type: "set_jobs", jobs });
       safeDispatch({ type: "set_grants", grants });
       safeDispatch({ type: "set_settings", settings });
+      safeDispatch({ type: "set_workspace_atoms", atoms: atomPage.items });
+      safeDispatch({ type: "set_workspace_notepads", notepads });
       safeDispatch({ type: "error", error: undefined });
     } catch (error) {
       safeDispatch({ type: "error", error: asError(error) });
@@ -618,6 +659,8 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       refreshMetric: async (metricId) => {
         const result = await refreshMetric(metricId);
         safeDispatch({ type: "set_metric_refresh", metricId: result.metricId, snapshotId: result.snapshotId });
+        // Reload views so the card shows the "refreshing..." shimmer immediately
+        void reloadAllScreenMetrics(safeDispatch, screenMetricViewsRef.current);
       },
       bindMetricToScreen: async (payload) => {
         await bindMetricToScreen(payload);
@@ -640,6 +683,62 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         // Reloading would pick up side-effect snapshot changes and trigger
         // cascading stale-refresh → auto-size → layout-save loops.
         safeDispatch({ type: "patch_screen_metric_layouts", screenId, layouts });
+      },
+      loadWorkspaceAtoms: async (request) => {
+        const page = await atomsList({
+          limit: 500,
+          filter: { facet: "task", includeArchived: false },
+          sort: [{ field: "updatedAt", direction: "desc" }],
+          ...request
+        });
+        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+      },
+      createWorkspaceAtom: async (payload) => {
+        const atom = await atomCreate(payload);
+        const page = await atomsList({
+          limit: 500,
+          filter: { facet: "task", includeArchived: false },
+          sort: [{ field: "updatedAt", direction: "desc" }]
+        });
+        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        return atom;
+      },
+      updateWorkspaceAtom: async (atomId, payload) => {
+        const atom = await atomUpdate(atomId, payload);
+        const page = await atomsList({
+          limit: 500,
+          filter: { facet: "task", includeArchived: false },
+          sort: [{ field: "updatedAt", direction: "desc" }]
+        });
+        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        return atom;
+      },
+      setWorkspaceTaskStatus: async (atomId, payload) => {
+        const atom = await taskStatusSet(atomId, payload);
+        const page = await atomsList({
+          limit: 500,
+          filter: { facet: "task", includeArchived: false },
+          sort: [{ field: "updatedAt", direction: "desc" }]
+        });
+        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        return atom;
+      },
+      archiveWorkspaceAtom: async (atomId, payload) => {
+        const atom = await atomArchive(atomId, payload);
+        const page = await atomsList({
+          limit: 500,
+          filter: { facet: "task", includeArchived: false },
+          sort: [{ field: "updatedAt", direction: "desc" }]
+        });
+        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        return atom;
+      },
+      loadWorkspaceNotepads: async () => {
+        const notepads = await notepadsList();
+        safeDispatch({ type: "set_workspace_notepads", notepads });
+      },
+      setPendingChatContext: (context) => {
+        safeDispatch({ type: "set_pending_chat_context", context });
       }
     };
   }, [refreshAll, safeDispatch, state.selectedConversationByProvider]);

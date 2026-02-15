@@ -693,3 +693,439 @@ pub struct MetricRefreshResponse {
     pub snapshot_id: String,
     pub run_id: Option<String>,
 }
+
+// ─── Workspace (Tasks + Notepad Platform) ───────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FacetKind {
+    Task,
+    Note,
+    Meta,
+    Attention,
+    Commitment,
+    Blocking,
+    Recurrence,
+    Energy,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Todo,
+    Doing,
+    Blocked,
+    Done,
+    Archived,
+}
+
+impl TaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Todo => "todo",
+            Self::Doing => "doing",
+            Self::Blocked => "blocked",
+            Self::Done => "done",
+            Self::Archived => "archived",
+        }
+    }
+}
+
+impl Default for TaskStatus {
+    fn default() -> Self {
+        Self::Todo
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommitmentLevel {
+    Soft,
+    Hard,
+}
+
+impl Default for CommitmentLevel {
+    fn default() -> Self {
+        Self::Soft
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AttentionLayer {
+    L3,
+    Ram,
+    Short,
+    Long,
+    Archive,
+}
+
+impl Default for AttentionLayer {
+    fn default() -> Self {
+        Self::Ram
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureSource {
+    Ui,
+    Manual,
+    Import,
+    Agent,
+}
+
+impl Default for CaptureSource {
+    fn default() -> Self {
+        Self::Ui
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClassificationSource {
+    Manual,
+    Heuristic,
+    Llm,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SensitivityLevel {
+    Public,
+    Internal,
+    Confidential,
+    Restricted,
+}
+
+impl Default for SensitivityLevel {
+    fn default() -> Self {
+        Self::Internal
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EncryptionScope {
+    None,
+    Vault,
+    Field,
+}
+
+impl Default for EncryptionScope {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskFacet {
+    pub title: String,
+    pub status: TaskStatus,
+    pub priority: i32,
+    pub soft_due_at: Option<DateTime<Utc>>,
+    pub hard_due_at: Option<DateTime<Utc>>,
+    pub snoozed_until: Option<DateTime<Utc>>,
+    pub commitment_level: Option<CommitmentLevel>,
+    pub attention_layer: Option<AttentionLayer>,
+    pub dread_level: Option<i32>,
+    pub assignee: Option<String>,
+    pub estimate_minutes: Option<i32>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteFacet {
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaFacet {
+    pub labels: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionFacet {
+    pub layer: AttentionLayer,
+    pub last_promoted_at: Option<DateTime<Utc>>,
+    pub decay_eligible_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitmentFacet {
+    pub level: CommitmentLevel,
+    pub rationale: Option<String>,
+    pub must_review_by: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockingFacet {
+    pub mode: String,
+    pub blocked_until: Option<DateTime<Utc>>,
+    pub waiting_on_person: Option<String>,
+    pub waiting_cadence_days: Option<i32>,
+    pub blocked_by_atom_id: Option<String>,
+    pub last_followup_at: Option<DateTime<Utc>>,
+    pub followup_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurrenceFacet {
+    pub template_id: String,
+    pub frequency: String,
+    pub interval: Option<i32>,
+    pub by_day: Option<Vec<String>>,
+    pub instance_index: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EnergyFacet {
+    pub dread_level: Option<i32>,
+    pub last_capacity_match: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFacet {
+    pub conversation_id: Option<String>,
+    pub workflow_id: Option<String>,
+    pub last_agent_action_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AtomFacets {
+    pub task: Option<TaskFacet>,
+    pub note: Option<NoteFacet>,
+    pub meta: Option<MetaFacet>,
+    pub attention: Option<AttentionFacet>,
+    pub commitment: Option<CommitmentFacet>,
+    pub blocking: Option<BlockingFacet>,
+    pub recurrence: Option<RecurrenceFacet>,
+    pub energy: Option<EnergyFacet>,
+    pub agent: Option<AgentFacet>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AtomRelations {
+    pub parent_id: Option<String>,
+    pub blocked_by_atom_id: Option<String>,
+    pub thread_ids: Vec<String>,
+    pub derived_from_atom_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GovernanceMeta {
+    pub sensitivity: SensitivityLevel,
+    pub retention_policy_id: Option<String>,
+    pub origin: String,
+    pub source_ref: Option<String>,
+    pub encryption_scope: EncryptionScope,
+    pub allowed_agent_scopes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AtomRecord {
+    pub id: String,
+    pub schema_version: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub raw_text: String,
+    pub capture_source: CaptureSource,
+    pub facets: Vec<FacetKind>,
+    pub facet_data: AtomFacets,
+    pub relations: AtomRelations,
+    pub governance: GovernanceMeta,
+    pub body: Option<String>,
+    pub revision: i64,
+    pub archived_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassificationResult {
+    pub primary_facet: String,
+    pub confidence: f64,
+    pub source: ClassificationSource,
+    pub reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NotepadFilter {
+    pub facet: Option<FacetKind>,
+    pub statuses: Option<Vec<TaskStatus>>,
+    pub thread_ids: Option<Vec<String>>,
+    pub parent_id: Option<String>,
+    pub attention_layers: Option<Vec<AttentionLayer>>,
+    pub commitment_levels: Option<Vec<CommitmentLevel>>,
+    pub due_from: Option<String>,
+    pub due_to: Option<String>,
+    pub text_query: Option<String>,
+    pub include_archived: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotepadSort {
+    pub field: String,
+    pub direction: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotepadViewDefinition {
+    pub id: String,
+    pub schema_version: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_system: bool,
+    pub filters: NotepadFilter,
+    pub sorts: Vec<NotepadSort>,
+    pub layout_mode: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEventRecord {
+    pub id: String,
+    pub r#type: String,
+    pub occurred_at: DateTime<Utc>,
+    pub actor: String,
+    pub actor_id: Option<String>,
+    pub atom_id: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAtomsRequest {
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub filter: Option<NotepadFilter>,
+    pub sort: Option<Vec<NotepadSort>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListEventsRequest {
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub r#type: Option<String>,
+    pub atom_id: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageResponse<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub total_approx: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAtomRequest {
+    pub raw_text: String,
+    pub capture_source: CaptureSource,
+    pub initial_facets: Option<Vec<FacetKind>>,
+    pub facet_data: Option<AtomFacets>,
+    pub relations: Option<AtomRelations>,
+    pub governance: Option<GovernanceMeta>,
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyPatch {
+    pub mode: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAtomRequest {
+    pub expected_revision: i64,
+    pub raw_text: Option<String>,
+    pub facet_data_patch: Option<AtomFacets>,
+    pub relations_patch: Option<AtomRelations>,
+    pub body_patch: Option<BodyPatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTaskStatusRequest {
+    pub expected_revision: i64,
+    pub status: TaskStatus,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveAtomRequest {
+    pub expected_revision: i64,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveNotepadViewRequest {
+    pub expected_revision: Option<i64>,
+    pub definition: NotepadViewDefinitionInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotepadViewDefinitionInput {
+    pub id: String,
+    pub schema_version: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_system: bool,
+    pub filters: NotepadFilter,
+    pub sorts: Vec<NotepadSort>,
+    pub layout_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskReopenRequest {
+    pub expected_revision: i64,
+    pub status: Option<TaskStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCapabilities {
+    pub obsidian_cli_available: bool,
+    pub base_query_available: bool,
+    pub selected_vault: Option<String>,
+    pub supported_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceHealth {
+    pub adapter_healthy: bool,
+    pub vault_accessible: bool,
+    pub last_successful_command_at: Option<DateTime<Utc>>,
+    pub message: Option<String>,
+}

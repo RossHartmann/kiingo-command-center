@@ -15,16 +15,32 @@ import type {
   MetricSnapshot,
   Profile,
   SaveMetricDefinitionPayload,
+  SaveNotepadViewRequest,
   ScreenMetricBinding,
   ScreenMetricView,
   SendConversationMessagePayload,
+  SetTaskStatusRequest,
+  TaskReopenRequest,
   RunDetail,
   RunRecord,
   SchedulerJob,
   StartRunPayload,
   StreamEnvelope,
+  UpdateAtomRequest,
   UpdateScreenMetricLayoutPayload,
-  WorkspaceGrant
+  WorkspaceCapabilities,
+  WorkspaceEventRecord,
+  WorkspaceGrant,
+  WorkspaceHealth,
+  AtomRecord,
+  ListAtomsRequest,
+  CreateAtomRequest,
+  ArchiveAtomRequest,
+  NotepadViewDefinition,
+  PageResponse,
+  ListEventsRequest,
+  ClassificationResult,
+  ClassificationSource
 } from "./types";
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -41,6 +57,9 @@ interface MockStore {
   metricDefinitions: MetricDefinition[];
   metricSnapshots: MetricSnapshot[];
   screenMetrics: ScreenMetricBinding[];
+  atoms: AtomRecord[];
+  notepads: NotepadViewDefinition[];
+  workspaceEvents: WorkspaceEventRecord[];
 }
 
 const defaultSettings: AppSettings = {
@@ -66,6 +85,76 @@ function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function atomId(): string {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10).replaceAll("-", "");
+  const time = now.toISOString().slice(11, 19).replaceAll(":", "");
+  return `atom_${date}_${time}_${crypto.randomUUID().slice(0, 4)}`;
+}
+
+function defaultWorkspaceGovernance(): AtomRecord["governance"] {
+  return {
+    sensitivity: "internal",
+    retentionPolicyId: undefined,
+    origin: "user_input",
+    sourceRef: undefined,
+    encryptionScope: "none",
+    allowedAgentScopes: undefined
+  };
+}
+
+function classifyRawText(rawText: string): ClassificationResult {
+  const trimmed = rawText.trim();
+  if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("- [ ]") || trimmed.startsWith("- [x]")) {
+    return { primaryFacet: "task", confidence: 0.88, source: "heuristic", reasoning: "task marker prefix detected" };
+  }
+  if (trimmed.startsWith("#") || trimmed.startsWith(">")) {
+    return { primaryFacet: "note", confidence: 0.72, source: "heuristic", reasoning: "note-like structure detected" };
+  }
+  return { primaryFacet: "meta", confidence: 0.55, source: "heuristic", reasoning: "default freeform classification" };
+}
+
+function deriveTaskTitle(rawText: string): string {
+  const first = rawText.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Untitled task";
+  return first.replace(/^- \[[ xX]\]\s*/, "").replace(/^[-*]\s*/, "").slice(0, 120);
+}
+
+function ensureNowNotepad(): void {
+  const existing = mockStore.notepads.find((notepad) => notepad.id === "now");
+  if (existing) {
+    return;
+  }
+  const now = nowIso();
+  mockStore.notepads.unshift({
+    id: "now",
+    schemaVersion: 1,
+    name: "Now",
+    description: "System default view for active work",
+    isSystem: true,
+    filters: { facet: "task", statuses: ["todo", "doing", "blocked"], includeArchived: false },
+    sorts: [{ field: "priority", direction: "asc" }],
+    layoutMode: "list",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1
+  });
+}
+
+function recordWorkspaceEvent(
+  type: WorkspaceEventRecord["type"],
+  payload: Record<string, unknown>,
+  atomIdValue?: string
+): void {
+  mockStore.workspaceEvents.unshift({
+    id: uid("evt"),
+    type,
+    occurredAt: nowIso(),
+    actor: "user",
+    atomId: atomIdValue,
+    payload
+  });
+}
+
 function emptyMockStore(): MockStore {
   return {
     runs: [],
@@ -77,7 +166,10 @@ function emptyMockStore(): MockStore {
     settings: defaultSettings,
     metricDefinitions: [],
     metricSnapshots: [],
-    screenMetrics: []
+    screenMetrics: [],
+    atoms: [],
+    notepads: [],
+    workspaceEvents: []
   };
 }
 
@@ -102,7 +194,10 @@ function loadMockStore(): MockStore {
       settings: { ...defaultSettings, ...(parsed.settings ?? {}) },
       metricDefinitions: parsed.metricDefinitions ?? [],
       metricSnapshots: parsed.metricSnapshots ?? [],
-      screenMetrics: parsed.screenMetrics ?? []
+      screenMetrics: parsed.screenMetrics ?? [],
+      atoms: parsed.atoms ?? [],
+      notepads: parsed.notepads ?? [],
+      workspaceEvents: parsed.workspaceEvents ?? []
     };
   } catch {
     return emptyMockStore();
@@ -820,4 +915,435 @@ export async function refreshScreenMetrics(screenId: string): Promise<MetricRefr
     }
   }
   return results;
+}
+
+// ─── Workspace (Tasks + Notepad Platform) ───────────────────────────────────
+
+export async function workspaceCapabilitiesGet(): Promise<WorkspaceCapabilities> {
+  if (IS_TAURI) {
+    return tauriInvoke("workspace_capabilities_get");
+  }
+  return {
+    obsidianCliAvailable: false,
+    baseQueryAvailable: false,
+    selectedVault: mockStore.grants.find((grant) => !grant.revokedAt)?.path,
+    supportedCommands: [
+      "atoms_list",
+      "atom_get",
+      "atom_create",
+      "atom_update",
+      "task_status_set",
+      "atom_archive",
+      "atom_unarchive",
+      "notepads_list",
+      "notepad_save",
+      "events_list"
+    ]
+  };
+}
+
+export async function workspaceHealthGet(): Promise<WorkspaceHealth> {
+  if (IS_TAURI) {
+    return tauriInvoke("workspace_health_get");
+  }
+  return {
+    adapterHealthy: true,
+    vaultAccessible: true,
+    lastSuccessfulCommandAt: mockStore.workspaceEvents[0]?.occurredAt,
+    message: undefined
+  };
+}
+
+function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomRecord[] {
+  const filter = request?.filter;
+  let result = [...atoms];
+  const includeArchived = filter?.includeArchived ?? false;
+  if (!includeArchived) {
+    result = result.filter((atom) => !atom.archivedAt);
+  }
+  if (filter?.facet) {
+    result = result.filter((atom) => atom.facets.includes(filter.facet!));
+  }
+  if (filter?.statuses?.length) {
+    result = result.filter((atom) => atom.facetData.task && filter.statuses!.includes(atom.facetData.task.status));
+  }
+  if (filter?.parentId) {
+    result = result.filter((atom) => atom.relations.parentId === filter.parentId);
+  }
+  if (filter?.threadIds?.length) {
+    const expected = new Set(filter.threadIds);
+    result = result.filter((atom) => atom.relations.threadIds.some((threadId) => expected.has(threadId)));
+  }
+  if (filter?.textQuery?.trim()) {
+    const q = filter.textQuery.toLowerCase();
+    result = result.filter((atom) => {
+      const body = atom.body ?? "";
+      const title = atom.facetData.task?.title ?? "";
+      return `${atom.rawText}\n${body}\n${title}`.toLowerCase().includes(q);
+    });
+  }
+  return result;
+}
+
+function sortAtoms(atoms: AtomRecord[], request?: ListAtomsRequest): AtomRecord[] {
+  const result = [...atoms];
+  const sorts = request?.sort?.length ? request.sort : [{ field: "updatedAt", direction: "desc" as const }];
+  result.sort((a, b) => {
+    for (const sort of sorts) {
+      let compare = 0;
+      switch (sort.field) {
+        case "createdAt":
+          compare = a.createdAt.localeCompare(b.createdAt);
+          break;
+        case "updatedAt":
+          compare = a.updatedAt.localeCompare(b.updatedAt);
+          break;
+        case "priority":
+          compare = (a.facetData.task?.priority ?? 99) - (b.facetData.task?.priority ?? 99);
+          break;
+        case "title":
+          compare = (a.facetData.task?.title ?? "").localeCompare(b.facetData.task?.title ?? "");
+          break;
+        default:
+          compare = 0;
+      }
+      if (compare !== 0) {
+        return sort.direction === "desc" ? -compare : compare;
+      }
+    }
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+  return result;
+}
+
+function paginateItems<T>(items: T[], limit?: number, cursor?: string): PageResponse<T> {
+  const offset = cursor ? Number(cursor) || 0 : 0;
+  const size = Math.max(1, Math.min(500, limit ?? 100));
+  const slice = items.slice(offset, offset + size);
+  const nextOffset = offset + slice.length;
+  return {
+    items: slice,
+    nextCursor: nextOffset < items.length ? String(nextOffset) : undefined,
+    totalApprox: items.length
+  };
+}
+
+export async function atomsList(request: ListAtomsRequest = {}): Promise<PageResponse<AtomRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("atoms_list", { request });
+  }
+  const filtered = applyAtomFilter(mockStore.atoms, request);
+  const sorted = sortAtoms(filtered, request);
+  return paginateItems(sorted, request.limit, request.cursor);
+}
+
+export async function atomGet(atomId: string): Promise<AtomRecord | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_get", { atomId });
+  }
+  return mockStore.atoms.find((atom) => atom.id === atomId) ?? null;
+}
+
+export async function atomCreate(payload: CreateAtomRequest): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_create", { payload });
+  }
+  const now = nowIso();
+  const result = classifyRawText(payload.rawText);
+  const facets = payload.initialFacets?.length
+    ? [...payload.initialFacets]
+    : [result.primaryFacet === "task" ? "task" : result.primaryFacet];
+  const atom: AtomRecord = {
+    id: atomId(),
+    schemaVersion: 1,
+    createdAt: now,
+    updatedAt: now,
+    rawText: payload.rawText,
+    captureSource: payload.captureSource,
+    facets,
+    facetData: {
+      ...(payload.facetData ?? {}),
+      task:
+        facets.includes("task")
+          ? {
+              title: payload.facetData?.task?.title ?? deriveTaskTitle(payload.rawText),
+              status: payload.facetData?.task?.status ?? "todo",
+              priority: payload.facetData?.task?.priority ?? 3,
+              ...payload.facetData?.task
+            }
+          : payload.facetData?.task
+    },
+    relations: {
+      parentId: payload.relations?.parentId,
+      blockedByAtomId: payload.relations?.blockedByAtomId,
+      threadIds: payload.relations?.threadIds ?? [],
+      derivedFromAtomId: payload.relations?.derivedFromAtomId
+    },
+    governance: payload.governance ?? defaultWorkspaceGovernance(),
+    body: payload.body,
+    revision: 1,
+    archivedAt: undefined
+  };
+  mockStore.atoms.unshift(atom);
+  recordWorkspaceEvent("atom.created", { atom }, atom.id);
+  persistMockStore();
+  return atom;
+}
+
+export async function atomUpdate(atomIdValue: string, payload: UpdateAtomRequest): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_update", { atomId: atomIdValue, payload });
+  }
+  const atom = mockStore.atoms.find((entry) => entry.id === atomIdValue);
+  if (!atom) {
+    throw new Error(`Atom not found: ${atomIdValue}`);
+  }
+  if (atom.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${atom.revision}`);
+  }
+  if (payload.rawText !== undefined) {
+    atom.rawText = payload.rawText;
+  }
+  if (payload.facetDataPatch) {
+    atom.facetData = { ...atom.facetData, ...payload.facetDataPatch };
+  }
+  if (payload.relationsPatch) {
+    atom.relations = {
+      ...atom.relations,
+      ...payload.relationsPatch,
+      threadIds: payload.relationsPatch.threadIds ?? atom.relations.threadIds
+    };
+  }
+  if (payload.bodyPatch) {
+    if (payload.bodyPatch.mode === "replace") {
+      atom.body = payload.bodyPatch.value;
+    } else if (payload.bodyPatch.mode === "append") {
+      atom.body = [atom.body, payload.bodyPatch.value].filter(Boolean).join("\n");
+    } else if (payload.bodyPatch.mode === "prepend") {
+      atom.body = [payload.bodyPatch.value, atom.body].filter(Boolean).join("\n");
+    }
+  }
+  atom.revision += 1;
+  atom.updatedAt = nowIso();
+  recordWorkspaceEvent("atom.updated", { beforeRevision: payload.expectedRevision, atom }, atom.id);
+  persistMockStore();
+  return atom;
+}
+
+export async function taskStatusSet(atomIdValue: string, payload: SetTaskStatusRequest): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("task_status_set", { atomId: atomIdValue, payload });
+  }
+  const atom = await atomGet(atomIdValue);
+  if (!atom) {
+    throw new Error(`Atom not found: ${atomIdValue}`);
+  }
+  if (atom.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${atom.revision}`);
+  }
+  const from = atom.facetData.task?.status ?? "todo";
+  atom.facetData.task = {
+    title: atom.facetData.task?.title ?? deriveTaskTitle(atom.rawText),
+    status: payload.status,
+    priority: atom.facetData.task?.priority ?? 3,
+    ...atom.facetData.task
+  };
+  atom.facetData.task.status = payload.status;
+  atom.updatedAt = nowIso();
+  atom.revision += 1;
+  if (payload.status === "done") {
+    atom.facetData.task.completedAt = nowIso();
+  }
+  if (payload.status === "archived") {
+    atom.archivedAt = nowIso();
+  } else {
+    atom.archivedAt = undefined;
+  }
+  recordWorkspaceEvent("task.status_changed", { from, to: payload.status, reason: payload.reason }, atom.id);
+  if (payload.status === "done") {
+    recordWorkspaceEvent("task.completed", { completedAt: atom.facetData.task.completedAt }, atom.id);
+  }
+  persistMockStore();
+  return atom;
+}
+
+export async function taskComplete(atomIdValue: string, expectedRevision: number): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("task_complete", { atomId: atomIdValue, expectedRevision });
+  }
+  return taskStatusSet(atomIdValue, { expectedRevision, status: "done" });
+}
+
+export async function taskReopen(atomIdValue: string, payload: TaskReopenRequest): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("task_reopen", { atomId: atomIdValue, payload });
+  }
+  return taskStatusSet(atomIdValue, {
+    expectedRevision: payload.expectedRevision,
+    status: payload.status ?? "todo"
+  });
+}
+
+export async function atomArchive(atomIdValue: string, payload: ArchiveAtomRequest): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_archive", { atomId: atomIdValue, payload });
+  }
+  const atom = await taskStatusSet(atomIdValue, { expectedRevision: payload.expectedRevision, status: "archived" });
+  recordWorkspaceEvent("atom.archived", { archivedAt: atom.archivedAt, reason: payload.reason }, atom.id);
+  persistMockStore();
+  return atom;
+}
+
+export async function atomUnarchive(atomIdValue: string, expectedRevision: number): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_unarchive", { atomId: atomIdValue, expectedRevision });
+  }
+  return taskStatusSet(atomIdValue, { expectedRevision, status: "todo" });
+}
+
+export async function notepadsList(): Promise<NotepadViewDefinition[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("notepads_list");
+  }
+  ensureNowNotepad();
+  return [...mockStore.notepads].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function notepadGet(notepadId: string): Promise<NotepadViewDefinition | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("notepad_get", { notepadId });
+  }
+  ensureNowNotepad();
+  return mockStore.notepads.find((notepad) => notepad.id === notepadId) ?? null;
+}
+
+export async function notepadSave(payload: SaveNotepadViewRequest): Promise<NotepadViewDefinition> {
+  if (IS_TAURI) {
+    return tauriInvoke("notepad_save", { payload });
+  }
+  ensureNowNotepad();
+  const now = nowIso();
+  const existing = mockStore.notepads.find((notepad) => notepad.id === payload.definition.id);
+  if (payload.expectedRevision !== undefined) {
+    const actual = existing?.revision ?? 0;
+    if (actual !== payload.expectedRevision) {
+      throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${actual}`);
+    }
+  }
+  const next: NotepadViewDefinition = {
+    ...payload.definition,
+    isSystem: payload.definition.isSystem || payload.definition.id === "now",
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (existing) {
+    Object.assign(existing, next);
+  } else {
+    mockStore.notepads.unshift(next);
+  }
+  persistMockStore();
+  return next;
+}
+
+export async function notepadDelete(notepadId: string): Promise<{ success: boolean }> {
+  if (IS_TAURI) {
+    return tauriInvoke("notepad_delete", { notepadId });
+  }
+  if (notepadId === "now") {
+    throw new Error("Cannot delete system notepad 'now'");
+  }
+  const idx = mockStore.notepads.findIndex((notepad) => notepad.id === notepadId);
+  if (idx === -1) {
+    return { success: false };
+  }
+  mockStore.notepads.splice(idx, 1);
+  persistMockStore();
+  return { success: true };
+}
+
+export async function notepadAtomsList(
+  notepadId: string,
+  limit?: number,
+  cursor?: string
+): Promise<PageResponse<AtomRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("notepad_atoms_list", { notepadId, limit, cursor });
+  }
+  const notepad = await notepadGet(notepadId);
+  if (!notepad) {
+    throw new Error(`Notepad not found: ${notepadId}`);
+  }
+  return atomsList({ limit, cursor, filter: notepad.filters, sort: notepad.sorts });
+}
+
+export async function eventsList(request: ListEventsRequest = {}): Promise<PageResponse<WorkspaceEventRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("events_list", { request });
+  }
+  let events = [...mockStore.workspaceEvents];
+  if (request.type) {
+    events = events.filter((event) => event.type === request.type);
+  }
+  if (request.atomId) {
+    events = events.filter((event) => event.atomId === request.atomId);
+  }
+  if (request.from) {
+    events = events.filter((event) => event.occurredAt >= request.from!);
+  }
+  if (request.to) {
+    events = events.filter((event) => event.occurredAt <= request.to!);
+  }
+  events.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  return paginateItems(events, request.limit, request.cursor);
+}
+
+export async function atomEventsList(
+  atomIdValue: string,
+  limit?: number,
+  cursor?: string
+): Promise<PageResponse<WorkspaceEventRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_events_list", { atomId: atomIdValue, limit, cursor });
+  }
+  return eventsList({ atomId: atomIdValue, limit, cursor });
+}
+
+export async function classificationPreview(rawText: string): Promise<ClassificationResult> {
+  if (IS_TAURI) {
+    return tauriInvoke("classification_preview", { rawText });
+  }
+  return classifyRawText(rawText);
+}
+
+export async function atomClassify(
+  atomIdValue: string,
+  source: ClassificationSource,
+  forceFacet?: "task" | "note" | "meta"
+): Promise<AtomRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("atom_classify", { atomId: atomIdValue, source, forceFacet });
+  }
+  const atom = await atomGet(atomIdValue);
+  if (!atom) {
+    throw new Error(`Atom not found: ${atomIdValue}`);
+  }
+  const result = forceFacet
+    ? { primaryFacet: forceFacet, confidence: 1, source, reasoning: "manual override" }
+    : { ...classifyRawText(atom.rawText), source };
+  if (!atom.facets.includes(result.primaryFacet)) {
+    atom.facets.push(result.primaryFacet);
+  }
+  if (result.primaryFacet === "task" && !atom.facetData.task) {
+    atom.facetData.task = {
+      title: deriveTaskTitle(atom.rawText),
+      status: "todo",
+      priority: 3
+    };
+  }
+  atom.revision += 1;
+  atom.updatedAt = nowIso();
+  recordWorkspaceEvent("atom.classified", { result }, atom.id);
+  persistMockStore();
+  return atom;
 }

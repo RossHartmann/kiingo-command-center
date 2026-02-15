@@ -1328,6 +1328,13 @@ impl Database {
 
     pub fn has_pending_snapshot(&self, metric_id: &str) -> AppResult<bool> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        // Expire snapshots stuck in pending/running for over 5 minutes (process likely died)
+        conn.execute(
+            "UPDATE metric_snapshots SET status = 'failed', error_message = 'Timed out (stuck pending >5min)', completed_at = datetime('now')
+             WHERE metric_id = ?1 AND status IN ('pending', 'running')
+             AND created_at < datetime('now', '-5 minutes')",
+            [metric_id],
+        )?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(1) FROM metric_snapshots WHERE metric_id = ?1 AND status IN ('pending', 'running')",
             [metric_id],
@@ -1445,11 +1452,13 @@ impl Database {
                     .transpose()?,
             };
 
-            // Fetch latest completed snapshot for display (fallback-safe)
+            // Fetch latest snapshot (completed or failed) so the UI can show errors.
+            // Prefer the most recent completed snapshot; fall back to the most recent
+            // failed one so the error state is surfaced in the card.
             let latest_snapshot: Option<MetricSnapshot> = {
                 let mut snap_stmt = conn.prepare(
                     "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
-                     FROM metric_snapshots WHERE metric_id = ?1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
+                     FROM metric_snapshots WHERE metric_id = ?1 AND status IN ('completed', 'failed') ORDER BY created_at DESC LIMIT 1",
                 )?;
                 snap_stmt
                     .query_row([&metric_id_str], parse_metric_snapshot_row)
@@ -1849,14 +1858,14 @@ QuickBooks Online Invoices via Kiingo MCP `quickbooks.query()`.
       </MetricRow>
       <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
             <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
             <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
             <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
-            <Bar dataKey="invoiced" name="Invoiced" fill={theme.accent} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="collected" name="Collected" fill={theme.accentStrong} radius={[4, 4, 0, 0]} />
-          </BarChart>
+            <Line type="monotone" dataKey="invoiced" name="Invoiced" stroke={theme.accent} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="collected" name="Collected" stroke={theme.accentStrong} strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
         </ResponsiveContainer>
       </div>
       <MetricNote>Source: QuickBooks Invoices via Kiingo MCP</MetricNote>
@@ -1879,14 +1888,14 @@ QuickBooks Online Invoices via Kiingo MCP `quickbooks.query()`.
       </MetricRow>
       <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
             <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
             <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => '$' + (v / 1000) + 'K'} />
             <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => '$' + Number(v).toLocaleString()} />
-            <Bar dataKey="invoiced" name="Invoiced" fill={theme.accent} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="collected" name="Collected" fill={theme.accentStrong} radius={[4, 4, 0, 0]} />
-          </BarChart>
+            <Line type="monotone" dataKey="invoiced" name="Invoiced" stroke={theme.accent} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="collected" name="Collected" stroke={theme.accentStrong} strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
         </ResponsiveContainer>
       </div>
       <MetricNote>Source: QuickBooks Invoices via Kiingo MCP · Snapshot: Feb 14, 2026</MetricNote>

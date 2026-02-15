@@ -1740,3 +1740,265 @@ body.metric-dragging {
   .metric-editor-row { grid-template-columns: 1fr; }
   .metric-binding-add-row { flex-wrap: wrap; }
 }
+
+/* ===================================================================
+   CEO PRINCIPLES SCREEN
+   =================================================================== */
+
+.spotlight-card {
+  border: 2px solid var(--accent, #5b8af5);
+  background: rgba(91, 138, 245, 0.06);
+  border-radius: 14px;
+  padding: 1.5rem 1.5rem 1.3rem;
+  display: grid;
+  gap: 0.5rem;
+  box-shadow: var(--shadow);
+  position: relative;
+}
+
+.spotlight-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent, #5b8af5);
+}
+
+.spotlight-number {
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--accent, #5b8af5);
+  line-height: 1;
+  opacity: 0.25;
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+}
+
+.spotlight-title {
+  font-size: 1.15rem;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.spotlight-description {
+  font-size: 0.88rem;
+  color: var(--ink-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.spotlight-narrative {
+  font-size: 0.86rem;
+  line-height: 1.6;
+  margin-top: 0.3rem;
+  padding: 0.75rem 0.9rem;
+  background: rgba(91, 138, 245, 0.05);
+  border-radius: 8px;
+  border-left: 3px solid var(--accent, #5b8af5);
+}
+
+.spotlight-redflag {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--ink-muted);
+  opacity: 0.7;
+  margin: 0;
+}
+
+.ceo-principles-screen .card h3 {
+  font-size: 0.92rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.principle-item {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.6rem 0 0.6rem 0.75rem;
+  border-left: 3px solid var(--accent, #5b8af5);
+  align-items: baseline;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 100ms;
+}
+
+.principle-item:hover {
+  background: rgba(15, 125, 102, 0.04);
+}
+
+.principle-item.principle-active {
+  background: rgba(15, 125, 102, 0.08);
+  border-left-color: var(--accent-strong);
+}
+
+.principle-item + .principle-item {
+  margin-top: 0.15rem;
+}
+
+.principle-number {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent, #5b8af5);
+  min-width: 1.4rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.principle-item strong {
+  display: block;
+  font-size: 0.88rem;
+  margin-bottom: 0.2rem;
+}
+
+.principle-item p {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.red-flag {
+  font-style: italic;
+  opacity: 0.7;
+  font-size: 0.78rem !important;
+  margin-top: 0.25rem !important;
+}
+
+.spotlight-discuss {
+  margin-top: 0.6rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(15, 125, 102, 0.15);
+}
+
+.spotlight-discuss-input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fffef7;
+  color: var(--ink);
+}
+
+.spotlight-discuss-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(15, 125, 102, 0.12);
+}
+
+.spotlight-discuss-input::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.6;
+}
+
+/* ===================================================================
+   WORKSPACE TASKS
+   =================================================================== */
+
+.tasks-screen {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.tasks-create {
+  display: flex;
+  gap: 0.55rem;
+  align-items: end;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem;
+}
+
+.tasks-create input,
+.tasks-create select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--ink);
+  background: #fffef8;
+}
+
+.tasks-create input {
+  flex: 1;
+}
+
+.tasks-create label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.tasks-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.tasks-column {
+  display: grid;
+  gap: 0.55rem;
+  align-content: start;
+  min-width: 0;
+}
+
+.tasks-column h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.tasks-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+}
+
+.tasks-card.done {
+  opacity: 0.86;
+}
+
+.tasks-card-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tasks-card-main strong {
+  font-size: 0.84rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tasks-card-main small {
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+}
+
+.tasks-card-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.tasks-card-actions select {
+  font-size: 0.72rem;
+}
+
+@media (max-width: 980px) {
+  .tasks-columns {
+    grid-template-columns: 1fr;
+  }
+}

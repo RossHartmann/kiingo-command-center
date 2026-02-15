@@ -266,6 +266,7 @@ export function ChatScreen(): JSX.Element {
   const [codexDetails, setCodexDetails] = useState<Record<string, RunDetail>>({});
   const [claudeDetails, setClaudeDetails] = useState<Record<string, RunDetail>>({});
   const autoCreateInFlight = useRef<Record<Provider, boolean>>({ codex: false, claude: false });
+  const pendingChatHandled = useRef(false);
 
   const grantedWorkspaces = useMemo(() => {
     return state.workspaceGrants.filter((grant) => !grant.revokedAt).map((grant) => grant.path);
@@ -330,6 +331,45 @@ export function ChatScreen(): JSX.Element {
       autoCreateInFlight.current[provider] = false;
     });
   }, [actions, conversations.length, provider, selectedConversationId, showArchived, state.settings?.conversationThreadsV1]);
+
+  useEffect(() => {
+    const ctx = state.pendingChatContext;
+    if (!ctx || pendingChatHandled.current) return;
+    if (!workspace) return;
+    pendingChatHandled.current = true;
+
+    setProvider("claude");
+
+    void (async () => {
+      try {
+        const title = ctx.initialMessage.length > 60
+          ? ctx.initialMessage.slice(0, 57) + "..."
+          : ctx.initialMessage;
+        const created = await actions.createConversation("claude", title);
+        if (!created) return;
+
+        const { runId } = await actions.sendConversationMessage({
+          provider: "claude",
+          conversationId: created.id,
+          prompt: ctx.initialMessage,
+          model: modelsByProvider.claude.trim() || undefined,
+          outputFormat: "text",
+          cwd: workspace,
+          harness: { systemPrompt: ctx.systemPrompt },
+          queuePriority: 0,
+          timeoutSeconds: 300,
+          maxRetries: 0,
+          retryBackoffMs: 1000
+        });
+
+        await actions.selectConversation("claude", created.id);
+        await actions.selectRun(runId);
+      } finally {
+        actions.setPendingChatContext(null);
+        pendingChatHandled.current = false;
+      }
+    })();
+  }, [actions, modelsByProvider.claude, state.pendingChatContext, workspace]);
 
   useEffect(() => {
     if (!selectedConversationId) {

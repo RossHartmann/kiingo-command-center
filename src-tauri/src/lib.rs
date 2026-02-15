@@ -8,15 +8,19 @@ mod redaction;
 mod runner;
 mod scheduler;
 mod session;
+mod workspace;
 
 use crate::models::{
     AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
+    ArchiveAtomRequest, AtomRecord, ClassificationResult, ClassificationSource, CreateAtomRequest,
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
-    ExportResponse, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
-    Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveMetricDefinitionPayload,
-    SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
+    ExportResponse, ListAtomsRequest, ListConversationsFilters, ListEventsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
+    NotepadViewDefinition, PageResponse, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveMetricDefinitionPayload,
+    SaveNotepadViewRequest, SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
+    SetTaskStatusRequest, TaskReopenRequest,
     SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
-    UnbindMetricResponse, UpdateScreenMetricLayoutPayload, WorkspaceGrant,
+    UnbindMetricResponse, UpdateAtomRequest, UpdateScreenMetricLayoutPayload, WorkspaceCapabilities,
+    WorkspaceEventRecord, WorkspaceGrant, WorkspaceHealth,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -375,6 +379,177 @@ async fn refresh_screen_metrics(
     state.runner.refresh_screen_metrics(&screen_id).await.map_err(to_client_error)
 }
 
+// ─── Workspace Commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn workspace_capabilities_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceCapabilities, String> {
+    state.runner.workspace_capabilities_get().map_err(to_client_error)
+}
+
+#[tauri::command]
+fn workspace_health_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceHealth, String> {
+    state.runner.workspace_health_get().map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atoms_list(
+    state: tauri::State<'_, AppState>,
+    request: ListAtomsRequest,
+) -> Result<PageResponse<AtomRecord>, String> {
+    state.runner.atoms_list(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_get(state: tauri::State<'_, AppState>, atom_id: String) -> Result<Option<AtomRecord>, String> {
+    state.runner.atom_get(&atom_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_create(state: tauri::State<'_, AppState>, payload: CreateAtomRequest) -> Result<AtomRecord, String> {
+    state.runner.atom_create(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_update(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    payload: UpdateAtomRequest,
+) -> Result<AtomRecord, String> {
+    state.runner.atom_update(&atom_id, payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn task_status_set(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    payload: SetTaskStatusRequest,
+) -> Result<AtomRecord, String> {
+    state.runner.task_status_set(&atom_id, payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn task_complete(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    expected_revision: i64,
+) -> Result<AtomRecord, String> {
+    state
+        .runner
+        .task_complete(&atom_id, expected_revision)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn task_reopen(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    payload: TaskReopenRequest,
+) -> Result<AtomRecord, String> {
+    state.runner.task_reopen(&atom_id, payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_archive(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    payload: ArchiveAtomRequest,
+) -> Result<AtomRecord, String> {
+    state.runner.atom_archive(&atom_id, payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_unarchive(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    expected_revision: i64,
+) -> Result<AtomRecord, String> {
+    state
+        .runner
+        .atom_unarchive(&atom_id, expected_revision)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notepads_list(state: tauri::State<'_, AppState>) -> Result<Vec<NotepadViewDefinition>, String> {
+    state.runner.notepads_list().map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notepad_get(
+    state: tauri::State<'_, AppState>,
+    notepad_id: String,
+) -> Result<Option<NotepadViewDefinition>, String> {
+    state.runner.notepad_get(&notepad_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notepad_save(
+    state: tauri::State<'_, AppState>,
+    payload: SaveNotepadViewRequest,
+) -> Result<NotepadViewDefinition, String> {
+    state.runner.notepad_save(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notepad_delete(state: tauri::State<'_, AppState>, notepad_id: String) -> Result<BooleanResponse, String> {
+    state.runner.notepad_delete(&notepad_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notepad_atoms_list(
+    state: tauri::State<'_, AppState>,
+    notepad_id: String,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<AtomRecord>, String> {
+    state
+        .runner
+        .notepad_atoms_list(&notepad_id, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn events_list(
+    state: tauri::State<'_, AppState>,
+    request: ListEventsRequest,
+) -> Result<PageResponse<WorkspaceEventRecord>, String> {
+    state.runner.events_list(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_events_list(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<WorkspaceEventRecord>, String> {
+    state
+        .runner
+        .atom_events_list(&atom_id, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn classification_preview(
+    state: tauri::State<'_, AppState>,
+    raw_text: String,
+) -> Result<ClassificationResult, String> {
+    state.runner.classification_preview(raw_text).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_classify(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    source: ClassificationSource,
+    force_facet: Option<String>,
+) -> Result<AtomRecord, String> {
+    state
+        .runner
+        .atom_classify(&atom_id, source, force_facet)
+        .map_err(to_client_error)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -479,7 +654,27 @@ pub fn run() {
             update_screen_metric_layout,
             get_screen_metrics,
             refresh_metric,
-            refresh_screen_metrics
+            refresh_screen_metrics,
+            workspace_capabilities_get,
+            workspace_health_get,
+            atoms_list,
+            atom_get,
+            atom_create,
+            atom_update,
+            task_status_set,
+            task_complete,
+            task_reopen,
+            atom_archive,
+            atom_unarchive,
+            notepads_list,
+            notepad_get,
+            notepad_save,
+            notepad_delete,
+            notepad_atoms_list,
+            events_list,
+            atom_events_list,
+            classification_preview,
+            atom_classify
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
