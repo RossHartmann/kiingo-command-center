@@ -210,18 +210,21 @@ export function CeoPrinciplesScreen(): JSX.Element {
     const text = discussInput.trim();
     if (!text) return;
 
-    const systemPrompt = [
-      `You are a CEO coach. The user is reflecting on Principle #${spotlight.number}: "${spotlight.title}".`,
+    const context = [
+      `I'm reflecting on CEO Principle #${spotlight.number}: "${spotlight.title}"`,
       "",
-      `Description: ${spotlight.description}`,
-      `Red flag: ${spotlight.redFlag}`,
+      `> ${spotlight.description}`,
       "",
-      `Spotlight narrative: ${spotlight.spotlight}`,
+      `> Red flag: ${spotlight.redFlag}`,
       "",
-      "Your role is to help the user think through how this principle applies to their current situation. Ask clarifying questions, challenge assumptions gently, and offer actionable next steps. Be direct and concise — no corporate fluff."
+      `> ${spotlight.spotlight}`,
+      "",
+      `---`,
+      "",
+      text
     ].join("\n");
 
-    actions.setPendingChatContext({ systemPrompt, initialMessage: text });
+    actions.setPendingChatContext({ systemPrompt: "", initialMessage: context });
     actions.selectScreen("chat");
     setDiscussInput("");
   }

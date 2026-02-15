@@ -355,7 +355,7 @@ export function ChatScreen(): JSX.Element {
           model: modelsByProvider.claude.trim() || undefined,
           outputFormat: "text",
           cwd: workspace,
-          harness: { systemPrompt: ctx.systemPrompt },
+          ...(ctx.systemPrompt ? { harness: { systemPrompt: ctx.systemPrompt } } : {}),
           queuePriority: 0,
           timeoutSeconds: 300,
           maxRetries: 0,

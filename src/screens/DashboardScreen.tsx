@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricGrid } from "../components/MetricGrid";
 import type { MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
@@ -32,14 +32,20 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     }
   }, [actions, state.metricDefinitions.length]);
 
+  // Track which metrics we've already kicked off a refresh for so that
+  // view reloads (which create a new `views` reference) don't re-trigger
+  // duplicate refresh attempts in a cascade.
+  const refreshedRef = useRef(new Set<string>());
+  useEffect(() => {
+    refreshedRef.current = new Set<string>();
+  }, [screenId]);
+
   useEffect(() => {
     if (views.length === 0) return;
     const staleMetrics = views.filter((v) => v.isStale && !v.refreshInProgress);
-    // Deduplicate by metricId — multiple widgets of the same metric should only trigger one refresh
-    const seen = new Set<string>();
     for (const view of staleMetrics) {
-      if (seen.has(view.definition.id)) continue;
-      seen.add(view.definition.id);
+      if (refreshedRef.current.has(view.definition.id)) continue;
+      refreshedRef.current.add(view.definition.id);
       void actions.refreshMetric(view.definition.id).catch(() => {});
     }
   }, [views, actions]);
