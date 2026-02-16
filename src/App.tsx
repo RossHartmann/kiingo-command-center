@@ -17,6 +17,11 @@ import { CeoPrinciplesScreen } from "./screens/CeoPrinciplesScreen";
 import { CooPrinciplesScreen } from "./screens/CooPrinciplesScreen";
 import { CmoPrinciplesScreen } from "./screens/CmoPrinciplesScreen";
 import { CroPrinciplesScreen } from "./screens/CroPrinciplesScreen";
+import { CtoPrinciplesScreen } from "./screens/CtoPrinciplesScreen";
+import { CfoPrinciplesScreen } from "./screens/CfoPrinciplesScreen";
+import { CpoPrinciplesScreen } from "./screens/CpoPrinciplesScreen";
+import { CcoPrinciplesScreen } from "./screens/CcoPrinciplesScreen";
+import { ChroPrinciplesScreen } from "./screens/ChroPrinciplesScreen";
 import { TasksScreen } from "./screens/TasksScreen";
 
 export default function App(): JSX.Element {
@@ -55,6 +60,16 @@ export default function App(): JSX.Element {
         return <CmoPrinciplesScreen />;
       case "cro-principles":
         return <CroPrinciplesScreen />;
+      case "cto-principles":
+        return <CtoPrinciplesScreen />;
+      case "cfo-principles":
+        return <CfoPrinciplesScreen />;
+      case "cpo-principles":
+        return <CpoPrinciplesScreen />;
+      case "cco-principles":
+        return <CcoPrinciplesScreen />;
+      case "chro-principles":
+        return <ChroPrinciplesScreen />;
       default: {
         return <DashboardScreen screenId={state.selectedScreen} />;
       }

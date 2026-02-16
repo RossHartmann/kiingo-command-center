@@ -116,7 +116,12 @@ export type Screen =
   | "ceo-principles"
   | "coo-principles"
   | "cmo-principles"
-  | "cro-principles";
+  | "cro-principles"
+  | "cto-principles"
+  | "cfo-principles"
+  | "cpo-principles"
+  | "cco-principles"
+  | "chro-principles";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 
@@ -401,27 +406,75 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   const refreshAll = useCallback(async () => {
     safeDispatch({ type: "loading", value: true });
     try {
-      const [runs, conversations, profiles, capabilities, jobs, grants, settings, atomPage, notepads] = await Promise.all([
+      const [runsResult, conversationsResult, profilesResult, capabilitiesResult, jobsResult, grantsResult, settingsResult] =
+        await Promise.allSettled([
         listRuns({ limit: 200, offset: 0 }),
         listConversations({ limit: 200, offset: 0, includeArchived: true }),
         listProfiles(),
         listCapabilities(),
         listQueueJobs(),
         listWorkspaceGrants(),
-        getSettings(),
+        getSettings()
+      ]);
+      const [atomPageResult, notepadsResult] = await Promise.allSettled([
         atomsList({ limit: 500, filter: { facet: "task", includeArchived: false }, sort: [{ field: "updatedAt", direction: "desc" }] }),
         notepadsList()
       ]);
-      safeDispatch({ type: "set_runs", runs });
-      safeDispatch({ type: "set_conversations", conversations });
-      safeDispatch({ type: "set_profiles", profiles });
-      safeDispatch({ type: "set_capabilities", capabilities });
-      safeDispatch({ type: "set_jobs", jobs });
-      safeDispatch({ type: "set_grants", grants });
-      safeDispatch({ type: "set_settings", settings });
-      safeDispatch({ type: "set_workspace_atoms", atoms: atomPage.items });
-      safeDispatch({ type: "set_workspace_notepads", notepads });
-      safeDispatch({ type: "error", error: undefined });
+
+      const errors: string[] = [];
+      const collectError = (value: PromiseRejectedResult): void => {
+        errors.push(asError(value.reason));
+      };
+
+      if (runsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_runs", runs: runsResult.value });
+      } else {
+        collectError(runsResult);
+      }
+      if (conversationsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_conversations", conversations: conversationsResult.value });
+      } else {
+        collectError(conversationsResult);
+      }
+      if (profilesResult.status === "fulfilled") {
+        safeDispatch({ type: "set_profiles", profiles: profilesResult.value });
+      } else {
+        collectError(profilesResult);
+      }
+      if (capabilitiesResult.status === "fulfilled") {
+        safeDispatch({ type: "set_capabilities", capabilities: capabilitiesResult.value });
+      } else {
+        collectError(capabilitiesResult);
+      }
+      if (jobsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_jobs", jobs: jobsResult.value });
+      } else {
+        collectError(jobsResult);
+      }
+      if (grantsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_grants", grants: grantsResult.value });
+      } else {
+        collectError(grantsResult);
+      }
+      if (settingsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_settings", settings: settingsResult.value });
+      } else {
+        collectError(settingsResult);
+      }
+      if (atomPageResult.status === "fulfilled") {
+        safeDispatch({ type: "set_workspace_atoms", atoms: atomPageResult.value.items });
+      } else {
+        safeDispatch({ type: "set_workspace_atoms", atoms: [] });
+        console.warn("workspace atoms preload failed", atomPageResult.reason);
+      }
+      if (notepadsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_workspace_notepads", notepads: notepadsResult.value });
+      } else {
+        safeDispatch({ type: "set_workspace_notepads", notepads: [] });
+        console.warn("workspace notepads preload failed", notepadsResult.reason);
+      }
+
+      safeDispatch({ type: "error", error: errors[0] });
     } catch (error) {
       safeDispatch({ type: "error", error: asError(error) });
     } finally {
@@ -881,6 +934,18 @@ type Unlisten = (() => void) | null;
 function asError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const maybe = error as { message?: unknown; error?: unknown };
+    if (typeof maybe.message === "string" && maybe.message.length > 0) {
+      return maybe.message;
+    }
+    if (typeof maybe.error === "string" && maybe.error.length > 0) {
+      return maybe.error;
+    }
   }
   return "Unexpected error";
 }
