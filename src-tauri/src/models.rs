@@ -694,6 +694,27 @@ pub struct MetricRefreshResponse {
     pub run_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricDiagnostics {
+    pub metric_id: String,
+    pub total_runs: i64,
+    pub completed_runs: i64,
+    pub failed_runs: i64,
+    pub success_rate: f64,
+    pub last_run_duration_secs: Option<f64>,
+    pub avg_run_duration_secs: Option<f64>,
+    pub min_run_duration_secs: Option<f64>,
+    pub max_run_duration_secs: Option<f64>,
+    pub ttl_seconds: i64,
+    pub provider: String,
+    pub model: Option<String>,
+    pub current_status: Option<String>,
+    pub last_error: Option<String>,
+    pub last_completed_at: Option<String>,
+    pub next_refresh_at: Option<String>,
+}
+
 // ─── Workspace (Tasks + Notepad Platform) ───────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1183,6 +1204,14 @@ pub struct SetTaskStatusRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveAtomRequest {
+    pub expected_revision: i64,
+    pub idempotency_key: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAtomRequest {
     pub expected_revision: i64,
     pub idempotency_key: Option<String>,
     pub reason: Option<String>,

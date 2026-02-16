@@ -430,6 +430,25 @@ export interface MetricRefreshResponse {
   runId?: string;
 }
 
+export interface MetricDiagnostics {
+  metricId: string;
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  successRate: number;
+  lastRunDurationSecs: number | null;
+  avgRunDurationSecs: number | null;
+  minRunDurationSecs: number | null;
+  maxRunDurationSecs: number | null;
+  ttlSeconds: number;
+  provider: string;
+  model: string | null;
+  currentStatus: string | null;
+  lastError: string | null;
+  lastCompletedAt: string | null;
+  nextRefreshAt: string | null;
+}
+
 // ─── Workspace (Tasks + Notepad Platform) ───────────────────────────────────
 
 export type IsoDateTime = string;
@@ -731,6 +750,12 @@ export interface TaskReopenRequest {
 }
 
 export interface ArchiveAtomRequest {
+  expectedRevision: number;
+  idempotencyKey?: string;
+  reason?: string;
+}
+
+export interface DeleteAtomRequest {
   expectedRevision: number;
   idempotencyKey?: string;
   reason?: string;
@@ -1254,7 +1279,8 @@ export type FeatureFlagKey =
   | "workspace.focus_sessions_v2"
   | "workspace.recurrence"
   | "workspace.recurrence_v2"
-  | "workspace.agent_handoff";
+  | "workspace.agent_handoff"
+  | "workspace.notepad_ui_v2";
 
 export interface FeatureFlag {
   key: FeatureFlagKey;

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAppState } from "./state/appState";
 import { Sidebar } from "./components/Sidebar/Sidebar";
+import { OmniSearch } from "./components/OmniSearch";
 import { SCREEN_META } from "./components/Sidebar/navigationConfig";
 import { ChatScreen } from "./screens/ChatScreen";
 import { LegacyChatScreen } from "./screens/LegacyChatScreen";
@@ -81,6 +82,7 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app-shell">
+      <OmniSearch />
       <Sidebar mobileOpen={mobileMenuOpen} onMobileClose={() => setMobileMenuOpen(false)} />
 
       <div className="content-area">

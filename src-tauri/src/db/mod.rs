@@ -1,7 +1,7 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     AppSettings, BindMetricToScreenPayload, CapabilitySnapshot, ConversationDetail, ConversationRecord,
-    ConversationSummary, ListConversationsFilters, ListRunsFilters, MetricDefinition,
+    ConversationSummary, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricDiagnostics,
     MetricSnapshot, MetricSnapshotStatus, Profile, Provider, RunArtifact, RunDetail, RunEventRecord, RunMode,
     RunRecord, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
     ScreenMetricLayoutItem, ScreenMetricView, WorkspaceGrant,
@@ -1326,6 +1326,97 @@ impl Database {
         Ok(result)
     }
 
+    pub fn get_metric_diagnostics(&self, metric_id: &str) -> AppResult<MetricDiagnostics> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+
+        // Aggregation stats from all snapshots
+        let (total_runs, completed_runs, failed_runs, avg_dur, min_dur, max_dur): (i64, i64, i64, Option<f64>, Option<f64>, Option<f64>) = conn.query_row(
+            "SELECT
+                COUNT(1),
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+                AVG(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
+                    THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END),
+                MIN(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
+                    THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END),
+                MAX(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
+                    THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END)
+             FROM metric_snapshots WHERE metric_id = ?1",
+            [metric_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )?;
+
+        // Last completed snapshot duration + timestamp
+        let last_completed: Option<(f64, String)> = conn.query_row(
+            "SELECT (julianday(completed_at) - julianday(created_at)) * 86400.0, completed_at
+             FROM metric_snapshots
+             WHERE metric_id = ?1 AND status = 'completed' AND completed_at IS NOT NULL
+             ORDER BY completed_at DESC LIMIT 1",
+            [metric_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+
+        // Most recent snapshot status
+        let current_status: Option<String> = conn.query_row(
+            "SELECT status FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            [metric_id],
+            |row| row.get(0),
+        ).optional()?;
+
+        // Last error message
+        let last_error: Option<String> = conn.query_row(
+            "SELECT error_message FROM metric_snapshots
+             WHERE metric_id = ?1 AND status = 'failed' AND error_message IS NOT NULL
+             ORDER BY created_at DESC LIMIT 1",
+            [metric_id],
+            |row| row.get(0),
+        ).optional()?;
+
+        // Metric definition for TTL, provider, model
+        let (ttl_seconds, provider, model): (i64, String, Option<String>) = conn.query_row(
+            "SELECT ttl_seconds, provider, model FROM metric_definitions WHERE id = ?1",
+            [metric_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).map_err(|_| AppError::NotFound(format!("metric definition {metric_id}")))?;
+
+        let success_rate = if total_runs > 0 {
+            (completed_runs as f64) / (total_runs as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let last_completed_at = last_completed.as_ref().map(|(_, ts)| ts.clone());
+        let last_run_duration_secs = last_completed.map(|(dur, _)| dur);
+
+        let next_refresh_at = last_completed_at.as_ref().map(|ts| {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S") {
+                let next = dt + chrono::Duration::seconds(ttl_seconds);
+                next.format("%Y-%m-%d %H:%M:%S").to_string()
+            } else {
+                "unknown".to_string()
+            }
+        });
+
+        Ok(MetricDiagnostics {
+            metric_id: metric_id.to_string(),
+            total_runs,
+            completed_runs,
+            failed_runs,
+            success_rate,
+            last_run_duration_secs,
+            avg_run_duration_secs: avg_dur,
+            min_run_duration_secs: min_dur,
+            max_run_duration_secs: max_dur,
+            ttl_seconds,
+            provider,
+            model,
+            current_status,
+            last_error,
+            last_completed_at,
+            next_refresh_at,
+        })
+    }
+
     pub fn has_pending_snapshot(&self, metric_id: &str) -> AppResult<bool> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         // Expire snapshots stuck in pending/running for over 5 minutes (process likely died)
@@ -2400,7 +2491,7 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
                slug TEXT UNIQUE NOT NULL,
                instructions TEXT NOT NULL,
                template_html TEXT DEFAULT '',
-               ttl_seconds INTEGER DEFAULT 3600,
+               ttl_seconds INTEGER DEFAULT 259200,
                provider TEXT DEFAULT 'claude',
                model TEXT,
                profile_id TEXT,

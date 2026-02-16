@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { conditionsList, obsidianTasksSync } from "../lib/tauriClient";
 import type { AtomRecord, ConditionRecord, TaskStatus } from "../lib/types";
 import { useAppActions, useAppState } from "../state/appState";
@@ -51,9 +51,6 @@ export function TasksScreen(): JSX.Element {
   const state = useAppState();
   const actions = useAppActions();
 
-  const [draft, setDraft] = useState("");
-  const [priority, setPriority] = useState<1 | 2 | 3 | 4 | 5>(3);
-  const [creating, setCreating] = useState(false);
   const [busyAtomId, setBusyAtomId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string>();
@@ -91,27 +88,12 @@ export function TasksScreen(): JSX.Element {
       }
     };
 
-    const sync = async (): Promise<void> => {
-      setSyncing(true);
-      try {
-        await obsidianTasksSync();
-        if (!cancelled) {
-          await actions.loadWorkspaceAtoms();
-          await loadConditions();
-        }
-      } catch (nextError) {
-        if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : "Failed to sync tasks from Obsidian");
-        }
-      } finally {
-        if (!cancelled) {
-          setSyncing(false);
-        }
+    void loadWorkspace().then(loadConditions).catch((nextError) => {
+      if (!cancelled) {
+        setError(nextError instanceof Error ? nextError.message : "Failed to load task projection");
       }
-    };
+    });
 
-    void loadWorkspace().then(loadConditions);
-    void sync();
     return () => {
       cancelled = true;
     };
@@ -138,30 +120,35 @@ export function TasksScreen(): JSX.Element {
   });
   const done = tasks.filter((atom) => atom.facetData.task?.status === "done").slice(0, 50);
 
-  async function submit(event: FormEvent): Promise<void> {
-    event.preventDefault();
-    if (!draft.trim() || creating) return;
-    setCreating(true);
+  async function refreshProjection(): Promise<void> {
+    setSyncing(true);
     setError(undefined);
     try {
-      await actions.createWorkspaceAtom({
-        rawText: draft.trim(),
-        captureSource: "ui",
-        initialFacets: ["task"],
-        facetData: {
-          task: {
-            title: draft.trim(),
-            status: "todo",
-            priority
+      await obsidianTasksSync();
+      await actions.loadWorkspaceAtoms();
+      const byAtomId: Record<string, ConditionRecord[]> = {};
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await conditionsList({ status: "active", limit: 250, cursor });
+        for (const condition of page.items) {
+          if (!byAtomId[condition.atomId]) {
+            byAtomId[condition.atomId] = [];
           }
+          byAtomId[condition.atomId].push(condition);
         }
-      });
-      setDraft("");
-      setPriority(3);
+        if (!page.nextCursor) {
+          break;
+        }
+        cursor = page.nextCursor;
+      }
+      for (const atomId of Object.keys(byAtomId)) {
+        byAtomId[atomId].sort((a, b) => conditionPriority(a) - conditionPriority(b));
+      }
+      setActiveConditionsByAtomId(byAtomId);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to create task");
+      setError(nextError instanceof Error ? nextError.message : "Failed to refresh tasks projection");
     } finally {
-      setCreating(false);
+      setSyncing(false);
     }
   }
 
@@ -199,31 +186,21 @@ export function TasksScreen(): JSX.Element {
 
   return (
     <section className="tasks-screen">
-      <form className="tasks-create" onSubmit={(event) => void submit(event)}>
-        <input
-          type="text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="Capture a task"
-          aria-label="Task title"
-        />
-        <label>
-          Priority
-          <select value={priority} onChange={(event) => setPriority(Number(event.target.value) as 1 | 2 | 3 | 4 | 5)}>
-            <option value={1}>P1</option>
-            <option value={2}>P2</option>
-            <option value={3}>P3</option>
-            <option value={4}>P4</option>
-            <option value={5}>P5</option>
-          </select>
-        </label>
-        <button type="submit" className="primary" disabled={creating || !draft.trim()}>
-          {creating ? "Adding..." : "Add Task"}
-        </button>
-      </form>
+      <div className="card tasks-projection-bar">
+        <small className="settings-hint">
+          Tasks is a projection over shared Notepad blocks. Capture new work from Notepad.
+        </small>
+        <div className="tasks-projection-actions">
+          <button type="button" onClick={() => actions.selectScreen("notepad")}>
+            Open Notepad
+          </button>
+          <button type="button" onClick={() => void refreshProjection()} disabled={syncing}>
+            {syncing ? "Refreshing..." : "Refresh Projection"}
+          </button>
+        </div>
+      </div>
 
       {error && <div className="banner error">{error}</div>}
-      {syncing && <div className="banner info">Syncing tasks from Obsidian...</div>}
 
       <div className="tasks-columns">
         <div className="tasks-column">

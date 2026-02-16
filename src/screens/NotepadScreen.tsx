@@ -1,6 +1,7 @@
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   atomArchive,
+  atomDelete,
   atomGet,
   atomUpdate,
   blockGet,
@@ -9,7 +10,9 @@ import {
   conditionResolve,
   conditionSetDate,
   conditionSetPerson,
+  conditionSetTask,
   conditionsList,
+  featureFlagsList,
   notepadAtomsList,
   notepadBlockCreate,
   notepadsList,
@@ -18,48 +21,33 @@ import {
   placementSave,
   placementsList,
   placementsReorder,
-  taskComplete,
-  taskStatusSet
+  taskStatusSet,
+  workspaceCapabilitiesGet,
+  workspaceHealthGet
 } from "../lib/tauriClient";
 import type {
   AtomRecord,
   BlockRecord,
   ConditionRecord,
+  FeatureFlag,
   NotepadFilter,
   NotepadViewDefinition,
   PlacementRecord,
-  TaskStatus
+  TaskStatus,
+  WorkspaceCapabilities,
+  WorkspaceHealth
 } from "../lib/types";
+import { NotepadToolbar } from "../components/notepad/NotepadToolbar";
+import { NOTEPAD_ESTIMATED_ROW_HEIGHT, NotepadTree } from "../components/notepad/NotepadTree";
+import {
+  resolveContainerKeyAction,
+  resolveEditorKeyAction
+} from "../components/notepad/keyboardContract";
+import { buildTreeData, findSiblingSwapTarget, insertPlacementAfter, parseOverlayMode, sortPlacements } from "../components/notepad/treeData";
+import type { FlatRow } from "../components/notepad/types";
+import { ROOT_KEY } from "../components/notepad/types";
+import { useNotepadUiState } from "../state/notepadState";
 
-type OverlayMode = "person" | "task" | "date";
-
-interface FlatRow {
-  placement: PlacementRecord;
-  block: BlockRecord;
-  atom?: AtomRecord;
-  depth: number;
-  hasChildren: boolean;
-  collapsed: boolean;
-  effectiveParentPlacementId?: string;
-  overlay?: ConditionRecord;
-}
-
-interface TreeData {
-  flatRows: FlatRow[];
-  rowByPlacementId: Record<string, FlatRow>;
-  effectiveParentByPlacementId: Record<string, string | undefined>;
-  childrenByParentKey: Record<string, string[]>;
-  orderedPlacementIds: string[];
-}
-
-interface ClipboardRow {
-  blockId: string;
-  sourcePlacementId: string;
-  sourceViewId: string;
-  mode: "copy" | "cut";
-}
-
-const ROOT_KEY = "__root__";
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
 
 function idempotencyKey(): string {
@@ -71,6 +59,10 @@ function idempotencyKey(): string {
 
 function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isConflictError(error: unknown): boolean {
+  return asErrorMessage(error).includes("CONFLICT");
 }
 
 async function listAllPages<T>(fetchPage: (cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>): Promise<T[]> {
@@ -111,242 +103,156 @@ function rowTitle(row: FlatRow): string {
   return fallback.length > 0 ? fallback : "Untitled";
 }
 
-function overlayPriority(condition: ConditionRecord): number {
-  if (condition.mode === "person") return 0;
-  if (condition.mode === "task") return 1;
-  if (condition.mode === "date") return 2;
-  return 99;
-}
-
-function activeOverlay(conditions: ConditionRecord[] | undefined): ConditionRecord | undefined {
-  if (!conditions || conditions.length === 0) {
-    return undefined;
-  }
-  return [...conditions]
-    .filter((condition) => condition.status === "active")
-    .sort((a, b) => overlayPriority(a) - overlayPriority(b))[0];
-}
-
-function parseOverlayMode(condition: ConditionRecord | undefined): OverlayMode | undefined {
-  if (!condition) return undefined;
-  if (condition.mode === "person") return "person";
-  if (condition.mode === "task") return "task";
-  if (condition.mode === "date") return "date";
-  return undefined;
-}
-
 function isTaskRow(row: FlatRow): boolean {
   return row.block.kind === "task" || !!row.atom?.facetData.task || !!row.block.taskStatus;
+}
+
+function parseCategories(input: string): string[] | undefined {
+  const items = input
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+  return items.length > 0 ? items : undefined;
 }
 
 function rowText(row: FlatRow, draft: string | undefined): string {
   return draft ?? row.block.text;
 }
 
-function sortPlacements(values: PlacementRecord[]): PlacementRecord[] {
-  return [...values].sort((a, b) => {
-    if (a.pinned !== b.pinned) {
-      return Number(b.pinned) - Number(a.pinned);
-    }
-    const keyCompare = a.orderKey.localeCompare(b.orderKey);
-    if (keyCompare !== 0) {
-      return keyCompare;
-    }
-    return a.id.localeCompare(b.id);
-  });
+function atomHasNoMeaningfulContent(atom: AtomRecord): boolean {
+  const text = atom.rawText.trim();
+  const body = (atom.body ?? "").trim();
+  return text.length === 0 && body.length === 0;
 }
 
-function buildTreeData(
-  placements: PlacementRecord[],
-  blocksById: Record<string, BlockRecord>,
-  atomsById: Record<string, AtomRecord>,
-  collapsedByPlacement: Record<string, boolean>,
-  conditionsByAtomId: Record<string, ConditionRecord[]>
-): TreeData {
-  const orderedPlacements = sortPlacements(placements);
-  const placementById = new Map<string, PlacementRecord>(orderedPlacements.map((placement) => [placement.id, placement]));
-  const blockToPlacementId = new Map<string, string>();
-  for (const placement of orderedPlacements) {
-    if (!blockToPlacementId.has(placement.blockId)) {
-      blockToPlacementId.set(placement.blockId, placement.id);
-    }
+function requiredWorkspaceCommandsPresent(capabilities: WorkspaceCapabilities | undefined): { ok: boolean; missing: string[] } {
+  if (!capabilities) {
+    return { ok: false, missing: ["workspace_capabilities_get"] };
   }
-
-  type Node = {
-    placement: PlacementRecord;
-    block: BlockRecord;
-    atom?: AtomRecord;
-    children: Node[];
-    effectiveParentPlacementId?: string;
-  };
-
-  const nodesByPlacementId = new Map<string, Node>();
-  for (const placement of orderedPlacements) {
-    const block = blocksById[placement.blockId];
-    if (!block) {
-      continue;
-    }
-    nodesByPlacementId.set(placement.id, {
-      placement,
-      block,
-      atom: block.atomId ? atomsById[block.atomId] : undefined,
-      children: []
-    });
-  }
-
-  const effectiveParentByPlacementId: Record<string, string | undefined> = {};
-  const roots: Node[] = [];
-  for (const placement of orderedPlacements) {
-    const node = nodesByPlacementId.get(placement.id);
-    if (!node) {
-      continue;
-    }
-    let parentPlacementId = placement.parentPlacementId;
-    if (!parentPlacementId || !nodesByPlacementId.has(parentPlacementId)) {
-      const canonicalParentPlacementId = node.block.parentBlockId
-        ? blockToPlacementId.get(node.block.parentBlockId)
-        : undefined;
-      parentPlacementId = canonicalParentPlacementId;
-    }
-    if (parentPlacementId === placement.id) {
-      parentPlacementId = undefined;
-    }
-    node.effectiveParentPlacementId = parentPlacementId;
-    effectiveParentByPlacementId[placement.id] = parentPlacementId;
-  }
-
-  for (const placement of orderedPlacements) {
-    const node = nodesByPlacementId.get(placement.id);
-    if (!node) {
-      continue;
-    }
-    if (!node.effectiveParentPlacementId) {
-      roots.push(node);
-      continue;
-    }
-    const parentNode = nodesByPlacementId.get(node.effectiveParentPlacementId);
-    if (!parentNode) {
-      roots.push(node);
-      continue;
-    }
-    parentNode.children.push(node);
-  }
-
-  const flatRows: FlatRow[] = [];
-  const rowByPlacementId: Record<string, FlatRow> = {};
-  const childrenByParentKey: Record<string, string[]> = {};
-  const orderedPlacementIds: string[] = [];
-  for (const placement of orderedPlacements) {
-    if (nodesByPlacementId.has(placement.id)) {
-      orderedPlacementIds.push(placement.id);
-    }
-  }
-
-  const registerChild = (parentPlacementId: string | undefined, placementId: string): void => {
-    const key = parentPlacementId ?? ROOT_KEY;
-    if (!childrenByParentKey[key]) {
-      childrenByParentKey[key] = [];
-    }
-    childrenByParentKey[key].push(placementId);
-  };
-
-  const visitNode = (node: Node, depth: number, path: Set<string>): void => {
-    if (path.has(node.placement.id)) {
-      return;
-    }
-    const nextPath = new Set(path);
-    nextPath.add(node.placement.id);
-    const row: FlatRow = {
-      placement: node.placement,
-      block: node.block,
-      atom: node.atom,
-      depth,
-      hasChildren: node.children.length > 0,
-      collapsed: !!collapsedByPlacement[node.placement.id],
-      effectiveParentPlacementId: node.effectiveParentPlacementId,
-      overlay: node.atom ? activeOverlay(conditionsByAtomId[node.atom.id]) : undefined
-    };
-    flatRows.push(row);
-    rowByPlacementId[row.placement.id] = row;
-    registerChild(node.effectiveParentPlacementId, row.placement.id);
-
-    if (row.collapsed) {
-      return;
-    }
-    for (const child of node.children) {
-      visitNode(child, depth + 1, nextPath);
-    }
-  };
-
-  for (const root of roots) {
-    visitNode(root, 0, new Set());
-  }
-
-  return {
-    flatRows,
-    rowByPlacementId,
-    effectiveParentByPlacementId,
-    childrenByParentKey,
-    orderedPlacementIds
-  };
+  const required = [
+    "notepads_list",
+    "notepad_block_create",
+    "notepad_atoms_list",
+    "blocks_list",
+    "placements_list",
+    "placement_save",
+    "placement_delete",
+    "placements_reorder",
+    "atom_update",
+    "task_status_set"
+  ];
+  const missing = required.filter((command) => !capabilities.supportedCommands.includes(command));
+  return { ok: missing.length === 0, missing };
 }
 
-function insertPlacementAfter(order: string[], placementId: string, afterPlacementId?: string): string[] {
-  const next = order.filter((value) => value !== placementId);
-  if (!afterPlacementId) {
-    next.push(placementId);
-    return next;
-  }
-  const index = next.indexOf(afterPlacementId);
-  if (index === -1) {
-    next.push(placementId);
-    return next;
-  }
-  next.splice(index + 1, 0, placementId);
-  return next;
+function notepadUiFlagEnabled(featureFlags: FeatureFlag[]): boolean {
+  const flag = featureFlags.find((value) => value.key === "workspace.notepad_ui_v2");
+  return flag ? flag.enabled : true;
 }
 
-function findSiblingSwapTarget(siblings: string[], selectedId: string, direction: "up" | "down"): string | undefined {
-  const index = siblings.indexOf(selectedId);
-  if (index === -1) return undefined;
-  if (direction === "up") {
-    return index > 0 ? siblings[index - 1] : undefined;
-  }
-  return index < siblings.length - 1 ? siblings[index + 1] : undefined;
+function placeCaretAtEnd(element: HTMLTextAreaElement): void {
+  const length = element.value.length;
+  element.setSelectionRange(length, length);
 }
 
 export function NotepadScreen(): JSX.Element {
+  const [uiState, uiDispatch] = useNotepadUiState();
+
   const [notepads, setNotepads] = useState<NotepadViewDefinition[]>([]);
-  const [activeNotepadId, setActiveNotepadId] = useState<string>("now");
   const [placements, setPlacements] = useState<PlacementRecord[]>([]);
   const [blocksById, setBlocksById] = useState<Record<string, BlockRecord>>({});
   const [atomsById, setAtomsById] = useState<Record<string, AtomRecord>>({});
   const [conditionsByAtomId, setConditionsByAtomId] = useState<Record<string, ConditionRecord[]>>({});
-  const [collapsedByPlacement, setCollapsedByPlacement] = useState<Record<string, boolean>>({});
-  const [draftsByPlacement, setDraftsByPlacement] = useState<Record<string, string>>({});
-  const [selectedPlacementId, setSelectedPlacementId] = useState<string>();
-  const [clipboard, setClipboard] = useState<ClipboardRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [gateError, setGateError] = useState<string>();
+
+  const [capabilities, setCapabilities] = useState<WorkspaceCapabilities>();
+  const [health, setHealth] = useState<WorkspaceHealth>();
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlag[]>([]);
+
   const [createName, setCreateName] = useState("");
   const [createDescription, setCreateDescription] = useState("");
-  const [createCategory, setCreateCategory] = useState("");
+  const [createCategories, setCreateCategories] = useState("");
   const [creatingNotepad, setCreatingNotepad] = useState(false);
 
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editCategories, setEditCategories] = useState("");
+  const [editingNotepad, setEditingNotepad] = useState(false);
+
+  const [quickTargetNotepadId, setQuickTargetNotepadId] = useState("");
+
   const saveTimersRef = useRef<Map<string, number>>(new Map());
+  const pendingEditorFocusPlacementIdRef = useRef<string | undefined>(undefined);
+  const selectedPlacementRef = useRef<string | undefined>(undefined);
 
   const activeNotepad = useMemo(
-    () => notepads.find((notepad) => notepad.id === activeNotepadId),
-    [notepads, activeNotepadId]
+    () => notepads.find((notepad) => notepad.id === uiState.activeNotepadId),
+    [notepads, uiState.activeNotepadId]
   );
 
   const treeData = useMemo(
-    () => buildTreeData(placements, blocksById, atomsById, collapsedByPlacement, conditionsByAtomId),
-    [placements, blocksById, atomsById, collapsedByPlacement, conditionsByAtomId]
+    () => buildTreeData(placements, blocksById, atomsById, uiState.collapsedByPlacement, conditionsByAtomId),
+    [placements, blocksById, atomsById, uiState.collapsedByPlacement, conditionsByAtomId]
   );
 
-  const selectedRow = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
+  const selectedRow = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+
+  const isGateOpen = useMemo(() => !gateError, [gateError]);
+
+  useEffect(() => {
+    if (!activeNotepad) {
+      return;
+    }
+    setEditName(activeNotepad.name);
+    setEditDescription(activeNotepad.description ?? "");
+    setEditCategories((activeNotepad.filters.categories ?? []).join(", "));
+  }, [activeNotepad]);
+
+  useEffect(() => {
+    selectedPlacementRef.current = uiState.selectedPlacementId;
+  }, [uiState.selectedPlacementId]);
+
+  useEffect(() => {
+    if (quickTargetNotepadId) {
+      return;
+    }
+    const candidate = notepads.find((value) => value.id !== uiState.activeNotepadId);
+    if (candidate) {
+      setQuickTargetNotepadId(candidate.id);
+    }
+  }, [notepads, quickTargetNotepadId, uiState.activeNotepadId]);
+
+  const loadWorkspaceGate = useCallback(async (): Promise<void> => {
+    const [nextCapabilities, nextHealth, nextFlags] = await Promise.all([
+      workspaceCapabilitiesGet(),
+      workspaceHealthGet(),
+      featureFlagsList()
+    ]);
+    setCapabilities(nextCapabilities);
+    setHealth(nextHealth);
+    setFeatureFlags(nextFlags);
+
+    if (!notepadUiFlagEnabled(nextFlags)) {
+      setGateError("Notepad is currently disabled by feature flag `workspace.notepad_ui_v2`.");
+      return;
+    }
+
+    const commandCheck = requiredWorkspaceCommandsPresent(nextCapabilities);
+    if (!commandCheck.ok) {
+      setGateError(`Missing workspace commands: ${commandCheck.missing.join(", ")}`);
+      return;
+    }
+
+    if (!nextHealth.adapterHealthy || !nextHealth.vaultAccessible) {
+      setGateError("Workspace adapter or Obsidian vault is unavailable. Resolve health issues in settings and retry.");
+      return;
+    }
+
+    setGateError(undefined);
+  }, []);
 
   const loadNotepadsIntoState = useCallback(async (): Promise<NotepadViewDefinition[]> => {
     const views = await notepadsList();
@@ -354,56 +260,140 @@ export function NotepadScreen(): JSX.Element {
     return views;
   }, []);
 
-  const loadNotepadData = useCallback(async (notepadId: string): Promise<void> => {
-    const [placementItems, blockItems, atomItems, activeConditions] = await Promise.all([
-      listAllPages((cursor) => placementsList({ viewId: notepadId, limit: 250, cursor })),
-      listAllPages((cursor) => blocksList({ notepadId, limit: 250, cursor })),
-      listAllPages((cursor) => notepadAtomsList(notepadId, 250, cursor)),
-      listAllPages((cursor) => conditionsList({ status: "active", limit: 250, cursor }))
-    ]);
-
-    const nextBlocksById: Record<string, BlockRecord> = {};
-    for (const block of blockItems) {
-      nextBlocksById[block.id] = block;
-    }
-
-    const nextAtomsById: Record<string, AtomRecord> = {};
-    for (const atom of atomItems) {
-      nextAtomsById[atom.id] = atom;
-    }
-
-    const nextConditionsByAtomId: Record<string, ConditionRecord[]> = {};
-    for (const condition of activeConditions) {
-      if (condition.status !== "active") {
-        continue;
+  const materializeMissingPlacements = useCallback(
+    async (
+      notepadId: string,
+      atomItems: AtomRecord[],
+      placementItems: PlacementRecord[],
+      blockItems: BlockRecord[]
+    ): Promise<{ placements: PlacementRecord[]; blocks: BlockRecord[] }> => {
+      const atomIds = new Set(atomItems.map((atom) => atom.id));
+      const nextBlocks = [...blockItems];
+      const blocksByAtomId = new Map<string, BlockRecord>();
+      for (const block of nextBlocks) {
+        if (block.atomId) {
+          blocksByAtomId.set(block.atomId, block);
+        }
       }
-      if (!nextConditionsByAtomId[condition.atomId]) {
-        nextConditionsByAtomId[condition.atomId] = [];
-      }
-      nextConditionsByAtomId[condition.atomId].push(condition);
-    }
-    for (const atomId of Object.keys(nextConditionsByAtomId)) {
-      nextConditionsByAtomId[atomId].sort((a, b) => overlayPriority(a) - overlayPriority(b));
-    }
 
-    setPlacements(sortPlacements(placementItems));
-    setBlocksById(nextBlocksById);
-    setAtomsById(nextAtomsById);
-    setConditionsByAtomId(nextConditionsByAtomId);
-    setSelectedPlacementId((current) => {
-      if (current && placementItems.some((placement) => placement.id === current)) {
-        return current;
+      const missingAtomIds = atomItems
+        .map((atom) => atom.id)
+        .filter((atomId) => !blocksByAtomId.has(atomId));
+      if (missingAtomIds.length > 0) {
+        const missingLookups = await Promise.all(missingAtomIds.map((atomId) => blocksList({ atomId, limit: 1 })));
+        for (const page of missingLookups) {
+          const block = page.items[0];
+          if (!block) {
+            continue;
+          }
+          nextBlocks.push(block);
+          if (block.atomId) {
+            blocksByAtomId.set(block.atomId, block);
+          }
+        }
       }
-      return placementItems[0]?.id;
-    });
-  }, []);
+
+      const existingBlockIds = new Set(placementItems.map((placement) => placement.blockId));
+      const missingBlockIds = nextBlocks
+        .filter((block) => block.atomId && atomIds.has(block.atomId))
+        .map((block) => block.id)
+        .filter((blockId, index, values) => values.indexOf(blockId) === index)
+        .filter((blockId) => !existingBlockIds.has(blockId));
+
+      if (missingBlockIds.length > 0) {
+        for (const blockId of missingBlockIds) {
+          await placementSave({
+            viewId: notepadId,
+            blockId,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+      }
+
+      const finalPlacements = missingBlockIds.length > 0
+        ? await listAllPages((cursor) => placementsList({ viewId: notepadId, limit: 250, cursor }))
+        : placementItems;
+      const finalBlocks = missingBlockIds.length > 0
+        ? await listAllPages((cursor) => blocksList({ notepadId, limit: 250, cursor }))
+        : nextBlocks;
+
+      return { placements: finalPlacements, blocks: finalBlocks };
+    },
+    []
+  );
+
+  const loadNotepadData = useCallback(
+    async (notepadId: string): Promise<void> => {
+      const [atomItems, activeConditions] = await Promise.all([
+        listAllPages((cursor) => notepadAtomsList(notepadId, 250, cursor)),
+        listAllPages((cursor) => conditionsList({ status: "active", limit: 250, cursor }))
+      ]);
+
+      const [placementItems, blockItems] = await Promise.all([
+        listAllPages((cursor) => placementsList({ viewId: notepadId, limit: 250, cursor })),
+        listAllPages((cursor) => blocksList({ notepadId, limit: 250, cursor }))
+      ]);
+
+      const materialized = await materializeMissingPlacements(notepadId, atomItems, placementItems, blockItems);
+
+      const nextBlocksById: Record<string, BlockRecord> = {};
+      for (const block of materialized.blocks) {
+        nextBlocksById[block.id] = block;
+      }
+
+      const nextAtomsById: Record<string, AtomRecord> = {};
+      for (const atom of atomItems) {
+        nextAtomsById[atom.id] = atom;
+      }
+
+      const nextConditionsByAtomId: Record<string, ConditionRecord[]> = {};
+      for (const condition of activeConditions) {
+        if (condition.status !== "active") {
+          continue;
+        }
+        if (!nextConditionsByAtomId[condition.atomId]) {
+          nextConditionsByAtomId[condition.atomId] = [];
+        }
+        nextConditionsByAtomId[condition.atomId].push(condition);
+      }
+
+      for (const atomId of Object.keys(nextConditionsByAtomId)) {
+        nextConditionsByAtomId[atomId].sort((a, b) => {
+          if (a.mode === b.mode) return 0;
+          if (a.mode === "person") return -1;
+          if (b.mode === "person") return 1;
+          if (a.mode === "task") return -1;
+          if (b.mode === "task") return 1;
+          return 0;
+        });
+      }
+
+      const sortedPlacements = sortPlacements(materialized.placements);
+      setPlacements(sortedPlacements);
+      setBlocksById(nextBlocksById);
+      setAtomsById(nextAtomsById);
+      setConditionsByAtomId(nextConditionsByAtomId);
+      const preferredSelectionId = selectedPlacementRef.current;
+      const nextSelectionId =
+        preferredSelectionId && sortedPlacements.some((placement) => placement.id === preferredSelectionId)
+          ? preferredSelectionId
+          : sortedPlacements[0]?.id;
+      selectedPlacementRef.current = nextSelectionId;
+      uiDispatch({
+        type: "set_selected_placement",
+        placementId: nextSelectionId
+      });
+    },
+    [materializeMissingPlacements, uiDispatch]
+  );
 
   const reloadActiveNotepad = useCallback(async (): Promise<void> => {
-    if (!activeNotepadId) {
+    if (!uiState.activeNotepadId) {
       return;
     }
-    await loadNotepadData(activeNotepadId);
-  }, [activeNotepadId, loadNotepadData]);
+    await loadWorkspaceGate();
+    await loadNotepadData(uiState.activeNotepadId);
+  }, [loadNotepadData, loadWorkspaceGate, uiState.activeNotepadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -411,16 +401,17 @@ export function NotepadScreen(): JSX.Element {
       setLoading(true);
       setError(undefined);
       try {
+        await loadWorkspaceGate();
         const views = await loadNotepadsIntoState();
         if (cancelled) {
           return;
         }
         const nextId =
-          views.find((view) => view.id === activeNotepadId)?.id ??
+          views.find((view) => view.id === uiState.activeNotepadId)?.id ??
           views.find((view) => view.id === "now")?.id ??
           views[0]?.id;
         if (nextId) {
-          setActiveNotepadId(nextId);
+          uiDispatch({ type: "set_active_notepad", notepadId: nextId });
         } else {
           setLoading(false);
         }
@@ -435,18 +426,18 @@ export function NotepadScreen(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [loadNotepadsIntoState]);
+  }, [loadNotepadsIntoState, loadWorkspaceGate, uiDispatch, uiState.activeNotepadId]);
 
   useEffect(() => {
     let cancelled = false;
     const load = async (): Promise<void> => {
-      if (!activeNotepadId) {
+      if (!uiState.activeNotepadId) {
         return;
       }
       setLoading(true);
       setError(undefined);
       try {
-        await loadNotepadData(activeNotepadId);
+        await loadNotepadData(uiState.activeNotepadId);
       } catch (nextError) {
         if (!cancelled) {
           setError(asErrorMessage(nextError));
@@ -461,7 +452,7 @@ export function NotepadScreen(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [activeNotepadId, loadNotepadData]);
+  }, [loadNotepadData, uiState.activeNotepadId]);
 
   useEffect(() => {
     return () => {
@@ -472,6 +463,107 @@ export function NotepadScreen(): JSX.Element {
     };
   }, []);
 
+  const ensurePlacementVisible = useCallback(
+    (placementId: string): void => {
+      const container = document.querySelector<HTMLDivElement>(".notepad-tree");
+      if (!container) {
+        return;
+      }
+      const rowIndex = treeData.flatRows.findIndex((row) => row.placement.id === placementId);
+      if (rowIndex === -1) {
+        return;
+      }
+      const rowTop = rowIndex * NOTEPAD_ESTIMATED_ROW_HEIGHT;
+      const rowBottom = rowTop + NOTEPAD_ESTIMATED_ROW_HEIGHT;
+      const viewportTop = container.scrollTop;
+      const viewportBottom = viewportTop + container.clientHeight;
+
+      if (rowTop < viewportTop) {
+        container.scrollTop = rowTop;
+      } else if (rowBottom > viewportBottom) {
+        container.scrollTop = rowBottom - container.clientHeight;
+      }
+    },
+    [treeData.flatRows]
+  );
+
+  const focusEditorForPlacement = useCallback(
+    (placementId: string): void => {
+      ensurePlacementVisible(placementId);
+      const attempt = (remaining: number): void => {
+        const editor = document.querySelector<HTMLTextAreaElement>(`textarea[data-placement-id="${placementId}"]`);
+        if (editor) {
+          editor.focus();
+          placeCaretAtEnd(editor);
+          pendingEditorFocusPlacementIdRef.current = undefined;
+          uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+          return;
+        }
+        if (remaining <= 0) {
+          return;
+        }
+        window.setTimeout(() => {
+          window.requestAnimationFrame(() => attempt(remaining - 1));
+        }, 16);
+      };
+      attempt(12);
+    },
+    [ensurePlacementVisible, uiDispatch]
+  );
+
+  useEffect(() => {
+    if (!uiState.selectedPlacementId) {
+      return;
+    }
+    ensurePlacementVisible(uiState.selectedPlacementId);
+  }, [ensurePlacementVisible, uiState.selectedPlacementId]);
+
+  useEffect(() => {
+    const selectedPlacementId = uiState.selectedPlacementId;
+    if (!selectedPlacementId) {
+      return;
+    }
+    if (pendingEditorFocusPlacementIdRef.current === selectedPlacementId) {
+      return;
+    }
+    if (treeData.rowByPlacementId[selectedPlacementId]) {
+      return;
+    }
+
+    let fallback = treeData.effectiveParentByPlacementId[selectedPlacementId];
+    while (fallback && !treeData.rowByPlacementId[fallback]) {
+      fallback = treeData.effectiveParentByPlacementId[fallback];
+    }
+    if (!fallback) {
+      fallback = treeData.flatRows[0]?.placement.id;
+    }
+    uiDispatch({ type: "set_selected_placement", placementId: fallback });
+    uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+  }, [
+    treeData.effectiveParentByPlacementId,
+    treeData.flatRows,
+    treeData.rowByPlacementId,
+    uiDispatch,
+    uiState.selectedPlacementId
+  ]);
+
+  useEffect(() => {
+    const pendingPlacementId = pendingEditorFocusPlacementIdRef.current;
+    if (!pendingPlacementId) {
+      return;
+    }
+    if (uiState.selectedPlacementId !== pendingPlacementId) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      focusEditorForPlacement(pendingPlacementId);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [focusEditorForPlacement, treeData.flatRows, uiState.selectedPlacementId]);
+
   const persistRowText = useCallback(
     async (row: FlatRow, nextText: string): Promise<void> => {
       const atom = row.atom;
@@ -479,11 +571,7 @@ export function NotepadScreen(): JSX.Element {
         return;
       }
       if (nextText === row.block.text) {
-        setDraftsByPlacement((current) => {
-          const next = { ...current };
-          delete next[row.placement.id];
-          return next;
-        });
+        uiDispatch({ type: "clear_draft", placementId: row.placement.id });
         return;
       }
 
@@ -497,22 +585,18 @@ export function NotepadScreen(): JSX.Element {
         if (latestBlock) {
           setBlocksById((current) => ({ ...current, [latestBlock.id]: latestBlock }));
         }
-        setDraftsByPlacement((current) => {
-          const next = { ...current };
-          delete next[row.placement.id];
-          return next;
-        });
+        uiDispatch({ type: "clear_draft", placementId: row.placement.id });
       } catch (nextError) {
         setError(asErrorMessage(nextError));
         await reloadActiveNotepad();
       }
     },
-    [reloadActiveNotepad]
+    [reloadActiveNotepad, uiDispatch]
   );
 
   const scheduleDraftSave = useCallback(
     (row: FlatRow, nextText: string): void => {
-      setDraftsByPlacement((current) => ({ ...current, [row.placement.id]: nextText }));
+      uiDispatch({ type: "set_draft", placementId: row.placement.id, draft: nextText });
       const existingTimer = saveTimersRef.current.get(row.placement.id);
       if (existingTimer) {
         window.clearTimeout(existingTimer);
@@ -522,7 +606,7 @@ export function NotepadScreen(): JSX.Element {
       }, 450);
       saveTimersRef.current.set(row.placement.id, timer);
     },
-    [persistRowText]
+    [persistRowText, uiDispatch]
   );
 
   const flushDraft = useCallback(
@@ -533,13 +617,13 @@ export function NotepadScreen(): JSX.Element {
         saveTimersRef.current.delete(placementId);
       }
       const row = treeData.rowByPlacementId[placementId];
-      const draft = draftsByPlacement[placementId];
+      const draft = uiState.draftsByPlacement[placementId];
       if (!row || draft === undefined) {
         return;
       }
       await persistRowText(row, draft);
     },
-    [draftsByPlacement, persistRowText, treeData.rowByPlacementId]
+    [persistRowText, treeData.rowByPlacementId, uiState.draftsByPlacement]
   );
 
   const runMutation = useCallback(
@@ -562,17 +646,33 @@ export function NotepadScreen(): JSX.Element {
     if (!atom) {
       return;
     }
-    if (parentAtomId && atom.relations.parentId === parentAtomId) {
+    const targetParentId = parentAtomId ?? undefined;
+    const hasTargetParent = (target: AtomRecord): boolean => (target.relations.parentId ?? undefined) === targetParentId;
+    const patchParent = async (target: AtomRecord): Promise<void> => {
+      await atomUpdate(target.id, {
+        expectedRevision: target.revision,
+        relationsPatch: targetParentId ? { parentId: targetParentId } : undefined,
+        clearParentId: targetParentId ? undefined : true
+      });
+    };
+
+    const latestBeforeUpdate = (await atomGet(atom.id)) ?? atom;
+    if (hasTargetParent(latestBeforeUpdate)) {
       return;
     }
-    if (!parentAtomId && !atom.relations.parentId) {
-      return;
+
+    try {
+      await patchParent(latestBeforeUpdate);
+    } catch (nextError) {
+      if (!isConflictError(nextError)) {
+        throw nextError;
+      }
+      const latestAfterConflict = await atomGet(atom.id);
+      if (!latestAfterConflict || hasTargetParent(latestAfterConflict)) {
+        return;
+      }
+      await patchParent(latestAfterConflict);
     }
-    await atomUpdate(atom.id, {
-      expectedRevision: atom.revision,
-      relationsPatch: parentAtomId ? { parentId: parentAtomId } : undefined,
-      clearParentId: parentAtomId ? undefined : true
-    });
   }, []);
 
   const updatePlacementParent = useCallback(async (row: FlatRow, parentPlacementId?: string): Promise<void> => {
@@ -591,31 +691,34 @@ export function NotepadScreen(): JSX.Element {
     });
   }, []);
 
-  const findPlacementForBlockInView = useCallback(
-    async (blockId: string, viewId: string): Promise<PlacementRecord | undefined> => {
-      const page = await placementsList({ viewId, blockId, limit: 25 });
-      return sortPlacements(page.items)[0];
-    },
-    []
-  );
+  const findPlacementForBlockInView = useCallback(async (blockId: string, viewId: string): Promise<PlacementRecord | undefined> => {
+    const page = await placementsList({ viewId, blockId, limit: 25 });
+    return sortPlacements(page.items)[0];
+  }, []);
 
   const createRow = useCallback(
-    async (mode: "sibling" | "child"): Promise<void> => {
-      if (!activeNotepadId) {
+    async (
+      mode: "sibling" | "child",
+      options?: { anchorRow?: FlatRow; focusEditor?: boolean }
+    ): Promise<void> => {
+      if (!uiState.activeNotepadId || !isGateOpen) {
         return;
       }
-      const anchorRow = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-      const parentPlacementId =
-        mode === "child" ? anchorRow?.placement.id : anchorRow?.effectiveParentPlacementId;
+      const anchorRow = options?.anchorRow ?? (uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined);
+      const parentPlacementId = mode === "child" ? anchorRow?.placement.id : anchorRow?.effectiveParentPlacementId;
       const parentRow = parentPlacementId ? treeData.rowByPlacementId[parentPlacementId] : undefined;
       const parentAtomId = parentRow?.atom?.id;
 
+      if (anchorRow) {
+        await flushDraft(anchorRow.placement.id);
+      }
+
       await runMutation(async () => {
         const created = await notepadBlockCreate({
-          notepadId: activeNotepadId,
+          notepadId: uiState.activeNotepadId,
           rawText: ""
         });
-        let createdPlacement = await findPlacementForBlockInView(created.id, activeNotepadId);
+        let createdPlacement = await findPlacementForBlockInView(created.id, uiState.activeNotepadId);
         if (!createdPlacement) {
           throw new Error("Unable to locate placement for newly created row");
         }
@@ -636,7 +739,7 @@ export function NotepadScreen(): JSX.Element {
         const anchorPlacementId = anchorRow?.placement.id;
         const reordered = insertPlacementAfter(treeData.orderedPlacementIds, createdPlacement.id, anchorPlacementId);
         if (reordered.length > 1) {
-          await placementsReorder(activeNotepadId, {
+          await placementsReorder(uiState.activeNotepadId, {
             orderedPlacementIds: reordered,
             idempotencyKey: idempotencyKey()
           });
@@ -648,24 +751,34 @@ export function NotepadScreen(): JSX.Element {
             await updateCanonicalParent(createdAtom, parentAtomId);
           }
         }
-        setSelectedPlacementId(createdPlacement.id);
+        if (options?.focusEditor) {
+          pendingEditorFocusPlacementIdRef.current = createdPlacement.id;
+          uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+        } else {
+          uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+        }
+        selectedPlacementRef.current = createdPlacement.id;
+        uiDispatch({ type: "set_selected_placement", placementId: createdPlacement.id });
       });
     },
     [
-      activeNotepadId,
       findPlacementForBlockInView,
+      flushDraft,
+      isGateOpen,
       runMutation,
-      selectedPlacementId,
       treeData.orderedPlacementIds,
       treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.activeNotepadId,
+      uiState.selectedPlacementId,
       updateCanonicalParent
     ]
   );
 
   const reorderSelected = useCallback(
     async (direction: "up" | "down"): Promise<void> => {
-      const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-      if (!row || !activeNotepadId) {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      if (!row || !uiState.activeNotepadId || !isGateOpen) {
         return;
       }
       const parentKey = row.effectiveParentPlacementId ?? ROOT_KEY;
@@ -683,25 +796,26 @@ export function NotepadScreen(): JSX.Element {
           return;
         }
         [order[a], order[b]] = [order[b], order[a]];
-        await placementsReorder(activeNotepadId, {
+        await placementsReorder(uiState.activeNotepadId, {
           orderedPlacementIds: order,
           idempotencyKey: idempotencyKey()
         });
       });
     },
     [
-      activeNotepadId,
+      isGateOpen,
       runMutation,
-      selectedPlacementId,
       treeData.childrenByParentKey,
       treeData.orderedPlacementIds,
-      treeData.rowByPlacementId
+      treeData.rowByPlacementId,
+      uiState.activeNotepadId,
+      uiState.selectedPlacementId
     ]
   );
 
   const indentSelected = useCallback(async (): Promise<void> => {
-    const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-    if (!row) {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row || !isGateOpen) {
       return;
     }
     const index = treeData.flatRows.findIndex((value) => value.placement.id === row.placement.id);
@@ -717,11 +831,11 @@ export function NotepadScreen(): JSX.Element {
       await updatePlacementParent(row, previousVisible.placement.id);
       await updateCanonicalParent(row.atom, previousVisible.atom?.id);
     });
-  }, [runMutation, selectedPlacementId, treeData.flatRows, treeData.rowByPlacementId, updateCanonicalParent, updatePlacementParent]);
+  }, [isGateOpen, runMutation, treeData.flatRows, treeData.rowByPlacementId, uiState.selectedPlacementId, updateCanonicalParent, updatePlacementParent]);
 
   const outdentSelected = useCallback(async (): Promise<void> => {
-    const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-    if (!row) {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row || !isGateOpen) {
       return;
     }
     const currentParentPlacementId = row.effectiveParentPlacementId;
@@ -738,77 +852,124 @@ export function NotepadScreen(): JSX.Element {
       await updatePlacementParent(row, nextParentPlacementId);
       await updateCanonicalParent(row.atom, nextParentAtomId);
     });
-  }, [runMutation, selectedPlacementId, treeData.rowByPlacementId, updateCanonicalParent, updatePlacementParent]);
+  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId, updateCanonicalParent, updatePlacementParent]);
+
+  const deleteRow = useCallback(
+    async (row: FlatRow, options?: { preferPrevious?: boolean; focusEditor?: boolean }): Promise<void> => {
+      if (!isGateOpen) {
+        return;
+      }
+      const draftedText = rowText(row, uiState.draftsByPlacement[row.placement.id]);
+      const deletingEmptyLine = draftedText.trim().length === 0;
+      await flushDraft(row.placement.id);
+      const index = treeData.flatRows.findIndex((value) => value.placement.id === row.placement.id);
+      const previousPlacementId = treeData.flatRows[index - 1]?.placement.id;
+      const nextPlacementId = treeData.flatRows[index + 1]?.placement.id;
+      const fallbackSelection = options?.preferPrevious
+        ? previousPlacementId ?? nextPlacementId
+        : nextPlacementId ?? previousPlacementId;
+      if (options?.focusEditor && fallbackSelection) {
+        pendingEditorFocusPlacementIdRef.current = fallbackSelection;
+        uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+      } else {
+        uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+      }
+      selectedPlacementRef.current = fallbackSelection;
+      uiDispatch({ type: "set_selected_placement", placementId: fallbackSelection });
+
+      await runMutation(async () => {
+        await placementDelete(row.placement.id, idempotencyKey());
+        const remainingPlacements = await listAllPages((cursor) => placementsList({ blockId: row.block.id, limit: 250, cursor }));
+        if (!row.atom) {
+          return;
+        }
+        const latestAtom = await atomGet(row.atom.id);
+        if (!latestAtom) {
+          return;
+        }
+
+        if (deletingEmptyLine) {
+          for (const placement of remainingPlacements) {
+            await placementDelete(placement.id, idempotencyKey());
+          }
+          const archivedAtom = latestAtom.archivedAt
+            ? latestAtom
+            : await atomArchive(latestAtom.id, {
+                expectedRevision: latestAtom.revision,
+                reason: "notepad_empty_row_deleted"
+              });
+
+          if (atomHasNoMeaningfulContent(archivedAtom)) {
+            await atomDelete(archivedAtom.id, {
+              expectedRevision: archivedAtom.revision,
+              reason: "notepad_empty_row_pruned"
+            });
+          }
+          return;
+        }
+
+        if (remainingPlacements.length > 0) {
+          return;
+        }
+
+        await atomArchive(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          reason: "notepad_last_placement_removed"
+        });
+      });
+    },
+    [flushDraft, isGateOpen, runMutation, treeData.flatRows, uiDispatch, uiState.draftsByPlacement]
+  );
 
   const deleteSelected = useCallback(async (): Promise<void> => {
-    const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
     if (!row) {
       return;
     }
-    await flushDraft(row.placement.id);
-    const index = treeData.flatRows.findIndex((value) => value.placement.id === row.placement.id);
-    const fallbackSelection =
-      treeData.flatRows[index + 1]?.placement.id ?? treeData.flatRows[index - 1]?.placement.id;
-    setSelectedPlacementId(fallbackSelection);
-
-    await runMutation(async () => {
-      await placementDelete(row.placement.id, idempotencyKey());
-      const remaining = await placementsList({ blockId: row.block.id, limit: 1 });
-      if (remaining.items.length > 0 || !row.atom) {
-        return;
-      }
-      const latestAtom = await atomGet(row.atom.id);
-      if (!latestAtom) {
-        return;
-      }
-      if (isTaskRow(row)) {
-        await taskComplete(latestAtom.id, latestAtom.revision);
-        return;
-      }
-      await atomArchive(latestAtom.id, {
-        expectedRevision: latestAtom.revision,
-        reason: "notepad_last_placement_removed"
-      });
-    });
-  }, [flushDraft, runMutation, selectedPlacementId, treeData.flatRows, treeData.rowByPlacementId]);
+    await deleteRow(row);
+  }, [deleteRow, treeData.rowByPlacementId, uiState.selectedPlacementId]);
 
   const copyOrCutSelected = useCallback(
     (mode: "copy" | "cut"): void => {
-      const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-      if (!row || !activeNotepadId) {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      if (!row || !uiState.activeNotepadId || !isGateOpen) {
         return;
       }
-      setClipboard({
-        blockId: row.block.id,
-        sourcePlacementId: row.placement.id,
-        sourceViewId: activeNotepadId,
-        mode
+      uiDispatch({
+        type: "set_clipboard",
+        clipboard: {
+          blockId: row.block.id,
+          sourcePlacementId: row.placement.id,
+          sourceViewId: uiState.activeNotepadId,
+          mode
+        }
       });
     },
-    [activeNotepadId, selectedPlacementId, treeData.rowByPlacementId]
+    [isGateOpen, treeData.rowByPlacementId, uiDispatch, uiState.activeNotepadId, uiState.selectedPlacementId]
   );
 
   const pasteAfterSelected = useCallback(async (): Promise<void> => {
-    if (!clipboard || !activeNotepadId) {
+    const clipboard = uiState.clipboard;
+    if (!clipboard || !uiState.activeNotepadId || !isGateOpen) {
       return;
     }
-    const target = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
+    const target = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
     const targetParentPlacementId = target?.effectiveParentPlacementId;
 
     await runMutation(async () => {
       let destinationPlacementId: string | undefined;
 
-      if (clipboard.mode === "cut" && clipboard.sourceViewId === activeNotepadId) {
+      if (clipboard.mode === "cut" && clipboard.sourceViewId === uiState.activeNotepadId) {
         const sourceRow = treeData.rowByPlacementId[clipboard.sourcePlacementId];
         if (!sourceRow) {
-          setClipboard(null);
+          uiDispatch({ type: "set_clipboard", clipboard: null });
           return;
         }
         await updatePlacementParent(sourceRow, targetParentPlacementId);
         destinationPlacementId = sourceRow.placement.id;
       } else {
         const saved = await placementSave({
-          viewId: activeNotepadId,
+          viewId: uiState.activeNotepadId,
           blockId: clipboard.blockId,
           parentPlacementId: targetParentPlacementId,
           idempotencyKey: idempotencyKey()
@@ -818,7 +979,7 @@ export function NotepadScreen(): JSX.Element {
 
       const reordered = insertPlacementAfter(treeData.orderedPlacementIds, destinationPlacementId, target?.placement.id);
       if (reordered.length > 1) {
-        await placementsReorder(activeNotepadId, {
+        await placementsReorder(uiState.activeNotepadId, {
           orderedPlacementIds: reordered,
           idempotencyKey: idempotencyKey()
         });
@@ -826,49 +987,101 @@ export function NotepadScreen(): JSX.Element {
 
       if (
         clipboard.mode === "cut" &&
-        !(clipboard.sourceViewId === activeNotepadId && clipboard.sourcePlacementId === destinationPlacementId)
+        !(clipboard.sourceViewId === uiState.activeNotepadId && clipboard.sourcePlacementId === destinationPlacementId)
       ) {
         await placementDelete(clipboard.sourcePlacementId, idempotencyKey());
-        setClipboard(null);
+        uiDispatch({ type: "set_clipboard", clipboard: null });
       }
 
-      setSelectedPlacementId(destinationPlacementId);
+      selectedPlacementRef.current = destinationPlacementId;
+      uiDispatch({ type: "set_selected_placement", placementId: destinationPlacementId });
     });
   }, [
-    activeNotepadId,
-    clipboard,
+    isGateOpen,
     runMutation,
-    selectedPlacementId,
     treeData.orderedPlacementIds,
     treeData.rowByPlacementId,
+    uiDispatch,
+    uiState.activeNotepadId,
+    uiState.clipboard,
+    uiState.selectedPlacementId,
     updatePlacementParent
   ]);
 
+  const moveSelectedToNotepad = useCallback(
+    async (targetNotepadId: string, mode: "copy" | "move"): Promise<void> => {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      if (!row || !targetNotepadId || !isGateOpen) {
+        return;
+      }
+      if (targetNotepadId === row.placement.viewId && mode === "move") {
+        return;
+      }
+
+      setSaving(true);
+      setError(undefined);
+      try {
+        const destinationPlacement = await placementSave({
+          viewId: targetNotepadId,
+          blockId: row.block.id,
+          idempotencyKey: idempotencyKey()
+        });
+        if (mode === "move") {
+          await placementDelete(row.placement.id, idempotencyKey());
+        }
+
+        if (targetNotepadId === uiState.activeNotepadId) {
+          await reloadActiveNotepad();
+          uiDispatch({ type: "set_selected_placement", placementId: destinationPlacement.id });
+        } else {
+          uiDispatch({ type: "set_active_notepad", notepadId: targetNotepadId });
+          uiDispatch({ type: "set_selected_placement", placementId: destinationPlacement.id });
+          await loadNotepadData(targetNotepadId);
+        }
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [
+      isGateOpen,
+      loadNotepadData,
+      reloadActiveNotepad,
+      treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.activeNotepadId,
+      uiState.selectedPlacementId
+    ]
+  );
+
   const updateSelectedTaskStatus = useCallback(
     async (status: TaskStatus): Promise<void> => {
-      const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-      if (!row?.atom) {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      const rowAtom = row?.atom;
+      if (!row || !rowAtom || !isGateOpen) {
         return;
       }
       await runMutation(async () => {
-        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom;
+        const latestAtom = (await atomGet(rowAtom.id)) ?? rowAtom;
         await taskStatusSet(latestAtom.id, {
           expectedRevision: latestAtom.revision,
           status
         });
       });
     },
-    [runMutation, selectedPlacementId, treeData.rowByPlacementId]
+    [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]
   );
 
   const updateSelectedPriority = useCallback(
     async (priority: 1 | 2 | 3 | 4 | 5): Promise<void> => {
-      const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-      if (!row?.atom) {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      const rowAtom = row?.atom;
+      if (!row || !rowAtom || !isGateOpen) {
         return;
       }
       await runMutation(async () => {
-        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom;
+        const latestAtom = (await atomGet(rowAtom.id)) ?? rowAtom;
         const existingTask = latestAtom.facetData.task ?? {
           title: latestAtom.rawText.trim() || "Untitled",
           status: "todo" as const,
@@ -885,12 +1098,12 @@ export function NotepadScreen(): JSX.Element {
         });
       });
     },
-    [runMutation, selectedPlacementId, treeData.rowByPlacementId]
+    [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]
   );
 
   const snoozeSelectedUntilTomorrow = useCallback(async (): Promise<void> => {
-    const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-    if (!row?.atom) {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row?.atom || !isGateOpen) {
       return;
     }
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -900,11 +1113,11 @@ export function NotepadScreen(): JSX.Element {
         untilAt: tomorrow
       });
     });
-  }, [runMutation, selectedPlacementId, treeData.rowByPlacementId]);
+  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
 
   const setSelectedWaitingPerson = useCallback(async (): Promise<void> => {
-    const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-    if (!row?.atom) {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row?.atom || !isGateOpen) {
       return;
     }
     const person = window.prompt("Who are you waiting on?");
@@ -918,11 +1131,28 @@ export function NotepadScreen(): JSX.Element {
         cadenceDays: 3
       });
     });
-  }, [runMutation, selectedPlacementId, treeData.rowByPlacementId]);
+  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
+
+  const setSelectedBlockedByTask = useCallback(async (): Promise<void> => {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row?.atom || !isGateOpen) {
+      return;
+    }
+    const blockerAtomId = window.prompt("Blocker atom id (task this depends on):");
+    if (!blockerAtomId || !blockerAtomId.trim()) {
+      return;
+    }
+    await runMutation(async () => {
+      await conditionSetTask({
+        atomId: row.atom!.id,
+        blockerAtomId: blockerAtomId.trim()
+      });
+    });
+  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
 
   const clearSelectedConditions = useCallback(async (): Promise<void> => {
-    const row = selectedPlacementId ? treeData.rowByPlacementId[selectedPlacementId] : undefined;
-    if (!row?.atom) {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row?.atom || !isGateOpen) {
       return;
     }
     const active = (conditionsByAtomId[row.atom.id] ?? []).filter((condition) => condition.status === "active");
@@ -943,12 +1173,12 @@ export function NotepadScreen(): JSX.Element {
         }
       }
     });
-  }, [conditionsByAtomId, runMutation, selectedPlacementId, treeData.rowByPlacementId]);
+  }, [conditionsByAtomId, isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
 
   const createNotepad = useCallback(
     async (event: FormEvent): Promise<void> => {
       event.preventDefault();
-      if (creatingNotepad) {
+      if (creatingNotepad || !isGateOpen) {
         return;
       }
       const trimmedName = createName.trim();
@@ -956,7 +1186,7 @@ export function NotepadScreen(): JSX.Element {
         setError("Notepad name is required.");
         return;
       }
-      const trimmedCategory = createCategory.trim();
+      const categories = parseCategories(createCategories);
       setCreatingNotepad(true);
       setError(undefined);
       try {
@@ -971,7 +1201,7 @@ export function NotepadScreen(): JSX.Element {
 
         const filters: NotepadFilter = {
           includeArchived: false,
-          categories: trimmedCategory ? [trimmedCategory] : undefined
+          categories
         };
 
         await notepadSave({
@@ -988,7 +1218,7 @@ export function NotepadScreen(): JSX.Element {
               initialFacets: ["task"],
               taskStatus: "todo",
               taskPriority: 3,
-              categories: trimmedCategory ? [trimmedCategory] : undefined
+              categories
             },
             layoutMode: "outline"
           }
@@ -997,9 +1227,9 @@ export function NotepadScreen(): JSX.Element {
         const views = await loadNotepadsIntoState();
         setCreateName("");
         setCreateDescription("");
-        setCreateCategory("");
+        setCreateCategories("");
         if (views.some((view) => view.id === nextId)) {
-          setActiveNotepadId(nextId);
+          uiDispatch({ type: "set_active_notepad", notepadId: nextId });
         }
       } catch (nextError) {
         setError(asErrorMessage(nextError));
@@ -1007,172 +1237,416 @@ export function NotepadScreen(): JSX.Element {
         setCreatingNotepad(false);
       }
     },
-    [createCategory, createDescription, createName, creatingNotepad, loadNotepadsIntoState, notepads]
+    [createCategories, createDescription, createName, creatingNotepad, isGateOpen, loadNotepadsIntoState, notepads, uiDispatch]
+  );
+
+  const saveNotepadEdits = useCallback(
+    async (event: FormEvent): Promise<void> => {
+      event.preventDefault();
+      if (!activeNotepad || editingNotepad || !isGateOpen) {
+        return;
+      }
+      const trimmedName = editName.trim();
+      if (!trimmedName) {
+        setError("Active notepad name cannot be empty.");
+        return;
+      }
+      setEditingNotepad(true);
+      setError(undefined);
+      try {
+        const categories = parseCategories(editCategories);
+        await notepadSave({
+          expectedRevision: activeNotepad.revision,
+          idempotencyKey: idempotencyKey(),
+          definition: {
+            id: activeNotepad.id,
+            schemaVersion: activeNotepad.schemaVersion,
+            name: trimmedName,
+            description: editDescription.trim() || undefined,
+            isSystem: activeNotepad.isSystem,
+            filters: {
+              ...activeNotepad.filters,
+              categories
+            },
+            sorts: activeNotepad.sorts,
+            captureDefaults: {
+              ...(activeNotepad.captureDefaults ?? {}),
+              categories
+            },
+            layoutMode: activeNotepad.layoutMode
+          }
+        });
+        await loadNotepadsIntoState();
+        await reloadActiveNotepad();
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setEditingNotepad(false);
+      }
+    },
+    [activeNotepad, editCategories, editDescription, editName, editingNotepad, isGateOpen, loadNotepadsIntoState, reloadActiveNotepad]
+  );
+
+  const navigateSelection = useCallback(
+    (target: "up" | "down" | "start" | "end"): void => {
+      const rows = treeData.flatRows;
+      if (rows.length === 0) {
+        uiDispatch({ type: "set_selected_placement", placementId: undefined });
+        uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+        return;
+      }
+      if (target === "start") {
+        uiDispatch({ type: "set_selected_placement", placementId: rows[0].placement.id });
+        uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+        return;
+      }
+      if (target === "end") {
+        uiDispatch({ type: "set_selected_placement", placementId: rows[rows.length - 1].placement.id });
+        uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+        return;
+      }
+
+      const index = uiState.selectedPlacementId
+        ? rows.findIndex((row) => row.placement.id === uiState.selectedPlacementId)
+        : -1;
+      if (index === -1) {
+        uiDispatch({ type: "set_selected_placement", placementId: rows[0].placement.id });
+        uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+        return;
+      }
+      const nextIndex = target === "up" ? Math.max(0, index - 1) : Math.min(rows.length - 1, index + 1);
+      uiDispatch({ type: "set_selected_placement", placementId: rows[nextIndex].placement.id });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    },
+    [treeData.flatRows, uiDispatch, uiState.selectedPlacementId]
+  );
+
+  const isDescendantOf = useCallback(
+    (candidatePlacementId: string, ancestorPlacementId: string): boolean => {
+      let cursor = treeData.effectiveParentByPlacementId[candidatePlacementId];
+      while (cursor) {
+        if (cursor === ancestorPlacementId) {
+          return true;
+        }
+        cursor = treeData.effectiveParentByPlacementId[cursor];
+      }
+      return false;
+    },
+    [treeData.effectiveParentByPlacementId]
+  );
+
+  const setRowCollapsed = useCallback(
+    (placementId: string, collapsed: boolean): void => {
+      if (collapsed && uiState.selectedPlacementId && isDescendantOf(uiState.selectedPlacementId, placementId)) {
+        uiDispatch({ type: "set_selected_placement", placementId });
+      }
+      uiDispatch({ type: "set_row_collapsed", placementId, collapsed });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    },
+    [isDescendantOf, uiDispatch, uiState.selectedPlacementId]
+  );
+
+  const toggleRowCollapsed = useCallback(
+    (placementId: string): void => {
+      const isCollapsed = !!uiState.collapsedByPlacement[placementId];
+      setRowCollapsed(placementId, !isCollapsed);
+    },
+    [setRowCollapsed, uiState.collapsedByPlacement]
+  );
+
+  const navigateHorizontalSelection = useCallback(
+    (direction: "left" | "right"): void => {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      if (!row) {
+        return;
+      }
+
+      if (direction === "right") {
+        if (row.hasChildren && row.collapsed) {
+          setRowCollapsed(row.placement.id, false);
+          return;
+        }
+        const children = treeData.childrenByParentKey[row.placement.id] ?? [];
+        if (children.length > 0) {
+          const nextPlacementId = children[0];
+          uiDispatch({ type: "set_selected_placement", placementId: nextPlacementId });
+          uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+        }
+        return;
+      }
+
+      if (row.hasChildren && !row.collapsed) {
+        setRowCollapsed(row.placement.id, true);
+        return;
+      }
+
+      if (!row.effectiveParentPlacementId) {
+        return;
+      }
+      uiDispatch({ type: "set_selected_placement", placementId: row.effectiveParentPlacementId });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    },
+    [
+      setRowCollapsed,
+      treeData.childrenByParentKey,
+      treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.selectedPlacementId
+    ]
+  );
+
+  const openQuickActions = useCallback(() => {
+    if (!selectedRow) {
+      return;
+    }
+    uiDispatch({ type: "set_quick_actions_open", open: !uiState.quickActionsOpen });
+  }, [selectedRow, uiDispatch, uiState.quickActionsOpen]);
+
+  const moveEditorSelection = useCallback(
+    (row: FlatRow, direction: "up" | "down"): void => {
+      const rows = treeData.flatRows;
+      const index = rows.findIndex((value) => value.placement.id === row.placement.id);
+      if (index === -1) {
+        return;
+      }
+      const targetIndex = direction === "up" ? Math.max(0, index - 1) : Math.min(rows.length - 1, index + 1);
+      const targetRow = rows[targetIndex];
+      if (!targetRow || targetRow.placement.id === row.placement.id) {
+        return;
+      }
+      pendingEditorFocusPlacementIdRef.current = targetRow.placement.id;
+      uiDispatch({ type: "set_selected_placement", placementId: targetRow.placement.id });
+      uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+    },
+    [treeData.flatRows, uiDispatch]
   );
 
   const onRowEditorKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow): void => {
-      const isModifier = event.metaKey || event.ctrlKey;
+      const target = event.currentTarget;
+      const selectionStart = target.selectionStart ?? 0;
+      const selectionEnd = target.selectionEnd ?? selectionStart;
+      const action = resolveEditorKeyAction({
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        rowText: rowText(row, uiState.draftsByPlacement[row.placement.id]),
+        selectionStart,
+        selectionEnd
+      });
 
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        void createRow("sibling");
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        if (event.shiftKey) {
-          void outdentSelected();
-        } else {
+      switch (action.type) {
+        case "none":
+          return;
+        case "open_quick_actions":
+          event.preventDefault();
+          openQuickActions();
+          return;
+        case "clipboard_copy":
+          event.preventDefault();
+          copyOrCutSelected("copy");
+          return;
+        case "clipboard_cut":
+          event.preventDefault();
+          copyOrCutSelected("cut");
+          return;
+        case "clipboard_paste":
+          event.preventDefault();
+          void pasteAfterSelected();
+          return;
+        case "reorder_up":
+          event.preventDefault();
+          void reorderSelected("up");
+          return;
+        case "reorder_down":
+          event.preventDefault();
+          void reorderSelected("down");
+          return;
+        case "move_selection_up":
+          event.preventDefault();
+          moveEditorSelection(row, "up");
+          return;
+        case "move_selection_down":
+          event.preventDefault();
+          moveEditorSelection(row, "down");
+          return;
+        case "create_sibling":
+          event.preventDefault();
+          // Blur the current editor first so stale focus does not re-select the previous row
+          // while we are creating and focusing the new sibling row.
+          target.blur();
+          void createRow("sibling", { anchorRow: row, focusEditor: true });
+          return;
+        case "indent":
+          event.preventDefault();
           void indentSelected();
-        }
-        return;
-      }
-      if (event.key === "Backspace" && rowText(row, draftsByPlacement[row.placement.id]).trim().length === 0) {
-        event.preventDefault();
-        void deleteSelected();
-        return;
-      }
-      if (isModifier && event.shiftKey && event.key === "ArrowUp") {
-        event.preventDefault();
-        void reorderSelected("up");
-        return;
-      }
-      if (isModifier && event.shiftKey && event.key === "ArrowDown") {
-        event.preventDefault();
-        void reorderSelected("down");
+          return;
+        case "outdent":
+          event.preventDefault();
+          void outdentSelected();
+          return;
+        case "delete_empty_row":
+          event.preventDefault();
+          void deleteRow(row, { preferPrevious: true, focusEditor: true });
+          return;
+        case "exit_edit_mode":
+          event.preventDefault();
+          uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+          target.blur();
+          return;
+        default:
+          return;
       }
     },
-    [createRow, deleteSelected, draftsByPlacement, indentSelected, outdentSelected, reorderSelected]
+    [
+      copyOrCutSelected,
+      createRow,
+      deleteRow,
+      indentSelected,
+      moveEditorSelection,
+      openQuickActions,
+      outdentSelected,
+      pasteAfterSelected,
+      reorderSelected,
+      uiDispatch,
+      uiState.draftsByPlacement
+    ]
   );
 
-  const onRowContainerKeyDown = useCallback(
+  const onTreeContainerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>): void => {
       if (event.target instanceof HTMLTextAreaElement) {
         return;
       }
-      const isModifier = event.metaKey || event.ctrlKey;
-      if (!isModifier) {
-        return;
-      }
-      const lowerKey = event.key.toLowerCase();
-      if (lowerKey === "c") {
-        event.preventDefault();
-        copyOrCutSelected("copy");
-      } else if (lowerKey === "x") {
-        event.preventDefault();
-        copyOrCutSelected("cut");
-      } else if (lowerKey === "v") {
-        event.preventDefault();
-        void pasteAfterSelected();
+
+      const action = resolveContainerKeyAction({
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        hasSelectedRow: !!uiState.selectedPlacementId
+      });
+
+      switch (action.type) {
+        case "none":
+          return;
+        case "navigate_up":
+          event.preventDefault();
+          navigateSelection("up");
+          return;
+        case "navigate_down":
+          event.preventDefault();
+          navigateSelection("down");
+          return;
+        case "navigate_start":
+          event.preventDefault();
+          navigateSelection("start");
+          return;
+        case "navigate_end":
+          event.preventDefault();
+          navigateSelection("end");
+          return;
+        case "expand_or_child":
+          event.preventDefault();
+          navigateHorizontalSelection("right");
+          return;
+        case "collapse_or_parent":
+          event.preventDefault();
+          navigateHorizontalSelection("left");
+          return;
+        case "focus_editor":
+          event.preventDefault();
+          if (uiState.selectedPlacementId) {
+            pendingEditorFocusPlacementIdRef.current = uiState.selectedPlacementId;
+            focusEditorForPlacement(uiState.selectedPlacementId);
+          }
+          return;
+        case "clipboard_copy":
+          event.preventDefault();
+          copyOrCutSelected("copy");
+          return;
+        case "clipboard_cut":
+          event.preventDefault();
+          copyOrCutSelected("cut");
+          return;
+        case "clipboard_paste":
+          event.preventDefault();
+          void pasteAfterSelected();
+          return;
+        case "open_quick_actions":
+          event.preventDefault();
+          openQuickActions();
+          return;
+        default:
+          return;
       }
     },
-    [copyOrCutSelected, pasteAfterSelected]
+    [
+      copyOrCutSelected,
+      focusEditorForPlacement,
+      navigateHorizontalSelection,
+      navigateSelection,
+      openQuickActions,
+      pasteAfterSelected,
+      uiState.selectedPlacementId
+    ]
   );
+
+  const selectedRowText = selectedRow ? rowText(selectedRow, uiState.draftsByPlacement[selectedRow.placement.id]) : "";
 
   return (
     <section className="notepad-screen screen">
-      <div className="notepad-toolbar card">
-        <div className="notepad-toolbar-row">
-          <label>
-            Notepad
-            <select
-              value={activeNotepadId}
-              onChange={(event) => setActiveNotepadId(event.target.value)}
-              aria-label="Active notepad"
-            >
-              {notepads.map((notepad) => (
-                <option key={notepad.id} value={notepad.id}>
-                  {notepad.name}
-                </option>
-              ))}
-            </select>
-          </label>
+      <NotepadToolbar
+        notepads={notepads}
+        activeNotepadId={uiState.activeNotepadId}
+        activeNotepad={activeNotepad}
+        selectedRow={selectedRow}
+        loading={loading}
+        saving={saving}
+        clipboard={uiState.clipboard}
+        capabilities={capabilities}
+        health={health}
+        featureFlags={featureFlags}
+        isFeatureGateOpen={isGateOpen}
+        interactionMode={uiState.interactionMode}
+        onSelectNotepad={(notepadId) => uiDispatch({ type: "set_active_notepad", notepadId })}
+        onRefresh={() => void reloadActiveNotepad()}
+        onNewRow={() => void createRow("sibling", { focusEditor: true })}
+        onNewChild={() => void createRow("child", { focusEditor: true })}
+        onRemoveRow={() => void deleteSelected()}
+        onMoveUp={() => void reorderSelected("up")}
+        onMoveDown={() => void reorderSelected("down")}
+        onIndent={() => void indentSelected()}
+        onOutdent={() => void outdentSelected()}
+        onCopyRow={() => copyOrCutSelected("copy")}
+        onCutRow={() => copyOrCutSelected("cut")}
+        onPasteRow={() => void pasteAfterSelected()}
+        onToggleQuickActions={openQuickActions}
+        createName={createName}
+        createCategories={createCategories}
+        createDescription={createDescription}
+        creatingNotepad={creatingNotepad}
+        onChangeCreateName={setCreateName}
+        onChangeCreateCategories={setCreateCategories}
+        onChangeCreateDescription={setCreateDescription}
+        onCreateNotepad={(event) => void createNotepad(event)}
+        editName={editName}
+        editCategories={editCategories}
+        editDescription={editDescription}
+        editingNotepad={editingNotepad}
+        onChangeEditName={setEditName}
+        onChangeEditCategories={setEditCategories}
+        onChangeEditDescription={setEditDescription}
+        onSaveNotepadEdits={(event) => void saveNotepadEdits(event)}
+      />
 
-          <button type="button" onClick={() => void reloadActiveNotepad()} disabled={loading || saving}>
-            Refresh
-          </button>
-          <button type="button" onClick={() => void createRow("sibling")} disabled={!activeNotepadId || saving}>
-            New Row
-          </button>
-          <button type="button" onClick={() => void createRow("child")} disabled={!selectedRow || saving}>
-            New Child
-          </button>
-          <button type="button" onClick={() => void deleteSelected()} disabled={!selectedRow || saving}>
-            Remove Row
-          </button>
-          <button type="button" onClick={() => void reorderSelected("up")} disabled={!selectedRow || saving}>
-            Move Up
-          </button>
-          <button type="button" onClick={() => void reorderSelected("down")} disabled={!selectedRow || saving}>
-            Move Down
-          </button>
-          <button type="button" onClick={() => void indentSelected()} disabled={!selectedRow || saving}>
-            Indent
-          </button>
-          <button type="button" onClick={() => void outdentSelected()} disabled={!selectedRow || saving}>
-            Outdent
-          </button>
-        </div>
-
-        <div className="notepad-toolbar-row">
-          <button type="button" onClick={() => copyOrCutSelected("copy")} disabled={!selectedRow || saving}>
-            Copy Row
-          </button>
-          <button type="button" onClick={() => copyOrCutSelected("cut")} disabled={!selectedRow || saving}>
-            Cut Row
-          </button>
-          <button type="button" onClick={() => void pasteAfterSelected()} disabled={!clipboard || saving}>
-            Paste Row
-          </button>
-          {clipboard && (
-            <small className="settings-hint">
-              Clipboard: {clipboard.mode} from `{clipboard.sourceViewId}`
-            </small>
-          )}
-        </div>
-      </div>
-
-      <form className="card notepad-create-form" onSubmit={(event) => void createNotepad(event)}>
-        <div className="notepad-create-row">
-          <label>
-            New notepad
-            <input
-              type="text"
-              value={createName}
-              onChange={(event) => setCreateName(event.target.value)}
-              placeholder="Project notes"
-            />
-          </label>
-          <label>
-            Category (optional)
-            <input
-              type="text"
-              value={createCategory}
-              onChange={(event) => setCreateCategory(event.target.value)}
-              placeholder="marketing"
-            />
-          </label>
-          <label>
-            Description (optional)
-            <input
-              type="text"
-              value={createDescription}
-              onChange={(event) => setCreateDescription(event.target.value)}
-              placeholder="Saved view + capture defaults"
-            />
-          </label>
-          <button type="submit" className="primary" disabled={creatingNotepad}>
-            {creatingNotepad ? "Creating..." : "Create Notepad"}
-          </button>
-        </div>
-      </form>
-
+      {gateError && <div className="banner error">{gateError}</div>}
       {error && <div className="banner error">{error}</div>}
       {(loading || saving) && <div className="banner info">{loading ? "Loading notepad..." : "Saving..."}</div>}
 
       <div className="notepad-layout">
-        <div className="card notepad-outline" onKeyDown={onRowContainerKeyDown}>
+        <div className="card notepad-outline">
           <header className="notepad-outline-header">
             <h3>{activeNotepad?.name ?? "Notepad"}</h3>
             <small>
@@ -1183,58 +1657,32 @@ export function NotepadScreen(): JSX.Element {
           {treeData.flatRows.length === 0 ? (
             <p className="settings-hint">No rows yet. Use "New Row" to start capturing.</p>
           ) : (
-            <div className="notepad-rows">
-              {treeData.flatRows.map((row) => {
-                const textValue = rowText(row, draftsByPlacement[row.placement.id]);
-                const selected = selectedPlacementId === row.placement.id;
-                const overlayMode = parseOverlayMode(row.overlay);
-                return (
-                  <article
-                    key={row.placement.id}
-                    className={`notepad-row ${selected ? "selected" : ""}`}
-                    style={{ paddingLeft: `${0.6 + row.depth * 1.1}rem` }}
-                    onClick={() => setSelectedPlacementId(row.placement.id)}
-                  >
-                    <button
-                      type="button"
-                      className="notepad-toggle"
-                      onClick={() =>
-                        setCollapsedByPlacement((current) => ({
-                          ...current,
-                          [row.placement.id]: !current[row.placement.id]
-                        }))
-                      }
-                      disabled={!row.hasChildren}
-                      aria-label={row.hasChildren ? (row.collapsed ? "Expand row" : "Collapse row") : "Leaf row"}
-                    >
-                      {row.hasChildren ? (row.collapsed ? "▸" : "▾") : "·"}
-                    </button>
-
-                    <textarea
-                      className="notepad-editor"
-                      rows={1}
-                      value={textValue}
-                      onFocus={() => setSelectedPlacementId(row.placement.id)}
-                      onChange={(event) => scheduleDraftSave(row, event.target.value)}
-                      onBlur={() => void flushDraft(row.placement.id)}
-                      onKeyDown={(event) => onRowEditorKeyDown(event, row)}
-                      placeholder="Type and press Enter"
-                    />
-
-                    {isTaskRow(row) && (
-                      <span className="notepad-pill">{row.atom?.facetData.task?.status ?? row.block.taskStatus ?? "todo"}</span>
-                    )}
-                    {overlayMode && (
-                      <span className={`notepad-pill overlay-${overlayMode}`}>
-                        {overlayMode === "person" && "waiting"}
-                        {overlayMode === "task" && "blocked"}
-                        {overlayMode === "date" && "snoozed"}
-                      </span>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
+            <NotepadTree
+              rows={treeData.flatRows}
+              selectedPlacementId={uiState.selectedPlacementId}
+              getRowText={(row) => rowText(row, uiState.draftsByPlacement[row.placement.id])}
+              isTaskRow={isTaskRow}
+              parseOverlayMode={(row) => parseOverlayMode(row.overlay)}
+              onSelectRow={(placementId) => uiDispatch({ type: "set_selected_placement", placementId })}
+              onToggleCollapsed={toggleRowCollapsed}
+              onEditorFocus={(placementId) => {
+                uiDispatch({ type: "set_selected_placement", placementId });
+                uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+              }}
+              onEditorChange={(placementId, nextText) => {
+                const row = treeData.rowByPlacementId[placementId];
+                if (!row) {
+                  return;
+                }
+                scheduleDraftSave(row, nextText);
+              }}
+              onEditorBlur={(placementId) => {
+                void flushDraft(placementId);
+                uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+              }}
+              onEditorKeyDown={onRowEditorKeyDown}
+              onContainerKeyDown={onTreeContainerKeyDown}
+            />
           )}
         </div>
 
@@ -1248,9 +1696,8 @@ export function NotepadScreen(): JSX.Element {
               </p>
               <small className="settings-hint">Block: {selectedRow.block.id}</small>
               {selectedRow.atom && <small className="settings-hint">Atom: {selectedRow.atom.id}</small>}
-              <small className="settings-hint">
-                Updated {new Date(selectedRow.block.updatedAt).toLocaleString()}
-              </small>
+              <small className="settings-hint">Updated {new Date(selectedRow.block.updatedAt).toLocaleString()}</small>
+              <small className="settings-hint">Text length: {selectedRowText.length}</small>
 
               {isTaskRow(selectedRow) && selectedRow.atom && (
                 <>
@@ -1281,21 +1728,56 @@ export function NotepadScreen(): JSX.Element {
                       <option value={5}>P5</option>
                     </select>
                   </label>
-                  <small className="settings-hint">Current priority: {priorityLabel(selectedRow.atom.facetData.task?.priority ?? 3)}</small>
+                  <small className="settings-hint">
+                    Current priority: {priorityLabel(selectedRow.atom.facetData.task?.priority ?? 3)}
+                  </small>
                 </>
               )}
 
               <div className="notepad-inspector-actions">
-                <button type="button" onClick={() => void snoozeSelectedUntilTomorrow()} disabled={!selectedRow.atom}>
+                <button type="button" onClick={() => void snoozeSelectedUntilTomorrow()} disabled={!selectedRow.atom || !isGateOpen}>
                   Snooze 1 day
                 </button>
-                <button type="button" onClick={() => void setSelectedWaitingPerson()} disabled={!selectedRow.atom}>
+                <button type="button" onClick={() => void setSelectedWaitingPerson()} disabled={!selectedRow.atom || !isGateOpen}>
                   Waiting on person
                 </button>
-                <button type="button" onClick={() => void clearSelectedConditions()} disabled={!selectedRow.atom}>
+                <button type="button" onClick={() => void setSelectedBlockedByTask()} disabled={!selectedRow.atom || !isGateOpen}>
+                  Blocked by task
+                </button>
+                <button type="button" onClick={() => void clearSelectedConditions()} disabled={!selectedRow.atom || !isGateOpen}>
                   Clear blocking
                 </button>
               </div>
+
+              {uiState.quickActionsOpen && (
+                <div className="card quick-actions-panel">
+                  <h4>Quick Actions</h4>
+                  <label>
+                    Destination notepad
+                    <select value={quickTargetNotepadId} onChange={(event) => setQuickTargetNotepadId(event.target.value)}>
+                      <option value="">Select notepad</option>
+                      {notepads
+                        .filter((value) => value.id !== uiState.activeNotepadId)
+                        .map((value) => (
+                          <option key={value.id} value={value.id}>
+                            {value.name}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <div className="notepad-inspector-actions">
+                    <button type="button" onClick={() => void moveSelectedToNotepad(quickTargetNotepadId, "copy")} disabled={!quickTargetNotepadId}>
+                      Copy to Notepad
+                    </button>
+                    <button type="button" onClick={() => void moveSelectedToNotepad(quickTargetNotepadId, "move")} disabled={!quickTargetNotepadId}>
+                      Move to Notepad
+                    </button>
+                    <button type="button" onClick={() => uiDispatch({ type: "set_quick_actions_open", open: false })}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {selectedRow.overlay && (
                 <small className="settings-hint">

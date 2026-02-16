@@ -3,6 +3,7 @@ use crate::models::{
     ArchiveAtomRequest, AtomFacets, AtomRecord, AtomRelations, BodyPatch, BooleanResponse,
     BlockRecord, CreateBlockInNotepadRequest,
     ClassificationResult, ClassificationSource, CreateAtomRequest, EncryptionScope, FacetKind,
+    DeleteAtomRequest,
     ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest,
     ConditionSetDateRequest, ConditionSetPersonRequest, ConditionSetTaskRequest, GovernanceMeta, ListAtomsRequest,
     ListBlocksRequest, ListConditionsRequest, ListEventsRequest, ListPlacementsRequest, NotepadFilter,
@@ -126,6 +127,7 @@ pub fn capabilities(root: &Path) -> AppResult<WorkspaceCapabilities> {
             "atom_update".to_string(),
             "task_status_set".to_string(),
             "atom_archive".to_string(),
+            "atom_delete".to_string(),
             "atom_unarchive".to_string(),
             "task_complete".to_string(),
             "task_reopen".to_string(),
@@ -244,7 +246,7 @@ pub fn obsidian_tasks_sync(root: &Path) -> AppResult<ObsidianTaskSyncResult> {
     ensure_topology(root)?;
     let vault_root = detect_obsidian_vault_path().ok_or_else(|| {
         AppError::Policy(
-            "POLICY_DENIED: Obsidian vault path unavailable. Ensure Obsidian is configured with an open/default vault.".to_string(),
+            "Obsidian vault path unavailable. Ensure Obsidian is configured with an open/default vault.".to_string(),
         )
     })?;
     obsidian_tasks_sync_for_vault(root, &vault_root)
@@ -683,6 +685,18 @@ pub fn atom_archive(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -> 
     )
 }
 
+pub fn atom_delete(root: &Path, atom_id: &str, request: DeleteAtomRequest) -> AppResult<BooleanResponse> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "atom.delete",
+        key.as_deref(),
+        &json!({"atomId": atom_id, "request": &request}),
+        || atom_delete_inner(root, atom_id, request.clone()),
+    )
+}
+
 pub fn atom_unarchive(
     root: &Path,
     atom_id: &str,
@@ -722,6 +736,80 @@ fn atom_unarchive_inner(root: &Path, atom_id: &str, expected_revision: i64) -> A
     let _ = upsert_block_from_atom(root, &atom)?;
 
     Ok(atom)
+}
+
+fn atom_delete_inner(root: &Path, atom_id: &str, request: DeleteAtomRequest) -> AppResult<BooleanResponse> {
+    let atom = get_required_atom(root, atom_id)?;
+    assert_revision(&atom, request.expected_revision)?;
+    if atom.archived_at.is_none() {
+        return Err(AppError::Policy(
+            "POLICY_DENIED: atom_delete requires atom to be archived".to_string(),
+        ));
+    }
+    if !atom_has_no_meaningful_content(&atom) {
+        return Err(AppError::Policy(
+            "POLICY_DENIED: atom_delete only permits archived atoms with no text/body content".to_string(),
+        ));
+    }
+
+    let mut block_ids: HashSet<String> = load_all_blocks(root)?
+        .into_iter()
+        .filter(|block| block.atom_id.as_deref() == Some(atom_id))
+        .map(|block| block.id)
+        .collect();
+    if block_ids.is_empty() {
+        block_ids.insert(block_id_for_atom(atom_id));
+    }
+
+    let placements: Vec<PlacementRecord> = list_json_entities(root, "placements/by-view")?
+        .into_iter()
+        .map(|value| deserialize_entity(value, "placement"))
+        .collect::<AppResult<Vec<_>>>()?;
+    for placement in placements
+        .iter()
+        .filter(|placement| block_ids.contains(&placement.block_id))
+    {
+        let path = json_entity_path(root, "placements/by-view", &placement.id);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| AppError::Io(error.to_string()))?;
+            append_event(
+                root,
+                build_event(
+                    "placement.deleted",
+                    None,
+                    json!({"placementId": placement.id, "previous": placement}),
+                ),
+            )?;
+        }
+    }
+
+    for block_id in block_ids {
+        for rel in ["blocks/active", "blocks/completed", "blocks/archived"] {
+            let path = json_entity_path(root, rel, &block_id);
+            if path.exists() {
+                fs::remove_file(path).map_err(|error| AppError::Io(error.to_string()))?;
+            }
+        }
+    }
+
+    if let Some(path) = find_atom_path(root, atom_id)? {
+        if path.exists() {
+            fs::remove_file(path).map_err(|error| AppError::Io(error.to_string()))?;
+        }
+    } else {
+        return Ok(BooleanResponse { success: false });
+    }
+
+    append_event(
+        root,
+        build_event(
+            "atom.deleted",
+            Some(atom_id),
+            json!({"reason": request.reason}),
+        ),
+    )?;
+
+    Ok(BooleanResponse { success: true })
 }
 
 pub fn task_status_set(root: &Path, atom_id: &str, request: SetTaskStatusRequest) -> AppResult<AtomRecord> {
@@ -854,6 +942,41 @@ pub fn notepad_atoms_list(
 
     let notepad = notepad_get(root, notepad_id)?
         .ok_or_else(|| AppError::NotFound(format!("Notepad '{}' not found", notepad_id)))?;
+
+    // Keep placement-backed views and filter-backed views in sync by ensuring every
+    // current membership atom has a placement in this view.
+    let mut membership_atoms = load_all_atoms(root)?;
+    apply_atom_filter(&mut membership_atoms, Some(&notepad.filters));
+    sort_atoms(&mut membership_atoms, Some(&notepad.sorts));
+
+    backfill_blocks_from_atoms(root)?;
+    let all_blocks = load_all_blocks(root)?;
+    let mut block_id_by_atom_id: HashMap<String, String> = HashMap::new();
+    for block in all_blocks {
+        if let Some(atom_id) = block.atom_id {
+            block_id_by_atom_id.insert(atom_id, block.id);
+        }
+    }
+
+    let mut existing_block_ids: HashSet<String> = load_placements_for_view(root, notepad_id)?
+        .into_iter()
+        .map(|placement| placement.block_id)
+        .collect();
+
+    for atom in &membership_atoms {
+        let block_id = if let Some(existing) = block_id_by_atom_id.get(&atom.id) {
+            existing.clone()
+        } else {
+            let block = upsert_block_from_atom(root, atom)?;
+            block_id_by_atom_id.insert(atom.id.clone(), block.id.clone());
+            block.id
+        };
+        if existing_block_ids.contains(&block_id) {
+            continue;
+        }
+        let placement = ensure_placement_for_view(root, &block_id, notepad_id, None)?;
+        existing_block_ids.insert(placement.block_id);
+    }
 
     let placements = load_placements_for_view(root, notepad_id)?;
     if !placements.is_empty() {
@@ -1042,7 +1165,7 @@ pub fn placement_save(root: &Path, placement: WorkspaceMutationPayload) -> AppRe
                 .get("blockId")
                 .and_then(Value::as_str)
                 .ok_or_else(|| AppError::Policy("VALIDATION_ERROR: placement blockId required".to_string()))?;
-            if !notepad_path(root, view_id).exists() {
+            if !resolve_notepad_path(root, view_id).exists() {
                 return Err(AppError::NotFound(format!("Notepad '{}' not found", view_id)));
             }
             if find_block(root, block_id)?.is_none() {
@@ -2098,6 +2221,15 @@ fn atom_status(atom: &AtomRecord) -> TaskStatus {
     TaskStatus::Todo
 }
 
+fn atom_has_no_meaningful_content(atom: &AtomRecord) -> bool {
+    atom.raw_text.trim().is_empty()
+        && atom
+            .body
+            .as_deref()
+            .map(|body| body.trim().is_empty())
+            .unwrap_or(true)
+}
+
 fn status_rel_dir(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Done => "atoms/done",
@@ -2162,12 +2294,8 @@ fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> AppResult<()>
         fs::create_dir_all(parent).map_err(|error| AppError::Io(error.to_string()))?;
     }
     let rendered = serde_json::to_string_pretty(value)?;
-    if !obsidian_cli_writes_suppressed() {
-        if let Some(root) = detect_obsidian_command_center_root() {
-            if path.starts_with(&root) && try_obsidian_cli_write(&root, path, &rendered) {
-                return Ok(());
-            }
-        }
+    if try_obsidian_cli_write_or_fail(path, &rendered)? {
+        return Ok(());
     }
     fs::write(path, rendered).map_err(|error| AppError::Io(error.to_string()))
 }
@@ -2213,15 +2341,31 @@ fn write_markdown_frontmatter(_root: &Path, path: &Path, metadata: &Value, body:
 
     let metadata_yaml = serde_yaml::to_string(metadata).map_err(|error| AppError::Internal(error.to_string()))?;
     let rendered = format!("---\n{}---\n\n{}", metadata_yaml, body);
-    if !obsidian_cli_writes_suppressed() {
-        if let Some(root) = detect_obsidian_command_center_root() {
-            if path.starts_with(&root) && try_obsidian_cli_write(&root, path, &rendered) {
-                return Ok(());
-            }
-        }
+    if try_obsidian_cli_write_or_fail(path, &rendered)? {
+        return Ok(());
     }
 
     fs::write(path, rendered).map_err(|error| AppError::Io(error.to_string()))
+}
+
+fn try_obsidian_cli_write_or_fail(path: &Path, content: &str) -> AppResult<bool> {
+    if obsidian_cli_writes_suppressed() {
+        return Ok(false);
+    }
+    let Some(root) = detect_obsidian_command_center_root() else {
+        return Ok(false);
+    };
+    if !path.starts_with(&root) {
+        return Ok(false);
+    }
+    if try_obsidian_cli_write(&root, path, content) {
+        return Ok(true);
+    }
+    tracing::warn!(
+        path = %path.to_string_lossy(),
+        "obsidian CLI write unavailable; falling back to direct filesystem write"
+    );
+    Ok(false)
 }
 
 fn read_atom_file(root: &Path, path: &Path) -> AppResult<AtomRecord> {
@@ -2304,7 +2448,6 @@ fn try_obsidian_cli_write(root: &Path, path: &Path, content: &str) -> bool {
         format!("path={}", rel_path),
         format!("content={}", encode_obsidian_cli_content(content)),
         "overwrite".to_string(),
-        "silent".to_string(),
     ];
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
@@ -2329,7 +2472,6 @@ fn obsidian_cli_can_target_vault(root: &Path, vault_name: &str) -> bool {
         "vault".to_string(),
         "active".to_string(),
         "key=path".to_string(),
-        "silent".to_string(),
     ];
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_obsidian_cli_status("obsidian", &arg_refs, root)
@@ -2762,8 +2904,7 @@ fn upsert_block_from_atom(root: &Path, atom: &AtomRecord) -> AppResult<BlockReco
 
 fn backfill_blocks_from_atoms(root: &Path) -> AppResult<()> {
     for atom in load_all_atoms(root)? {
-        let block = upsert_block_from_atom(root, &atom)?;
-        let _ = ensure_placement_for_view(root, &block.id, "now", None)?;
+        let _ = upsert_block_from_atom(root, &atom)?;
     }
     Ok(())
 }
@@ -6162,12 +6303,13 @@ fn default_feature_flags() -> Vec<Value> {
         "workspace.recurrence",
         "workspace.recurrence_v2",
         "workspace.agent_handoff",
+        "workspace.notepad_ui_v2",
     ]
     .iter()
     .map(|key| {
         json!({
             "key": key,
-            "enabled": false,
+            "enabled": *key == "workspace.notepad_ui_v2",
             "updatedAt": now
         })
     })
@@ -6401,6 +6543,177 @@ mod tests {
         )
         .expect("focus placements");
         assert!(focus.items.iter().any(|placement| placement.block_id == block_id));
+    }
+
+    #[test]
+    fn notepad_atoms_list_materializes_missing_placements_for_membership_atoms() {
+        let root = temp_root();
+        let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
+
+        let _focus = notepad_save(
+            root.path(),
+            SaveNotepadViewRequest {
+                expected_revision: None,
+                idempotency_key: Some("focus-materialize-notepad-key".to_string()),
+                definition: crate::models::NotepadViewDefinitionInput {
+                    id: "focus".to_string(),
+                    schema_version: 1,
+                    name: "Focus".to_string(),
+                    description: Some("Materialize placements from membership".to_string()),
+                    is_system: false,
+                    filters: NotepadFilter {
+                        facet: Some(FacetKind::Task),
+                        statuses: Some(vec![TaskStatus::Todo, TaskStatus::Doing, TaskStatus::Blocked]),
+                        include_archived: Some(false),
+                        ..NotepadFilter::default()
+                    },
+                    sorts: vec![NotepadSort {
+                        field: "updatedAt".to_string(),
+                        direction: "desc".to_string(),
+                    }],
+                    capture_defaults: None,
+                    layout_mode: "list".to_string(),
+                },
+            },
+        )
+        .expect("focus notepad saved");
+
+        let before = placements_list(
+            root.path(),
+            ListPlacementsRequest {
+                view_id: Some("focus".to_string()),
+                ..ListPlacementsRequest::default()
+            },
+        )
+        .expect("placements before materialization");
+        assert!(before.items.is_empty());
+
+        let listed = notepad_atoms_list(root.path(), "focus", Some(50), None).expect("notepad atoms list");
+        assert!(listed.items.iter().any(|item| item.id == atom.id));
+
+        let after = placements_list(
+            root.path(),
+            ListPlacementsRequest {
+                view_id: Some("focus".to_string()),
+                ..ListPlacementsRequest::default()
+            },
+        )
+        .expect("placements after materialization");
+        assert_eq!(after.items.len(), 1);
+    }
+
+    #[test]
+    fn placement_save_accepts_legacy_now_json_notepad_path() {
+        let root = temp_root();
+        ensure_topology(root.path()).expect("topology");
+
+        let now_definition = default_now_notepad(Utc::now());
+        let legacy_now_path = root.path().join("notepads").join("now.json");
+        write_notepad_file(root.path(), &legacy_now_path, &now_definition).expect("write legacy now notepad");
+        let markdown_now_path = notepad_path(root.path(), "now");
+        if markdown_now_path.exists() {
+            fs::remove_file(markdown_now_path).expect("remove markdown now");
+        }
+
+        let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
+        let block_id = block_id_for_atom(&atom.id);
+        let placement = placement_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "viewId": "now",
+                    "blockId": block_id
+                }),
+                "legacy-now-placement-save-key",
+            ),
+        )
+        .expect("placement save should work with legacy now.json");
+
+        assert_eq!(placement.view_id, "now");
+        assert_eq!(placement.block_id, block_id);
+    }
+
+    #[test]
+    fn atom_delete_prunes_empty_archived_atom_and_related_placements() {
+        let root = temp_root();
+        let atom = atom_create(
+            root.path(),
+            CreateAtomRequest {
+                raw_text: "".to_string(),
+                body: Some("".to_string()),
+                idempotency_key: Some("empty-atom-create-key".to_string()),
+                ..sample_create_request()
+            },
+        )
+        .expect("atom created");
+        let archived = atom_archive(
+            root.path(),
+            &atom.id,
+            ArchiveAtomRequest {
+                expected_revision: atom.revision,
+                idempotency_key: Some("empty-atom-archive-key".to_string()),
+                reason: Some("test".to_string()),
+            },
+        )
+        .expect("atom archived");
+
+        let delete = atom_delete(
+            root.path(),
+            &archived.id,
+            DeleteAtomRequest {
+                expected_revision: archived.revision,
+                idempotency_key: Some("empty-atom-delete-key".to_string()),
+                reason: Some("test".to_string()),
+            },
+        )
+        .expect("atom deleted");
+        assert!(delete.success);
+
+        let after_atom = atom_get(root.path(), &archived.id).expect("atom get after delete");
+        assert!(after_atom.is_none());
+
+        let block_id = block_id_for_atom(&archived.id);
+        let after_placements = placements_list(
+            root.path(),
+            ListPlacementsRequest {
+                block_id: Some(block_id.clone()),
+                ..ListPlacementsRequest::default()
+            },
+        )
+        .expect("placements after delete");
+        assert!(after_placements.items.is_empty());
+        assert!(find_block(root.path(), &block_id).expect("find block").is_none());
+    }
+
+    #[test]
+    fn atom_delete_rejects_non_empty_archived_atom() {
+        let root = temp_root();
+        let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
+        let archived = atom_archive(
+            root.path(),
+            &atom.id,
+            ArchiveAtomRequest {
+                expected_revision: atom.revision,
+                idempotency_key: Some("nonempty-atom-archive-key".to_string()),
+                reason: Some("test".to_string()),
+            },
+        )
+        .expect("atom archived");
+
+        let error = atom_delete(
+            root.path(),
+            &archived.id,
+            DeleteAtomRequest {
+                expected_revision: archived.revision,
+                idempotency_key: Some("nonempty-atom-delete-key".to_string()),
+                reason: Some("test".to_string()),
+            },
+        )
+        .expect_err("non-empty archived atom must be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("POLICY_DENIED: atom_delete only permits archived atoms with no text/body content"));
     }
 
     #[test]

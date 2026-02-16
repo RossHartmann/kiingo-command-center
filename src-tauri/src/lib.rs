@@ -13,10 +13,11 @@ mod workspace;
 use crate::models::{
     AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
     ArchiveAtomRequest, AtomRecord, AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord,
+    DeleteAtomRequest,
     ClassificationResult, ClassificationSource, CreateAtomRequest, CreateBlockInNotepadRequest,
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
     DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest, ListConversationsFilters,
-    ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
+    ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse, MetricSnapshot,
     NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, RecurrenceInstance,
     RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
     SaveMetricDefinitionPayload, SaveNotepadViewRequest, SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
@@ -336,6 +337,14 @@ fn list_metric_snapshots(
 }
 
 #[tauri::command]
+fn get_metric_diagnostics(
+    state: tauri::State<'_, AppState>,
+    metric_id: String,
+) -> Result<MetricDiagnostics, String> {
+    state.runner.get_metric_diagnostics(&metric_id).map_err(to_client_error)
+}
+
+#[tauri::command]
 fn bind_metric_to_screen(
     state: tauri::State<'_, AppState>,
     payload: BindMetricToScreenPayload,
@@ -478,6 +487,15 @@ fn atom_archive(
     payload: ArchiveAtomRequest,
 ) -> Result<AtomRecord, String> {
     state.runner.atom_archive(&atom_id, payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_delete(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    payload: DeleteAtomRequest,
+) -> Result<BooleanResponse, String> {
+    state.runner.atom_delete(&atom_id, payload).map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1481,6 +1499,7 @@ pub fn run() {
             delete_metric_definition,
             get_latest_metric_snapshot,
             list_metric_snapshots,
+            get_metric_diagnostics,
             bind_metric_to_screen,
             unbind_metric_from_screen,
             reorder_screen_metrics,
@@ -1499,6 +1518,7 @@ pub fn run() {
             task_complete,
             task_reopen,
             atom_archive,
+            atom_delete,
             atom_unarchive,
             notepads_list,
             notepad_get,

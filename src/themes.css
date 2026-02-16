@@ -16,6 +16,21 @@
   --danger-bg: rgba(239, 91, 91, 0.12);
   --info-bg: rgba(91, 138, 245, 0.08);
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --notepad-overlay-person-border: rgba(91, 138, 245, 0.5);
+  --notepad-overlay-person-ink: #9fbaff;
+  --notepad-overlay-person-bg: rgba(91, 138, 245, 0.14);
+  --notepad-overlay-task-border: rgba(232, 168, 76, 0.45);
+  --notepad-overlay-task-ink: #e8c58f;
+  --notepad-overlay-task-bg: rgba(232, 168, 76, 0.14);
+  --notepad-overlay-date-border: rgba(120, 196, 255, 0.45);
+  --notepad-overlay-date-ink: #9ad0ff;
+  --notepad-overlay-date-bg: rgba(120, 196, 255, 0.12);
+  --notepad-health-ok-border: rgba(73, 190, 146, 0.45);
+  --notepad-health-ok-ink: #85dfb8;
+  --notepad-health-ok-bg: rgba(73, 190, 146, 0.14);
+  --notepad-health-warn-border: rgba(232, 168, 76, 0.45);
+  --notepad-health-warn-ink: #f2c988;
+  --notepad-health-warn-bg: rgba(232, 168, 76, 0.14);
 }
 
 [data-theme="obsidian"] body {
@@ -142,6 +157,21 @@
   --danger-bg: #fef0ef;
   --info-bg: #f0edff;
   --shadow: 0 2px 12px rgba(108, 92, 231, 0.06);
+  --notepad-overlay-person-border: #b8a8ff;
+  --notepad-overlay-person-ink: #5d47ce;
+  --notepad-overlay-person-bg: #f3efff;
+  --notepad-overlay-task-border: #f1b27a;
+  --notepad-overlay-task-ink: #8a4d18;
+  --notepad-overlay-task-bg: #fff3ea;
+  --notepad-overlay-date-border: #89b4ff;
+  --notepad-overlay-date-ink: #2f5da5;
+  --notepad-overlay-date-bg: #edf4ff;
+  --notepad-health-ok-border: #67b89b;
+  --notepad-health-ok-ink: #21624a;
+  --notepad-health-ok-bg: #e8f8f1;
+  --notepad-health-warn-border: #e0a06f;
+  --notepad-health-warn-ink: #824a1f;
+  --notepad-health-warn-bg: #fff2e6;
 }
 
 [data-theme="aurora"] body {
@@ -285,6 +315,21 @@
   --danger-bg: rgba(255, 51, 51, 0.1);
   --info-bg: rgba(0, 255, 136, 0.05);
   --shadow: none;
+  --notepad-overlay-person-border: rgba(0, 255, 136, 0.45);
+  --notepad-overlay-person-ink: #66ffb3;
+  --notepad-overlay-person-bg: rgba(0, 255, 136, 0.1);
+  --notepad-overlay-task-border: rgba(255, 204, 0, 0.45);
+  --notepad-overlay-task-ink: #ffe37a;
+  --notepad-overlay-task-bg: rgba(255, 204, 0, 0.1);
+  --notepad-overlay-date-border: rgba(0, 170, 255, 0.45);
+  --notepad-overlay-date-ink: #7fd6ff;
+  --notepad-overlay-date-bg: rgba(0, 170, 255, 0.1);
+  --notepad-health-ok-border: rgba(0, 255, 136, 0.45);
+  --notepad-health-ok-ink: #66ffb3;
+  --notepad-health-ok-bg: rgba(0, 255, 136, 0.1);
+  --notepad-health-warn-border: rgba(255, 82, 82, 0.45);
+  --notepad-health-warn-ink: #ff8e8e;
+  --notepad-health-warn-bg: rgba(255, 82, 82, 0.1);
 }
 
 [data-theme="terminal"] body {
@@ -438,6 +483,21 @@
   --danger-bg: #fff5f5;
   --info-bg: #f7fafc;
   --shadow: none;
+  --notepad-overlay-person-border: #d4c4a8;
+  --notepad-overlay-person-ink: #6f5d42;
+  --notepad-overlay-person-bg: #fbf7ef;
+  --notepad-overlay-task-border: #d4c8bc;
+  --notepad-overlay-task-ink: #5f5650;
+  --notepad-overlay-task-bg: #f7f3ee;
+  --notepad-overlay-date-border: #c5cfdf;
+  --notepad-overlay-date-ink: #4b607a;
+  --notepad-overlay-date-bg: #f3f7fc;
+  --notepad-health-ok-border: #adc9b5;
+  --notepad-health-ok-ink: #395946;
+  --notepad-health-ok-bg: #f1f8f3;
+  --notepad-health-warn-border: #d7b79d;
+  --notepad-health-warn-ink: #6f4a2f;
+  --notepad-health-warn-bg: #faf2eb;
 }
 
 [data-theme="paper"] body {
@@ -564,6 +624,21 @@
   --danger-bg: rgba(232, 91, 91, 0.1);
   --info-bg: rgba(232, 168, 76, 0.06);
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --notepad-overlay-person-border: rgba(232, 168, 76, 0.45);
+  --notepad-overlay-person-ink: #f0c98b;
+  --notepad-overlay-person-bg: rgba(232, 168, 76, 0.12);
+  --notepad-overlay-task-border: rgba(184, 125, 232, 0.45);
+  --notepad-overlay-task-ink: #d4b4ee;
+  --notepad-overlay-task-bg: rgba(184, 125, 232, 0.12);
+  --notepad-overlay-date-border: rgba(110, 154, 255, 0.45);
+  --notepad-overlay-date-ink: #a7c0ff;
+  --notepad-overlay-date-bg: rgba(110, 154, 255, 0.12);
+  --notepad-health-ok-border: rgba(120, 205, 155, 0.45);
+  --notepad-health-ok-ink: #9fe2be;
+  --notepad-health-ok-bg: rgba(120, 205, 155, 0.12);
+  --notepad-health-warn-border: rgba(232, 121, 93, 0.45);
+  --notepad-health-warn-ink: #f2b29b;
+  --notepad-health-warn-bg: rgba(232, 121, 93, 0.12);
 }
 
 [data-theme="dusk"] body {

@@ -13,7 +13,7 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
   const [slug, setSlug] = useState(definition?.slug ?? "");
   const [instructions, setInstructions] = useState(definition?.instructions ?? "");
   const [templateHtml, setTemplateHtml] = useState(definition?.templateHtml ?? "");
-  const [ttlSeconds, setTtlSeconds] = useState(definition?.ttlSeconds ?? 3600);
+  const [ttlSeconds, setTtlSeconds] = useState(definition?.ttlSeconds ?? 259200);
   const [provider, setProvider] = useState<"codex" | "claude">(definition?.provider ?? "claude");
   const [model, setModel] = useState(definition?.model ?? "");
   const [cwd, setCwd] = useState(definition?.cwd ?? "");

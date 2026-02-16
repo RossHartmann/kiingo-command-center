@@ -11,6 +11,7 @@ import type {
   ListConversationsFilters,
   ListRunsFilters,
   MetricDefinition,
+  MetricDiagnostics,
   MetricRefreshResponse,
   MetricSnapshot,
   Profile,
@@ -37,6 +38,7 @@ import type {
   ListAtomsRequest,
   CreateAtomRequest,
   ArchiveAtomRequest,
+  DeleteAtomRequest,
   AttentionLayer,
   NotepadViewDefinition,
   PageRequest,
@@ -208,6 +210,12 @@ function classifyRawText(rawText: string): ClassificationResult {
 function deriveTaskTitle(rawText: string): string {
   const first = rawText.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Untitled task";
   return first.replace(/^- \[[ xX]\]\s*/, "").replace(/^[-*]\s*/, "").slice(0, 120);
+}
+
+function atomHasNoMeaningfulContent(atom: AtomRecord): boolean {
+  const text = atom.rawText.trim();
+  const body = (atom.body ?? "").trim();
+  return text.length === 0 && body.length === 0;
 }
 
 function blockIdForAtom(atomIdValue: string): string {
@@ -977,7 +985,7 @@ export async function saveMetricDefinition(payload: SaveMetricDefinitionPayload)
     slug: payload.slug,
     instructions: payload.instructions,
     templateHtml: payload.templateHtml ?? "",
-    ttlSeconds: payload.ttlSeconds ?? 3600,
+    ttlSeconds: payload.ttlSeconds ?? 259200,
     provider: payload.provider ?? "claude",
     model: payload.model,
     profileId: payload.profileId,
@@ -1054,6 +1062,30 @@ export async function listMetricSnapshots(metricId: string, limit = 50): Promise
     .filter((s) => s.metricId === metricId)
     .sort((a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf())
     .slice(0, limit);
+}
+
+export async function getMetricDiagnostics(metricId: string): Promise<MetricDiagnostics> {
+  if (IS_TAURI) {
+    return tauriInvoke("get_metric_diagnostics", { metricId });
+  }
+  return {
+    metricId,
+    totalRuns: 0,
+    completedRuns: 0,
+    failedRuns: 0,
+    successRate: 0,
+    lastRunDurationSecs: null,
+    avgRunDurationSecs: null,
+    minRunDurationSecs: null,
+    maxRunDurationSecs: null,
+    ttlSeconds: 300,
+    provider: "claude",
+    model: null,
+    currentStatus: null,
+    lastError: null,
+    lastCompletedAt: null,
+    nextRefreshAt: null,
+  };
 }
 
 export async function bindMetricToScreen(payload: BindMetricToScreenPayload): Promise<ScreenMetricBinding> {
@@ -1194,6 +1226,7 @@ export async function workspaceCapabilitiesGet(): Promise<WorkspaceCapabilities>
       "atom_update",
       "task_status_set",
       "atom_archive",
+      "atom_delete",
       "atom_unarchive",
       "task_complete",
       "task_reopen",
@@ -1644,6 +1677,36 @@ export async function atomArchive(atomIdValue: string, payload: ArchiveAtomReque
   recordWorkspaceEvent("atom.archived", { archivedAt: atom.archivedAt, reason: request.reason }, atom.id);
   persistMockStore();
   return atom;
+}
+
+export async function atomDelete(atomIdValue: string, payload: DeleteAtomRequest): Promise<{ success: boolean }> {
+  const request: DeleteAtomRequest = {
+    ...payload,
+    idempotencyKey: ensureIdempotencyKey(payload.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("atom_delete", { atomId: atomIdValue, payload: request });
+  }
+  const atomIndex = mockStore.atoms.findIndex((entry) => entry.id === atomIdValue);
+  if (atomIndex === -1) {
+    return { success: false };
+  }
+  const atom = mockStore.atoms[atomIndex];
+  if (atom.revision !== request.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${request.expectedRevision} but found ${atom.revision}`);
+  }
+  if (!atom.archivedAt) {
+    throw new Error("POLICY_DENIED: atom_delete requires atom to be archived");
+  }
+  if (!atomHasNoMeaningfulContent(atom)) {
+    throw new Error("POLICY_DENIED: atom_delete only permits archived atoms with no text/body content");
+  }
+  const blockId = blockIdForAtom(atom.id);
+  mockStore.placements = mockStore.placements.filter((placement) => placement.blockId !== blockId);
+  mockStore.atoms.splice(atomIndex, 1);
+  recordWorkspaceEvent("atom.deleted", { reason: request.reason }, atomIdValue);
+  persistMockStore();
+  return { success: true };
 }
 
 export async function atomUnarchive(atomIdValue: string, expectedRevision: number): Promise<AtomRecord> {
@@ -2337,11 +2400,12 @@ function ensureFeatureFlags(): void {
     "workspace.focus_sessions_v2",
     "workspace.recurrence",
     "workspace.recurrence_v2",
-    "workspace.agent_handoff"
+    "workspace.agent_handoff",
+    "workspace.notepad_ui_v2"
   ];
   mockStore.featureFlags = keys.map((key) => ({
     key,
-    enabled: false,
+    enabled: key === "workspace.notepad_ui_v2",
     updatedAt: now
   }));
 }

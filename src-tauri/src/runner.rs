@@ -17,10 +17,11 @@ use crate::harness::structured_output::{resolve_structured_output, validate_stru
 use crate::models::{
     AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
     ArchiveAtomRequest, AtomRecord, AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord,
+    DeleteAtomRequest,
     ClassificationResult, ClassificationSource, CreateAtomRequest, CreateBlockInNotepadRequest,
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
     DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest,
-    ListConversationsFilters, ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
+    ListConversationsFilters, ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse,
     MetricSnapshot, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider,
     RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
@@ -2187,6 +2188,11 @@ impl RunnerCore {
         workspace::atom_archive(&root, atom_id, request)
     }
 
+    pub fn atom_delete(&self, atom_id: &str, request: DeleteAtomRequest) -> AppResult<BooleanResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_delete(&root, atom_id, request)
+    }
+
     pub fn atom_unarchive(
         &self,
         atom_id: &str,
@@ -2876,6 +2882,10 @@ impl RunnerCore {
 
     pub fn list_metric_snapshots(&self, metric_id: &str, limit: Option<u32>) -> AppResult<Vec<MetricSnapshot>> {
         self.db.list_snapshots(metric_id, limit.unwrap_or(50))
+    }
+
+    pub fn get_metric_diagnostics(&self, metric_id: &str) -> AppResult<MetricDiagnostics> {
+        self.db.get_metric_diagnostics(metric_id)
     }
 
     pub fn bind_metric_to_screen(&self, payload: BindMetricToScreenPayload) -> AppResult<ScreenMetricBinding> {
