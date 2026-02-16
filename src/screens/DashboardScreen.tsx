@@ -13,6 +13,17 @@ const GRID_DEFAULTS: Record<string, { gridW: number; gridH: number }> = {
   full: { gridW: 12, gridH: 8 },
 };
 
+// Must match MetricGrid's ResponsiveGridLayout config
+const GRID_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480 };
+const GRID_COLS = { lg: 12, md: 10, sm: 6, xs: 4 };
+
+function getColsForWidth(width: number): number {
+  if (width >= GRID_BREAKPOINTS.lg) return GRID_COLS.lg;
+  if (width >= GRID_BREAKPOINTS.md) return GRID_COLS.md;
+  if (width >= GRID_BREAKPOINTS.sm) return GRID_COLS.sm;
+  return GRID_COLS.xs;
+}
+
 export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element {
   const state = useAppState();
   const actions = useAppActions();
@@ -21,6 +32,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [compact, setCompact] = useState(false);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void actions.loadScreenMetrics(screenId);
@@ -56,6 +68,67 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     },
     [actions, screenId]
   );
+
+  const handleAutoArrange = useCallback(() => {
+    if (views.length === 0) return;
+
+    // Use actual grid container width to match the responsive column count
+    const containerWidth = gridContainerRef.current?.clientWidth ?? window.innerWidth;
+    const COLS = getColsForWidth(containerWidth);
+
+    // Sort by current position: top-to-bottom, left-to-right
+    const sorted = [...views].sort((a, b) => {
+      const ay = a.binding.gridY, by = b.binding.gridY;
+      if (ay !== by) return ay - by;
+      return a.binding.gridX - b.binding.gridX;
+    });
+
+    // Occupancy grid — tracks which cells are taken
+    const occupied: boolean[][] = [];
+    const ensureRows = (n: number) => {
+      while (occupied.length < n) occupied.push(new Array(COLS).fill(false));
+    };
+
+    const newLayout: ScreenMetricLayoutItem[] = [];
+
+    for (const view of sorted) {
+      // Clamp width to fit within available columns
+      const w = Math.max(1, Math.min(view.binding.gridW, COLS));
+      const h = Math.max(1, view.binding.gridH);
+      let placed = false;
+
+      for (let row = 0; !placed; row++) {
+        ensureRows(row + h);
+        for (let col = 0; col <= COLS - w; col++) {
+          // Check if w×h rectangle fits
+          let fits = true;
+          for (let dy = 0; dy < h && fits; dy++) {
+            for (let dx = 0; dx < w && fits; dx++) {
+              if (occupied[row + dy][col + dx]) fits = false;
+            }
+          }
+          if (fits) {
+            // Place widget
+            for (let dy = 0; dy < h; dy++) {
+              for (let dx = 0; dx < w; dx++) {
+                occupied[row + dy][col + dx] = true;
+              }
+            }
+            newLayout.push({
+              bindingId: view.binding.id,
+              gridX: col,
+              gridY: row,
+              gridW: w,
+              gridH: h,
+            });
+            placed = true;
+          }
+        }
+      }
+    }
+
+    void actions.updateScreenMetricLayout(screenId, newLayout);
+  }, [views, actions, screenId]);
 
   const handleRemoveWidget = useCallback(
     (bindingId: string) => {
@@ -189,6 +262,9 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
             >
               {compact ? "Compact" : "Free-form"}
             </button>
+            <button type="button" onClick={handleAutoArrange} title="Pack widgets tightly with no gaps">
+              Auto-arrange
+            </button>
           </>
         )}
         <button
@@ -204,14 +280,16 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
         </button>
       </div>
 
-      <MetricGrid
-        views={views}
-        editMode={editMode}
-        compact={compact}
-        onLayoutChange={handleLayoutChange}
-        onRemoveWidget={editMode ? handleRemoveWidget : undefined}
-        onDropMetric={editMode ? handleDropMetric : undefined}
-      />
+      <div ref={gridContainerRef}>
+        <MetricGrid
+          views={views}
+          editMode={editMode}
+          compact={compact}
+          onLayoutChange={handleLayoutChange}
+          onRemoveWidget={editMode ? handleRemoveWidget : undefined}
+          onDropMetric={editMode ? handleDropMetric : undefined}
+        />
+      </div>
 
       {editMode && drawerOpen && (
         <aside className="metric-drawer">
