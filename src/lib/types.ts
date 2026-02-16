@@ -483,6 +483,9 @@ export interface AttentionFacet {
   layer: AttentionLayer;
   lastPromotedAt?: IsoDateTime;
   decayEligibleAt?: IsoDateTime;
+  heatScore?: number;
+  dwellStartedAt?: IsoDateTime;
+  hiddenReason?: string;
 }
 
 export interface CommitmentFacet {
@@ -575,6 +578,8 @@ export interface NotepadFilter {
   facet?: FacetKind;
   statuses?: TaskStatus[];
   threadIds?: EntityId[];
+  labels?: string[];
+  categories?: string[];
   parentId?: EntityId;
   attentionLayers?: AttentionLayer[];
   commitmentLevels?: CommitmentLevel[];
@@ -596,6 +601,17 @@ export interface NotepadSort {
   direction: "asc" | "desc";
 }
 
+export interface NotepadCaptureDefaults {
+  initialFacets?: FacetKind[];
+  taskStatus?: TaskStatus;
+  taskPriority?: 1 | 2 | 3 | 4 | 5;
+  threadIds?: EntityId[];
+  categories?: string[];
+  labels?: string[];
+  commitmentLevel?: CommitmentLevel;
+  attentionLayer?: AttentionLayer;
+}
+
 export interface NotepadViewDefinition {
   id: EntityId;
   schemaVersion: number;
@@ -604,6 +620,7 @@ export interface NotepadViewDefinition {
   isSystem: boolean;
   filters: NotepadFilter;
   sorts: NotepadSort[];
+  captureDefaults?: NotepadCaptureDefaults;
   layoutMode: "outline" | "list" | "focus";
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
@@ -619,6 +636,12 @@ export type WorkspaceEventType =
   | "atom.archived"
   | "relation.linked"
   | "relation.unlinked"
+  | "placement.saved"
+  | "placement.deleted"
+  | "placement.reordered"
+  | "condition.set"
+  | "condition.followup_logged"
+  | "condition.transitioned"
   | "notepad.view_opened"
   | "triage.prompted"
   | "rule.evaluated"
@@ -627,6 +650,10 @@ export type WorkspaceEventType =
   | "job.run.failed"
   | "decision.created"
   | "decision.resolved"
+  | "work.session.started"
+  | "work.session.noted"
+  | "work.session.ended"
+  | "work.session.canceled"
   | "notification.sent"
   | "notification.failed"
   | "projection.refreshed"
@@ -634,6 +661,7 @@ export type WorkspaceEventType =
   | "registry.updated"
   | "governance.retention_applied"
   | "migration.run.started"
+  | "migration.schema.backfilled"
   | "migration.run.completed"
   | "migration.run.failed";
 
@@ -685,6 +713,7 @@ export interface UpdateAtomRequest {
   rawText?: string;
   facetDataPatch?: Partial<AtomFacets>;
   relationsPatch?: Partial<AtomRelations>;
+  clearParentId?: boolean;
   bodyPatch?: BodyPatch;
 }
 
@@ -713,6 +742,73 @@ export interface SaveNotepadViewRequest {
   definition: Omit<NotepadViewDefinition, "createdAt" | "updatedAt" | "revision">;
 }
 
+export interface BlockRecord {
+  id: EntityId;
+  schemaVersion: number;
+  atomId?: EntityId;
+  text: string;
+  kind: "unknown" | "task" | "note" | "heading" | "meta" | "quote" | string;
+  lifecycle: "active" | "completed" | "archived";
+  parentBlockId?: EntityId;
+  threadIds: EntityId[];
+  labels: string[];
+  categories: string[];
+  taskStatus?: TaskStatus;
+  priority?: number;
+  attentionLayer?: AttentionLayer;
+  commitmentLevel?: CommitmentLevel;
+  completedAt?: IsoDateTime;
+  archivedAt?: IsoDateTime;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  revision: number;
+}
+
+export interface PlacementRecord {
+  id: EntityId;
+  schemaVersion: number;
+  viewId: EntityId;
+  blockId: EntityId;
+  parentPlacementId?: EntityId;
+  orderKey: string;
+  pinned: boolean;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  revision: number;
+}
+
+export interface ListBlocksRequest extends PageRequest {
+  notepadId?: EntityId;
+  atomId?: EntityId;
+  lifecycle?: BlockRecord["lifecycle"];
+  textQuery?: string;
+}
+
+export interface ListPlacementsRequest extends PageRequest {
+  viewId?: EntityId;
+  blockId?: EntityId;
+}
+
+export interface CreateBlockInNotepadRequest {
+  notepadId: EntityId;
+  rawText: string;
+  body?: string;
+  captureSource?: CaptureSource;
+  idempotencyKey?: string;
+}
+
+export interface PlacementReorderRequest {
+  expectedRevisions?: number[];
+  orderedPlacementIds: EntityId[];
+  idempotencyKey?: string;
+}
+
+export interface WorkspaceMutationPayload {
+  expectedRevision?: number;
+  idempotencyKey?: string;
+  [key: string]: unknown;
+}
+
 export interface ListEventsRequest extends PageRequest {
   type?: WorkspaceEventType;
   atomId?: EntityId;
@@ -732,6 +828,16 @@ export interface WorkspaceHealth {
   vaultAccessible: boolean;
   lastSuccessfulCommandAt?: IsoDateTime;
   message?: string;
+}
+
+export interface ObsidianTaskSyncResult {
+  vaultPath: string;
+  scannedFiles: number;
+  discoveredTasks: number;
+  createdAtoms: number;
+  updatedAtoms: number;
+  unchangedAtoms: number;
+  archivedAtoms: number;
 }
 
 export type RuleScope = "atom" | "task" | "thread" | "notepad" | "system";
@@ -873,6 +979,168 @@ export interface DecisionPrompt {
   revision: number;
 }
 
+export type WorkSessionStatus = "running" | "ended" | "canceled";
+export type ConditionStatus = "active" | "satisfied" | "cancelled" | string;
+export type ConditionMode = "date" | "person" | "task" | string;
+
+export interface ConditionRecord {
+  id: EntityId;
+  schemaVersion: number;
+  atomId: EntityId;
+  status: ConditionStatus;
+  mode: ConditionMode;
+  blockedUntil?: IsoDateTime;
+  waitingOnPerson?: string;
+  waitingCadenceDays?: number;
+  blockerAtomId?: EntityId;
+  lastFollowupAt?: IsoDateTime;
+  nextFollowupAt?: IsoDateTime;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  resolvedAt?: IsoDateTime;
+  canceledAt?: IsoDateTime;
+  revision: number;
+}
+
+export interface WorkSessionRecord {
+  id: EntityId;
+  status: WorkSessionStatus;
+  focusBlockIds: EntityId[];
+  startedAt?: IsoDateTime;
+  endedAt?: IsoDateTime;
+  canceledAt?: IsoDateTime;
+  notes: string[];
+  summaryNote?: string;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  revision: number;
+}
+
+export interface WorkSessionStartRequest {
+  focusBlockIds?: EntityId[];
+  note?: string;
+  idempotencyKey?: string;
+}
+
+export interface WorkSessionNoteRequest {
+  expectedRevision: number;
+  note: string;
+  idempotencyKey?: string;
+}
+
+export interface WorkSessionEndRequest {
+  expectedRevision: number;
+  summaryNote?: string;
+  idempotencyKey?: string;
+}
+
+export interface WorkSessionCancelRequest {
+  expectedRevision: number;
+  reason?: string;
+  idempotencyKey?: string;
+}
+
+export interface ConditionSetDateRequest {
+  atomId: EntityId;
+  untilAt: IsoDateTime;
+  idempotencyKey?: string;
+}
+
+export interface ConditionSetPersonRequest {
+  atomId: EntityId;
+  waitingOnPerson: string;
+  cadenceDays: number;
+  idempotencyKey?: string;
+}
+
+export interface ConditionSetTaskRequest {
+  atomId: EntityId;
+  blockerAtomId: EntityId;
+  idempotencyKey?: string;
+}
+
+export interface ConditionFollowupRequest {
+  expectedRevision: number;
+  followedUpAt?: IsoDateTime;
+  idempotencyKey?: string;
+}
+
+export interface ConditionResolveRequest {
+  expectedRevision: number;
+  idempotencyKey?: string;
+}
+
+export interface ConditionCancelRequest {
+  expectedRevision: number;
+  reason?: string;
+  idempotencyKey?: string;
+}
+
+export interface RecurrenceTemplate {
+  id: EntityId;
+  schemaVersion: number;
+  status: "active" | "paused" | "retired" | string;
+  titleTemplate: string;
+  rawTextTemplate: string;
+  defaultNotepadId?: EntityId;
+  threadIds: EntityId[];
+  frequency: "daily" | "weekly" | "monthly" | "custom" | string;
+  interval: number;
+  byDay: string[];
+  nextRunAt?: IsoDateTime;
+  lastSpawnedAt?: IsoDateTime;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  revision: number;
+}
+
+export interface RecurrenceInstance {
+  id: EntityId;
+  templateId: EntityId;
+  status: "scheduled" | "spawned" | "missed" | "completed" | "archived" | string;
+  scheduledFor: IsoDateTime;
+  spawnedAt?: IsoDateTime;
+  dueAt?: IsoDateTime;
+  atomId?: EntityId;
+  blockId?: EntityId;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  revision: number;
+}
+
+export interface RecurrenceSpawnRequest {
+  templateIds?: EntityId[];
+  now?: IsoDateTime;
+  idempotencyKey?: string;
+}
+
+export interface RecurrenceSpawnResponse {
+  accepted: boolean;
+  spawnedInstanceIds: EntityId[];
+  touchedTemplateIds: EntityId[];
+}
+
+export interface AttentionUpdateRequest {
+  now?: IsoDateTime;
+  idempotencyKey?: string;
+}
+
+export interface AttentionUpdateResponse {
+  accepted: boolean;
+  updatedAtomIds: EntityId[];
+  decisionIds: EntityId[];
+}
+
+export interface DecisionGenerateRequest {
+  now?: IsoDateTime;
+  idempotencyKey?: string;
+}
+
+export interface DecisionGenerateResponse {
+  accepted: boolean;
+  createdOrUpdatedIds: EntityId[];
+}
+
 export type NotificationChannel = "in_app" | "push" | "email" | "sms" | "webhook";
 export type NotificationStatus = "queued" | "sent" | "delivered" | "failed" | "suppressed";
 
@@ -929,7 +1197,7 @@ export interface ProjectionCheckpoint {
   errorMessage?: string;
 }
 
-export type RegistryEntryKind = "thread" | "category";
+export type RegistryEntryKind = "thread" | "category" | "north_star";
 export type RegistryEntryStatus = "active" | "stale" | "retired";
 
 export interface RegistryEntry {
@@ -972,6 +1240,9 @@ export interface SemanticSearchHit {
 }
 
 export type FeatureFlagKey =
+  | "workspace.blocks_v2"
+  | "workspace.placements_v2"
+  | "workspace.capture_policy_v2"
   | "workspace.rules_engine"
   | "workspace.scheduler"
   | "workspace.decision_queue"
@@ -980,7 +1251,9 @@ export type FeatureFlagKey =
   | "workspace.registry"
   | "workspace.semantic_index"
   | "workspace.decay_engine"
+  | "workspace.focus_sessions_v2"
   | "workspace.recurrence"
+  | "workspace.recurrence_v2"
   | "workspace.agent_handoff";
 
 export interface FeatureFlag {
@@ -1044,6 +1317,25 @@ export interface JobRunsListRequest extends PageRequest {
 
 export interface DecisionsListRequest extends PageRequest {
   status?: DecisionPromptStatus;
+}
+
+export interface WorkSessionsListRequest extends PageRequest {
+  status?: WorkSessionStatus;
+}
+
+export interface ListConditionsRequest extends PageRequest {
+  atomId?: EntityId;
+  status?: ConditionStatus;
+  mode?: ConditionMode;
+}
+
+export interface RecurrenceTemplatesListRequest extends PageRequest {
+  status?: RecurrenceTemplate["status"];
+}
+
+export interface RecurrenceInstancesListRequest extends PageRequest {
+  templateId?: EntityId;
+  status?: RecurrenceInstance["status"];
 }
 
 export interface NotificationDeliveriesListRequest extends PageRequest {

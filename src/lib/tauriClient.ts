@@ -32,10 +32,12 @@ import type {
   WorkspaceEventRecord,
   WorkspaceGrant,
   WorkspaceHealth,
+  ObsidianTaskSyncResult,
   AtomRecord,
   ListAtomsRequest,
   CreateAtomRequest,
   ArchiveAtomRequest,
+  AttentionLayer,
   NotepadViewDefinition,
   PageRequest,
   PageResponse,
@@ -52,11 +54,42 @@ import type {
   NotificationDeliveryRecord,
   ProjectionDefinition,
   ProjectionCheckpoint,
+  PlacementRecord,
+  PlacementReorderRequest,
   RegistryEntry,
   RegistryEntryKind,
+  RecurrenceInstance,
+  RecurrenceInstancesListRequest,
+  RecurrenceSpawnRequest,
+  RecurrenceSpawnResponse,
+  RecurrenceTemplate,
+  RecurrenceTemplatesListRequest,
   SemanticChunk,
   SemanticSearchRequest,
   SemanticSearchHit,
+  WorkSessionCancelRequest,
+  WorkSessionEndRequest,
+  WorkSessionNoteRequest,
+  WorkSessionRecord,
+  WorkSessionStartRequest,
+  WorkSessionsListRequest,
+  ConditionCancelRequest,
+  ConditionFollowupRequest,
+  ConditionRecord,
+  ConditionResolveRequest,
+  ConditionSetDateRequest,
+  ConditionSetPersonRequest,
+  ConditionSetTaskRequest,
+  ListConditionsRequest,
+  WorkspaceMutationPayload,
+  AttentionUpdateRequest,
+  AttentionUpdateResponse,
+  DecisionGenerateRequest,
+  DecisionGenerateResponse,
+  BlockRecord,
+  ListBlocksRequest,
+  ListPlacementsRequest,
+  CreateBlockInNotepadRequest,
   GovernanceMeta,
   AtomGovernanceUpdateRequest,
   FeatureFlag,
@@ -89,7 +122,13 @@ interface MockStore {
   metricSnapshots: MetricSnapshot[];
   screenMetrics: ScreenMetricBinding[];
   atoms: AtomRecord[];
+  blocks: BlockRecord[];
+  placements: PlacementRecord[];
+  conditions: ConditionRecord[];
   notepads: NotepadViewDefinition[];
+  workSessions: WorkSessionRecord[];
+  recurrenceTemplates: RecurrenceTemplate[];
+  recurrenceInstances: RecurrenceInstance[];
   workspaceEvents: WorkspaceEventRecord[];
   rules: RuleDefinition[];
   workspaceJobs: JobDefinition[];
@@ -171,6 +210,129 @@ function deriveTaskTitle(rawText: string): string {
   return first.replace(/^- \[[ xX]\]\s*/, "").replace(/^[-*]\s*/, "").slice(0, 120);
 }
 
+function blockIdForAtom(atomIdValue: string): string {
+  return `blk_${atomIdValue.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function atomLifecycle(atom: AtomRecord): BlockRecord["lifecycle"] {
+  const status = atom.facetData.task?.status;
+  if (atom.archivedAt || status === "archived") return "archived";
+  if (status === "done") return "completed";
+  return "active";
+}
+
+function atomToBlockRecord(atom: AtomRecord): BlockRecord {
+  const kind: BlockRecord["kind"] = atom.facets.includes("task")
+    ? "task"
+    : atom.facets.includes("note")
+      ? "note"
+      : atom.facets.includes("meta")
+        ? "meta"
+        : "unknown";
+  return {
+    id: blockIdForAtom(atom.id),
+    schemaVersion: 1,
+    atomId: atom.id,
+    text: atom.rawText,
+    kind,
+    lifecycle: atomLifecycle(atom),
+    parentBlockId: atom.relations.parentId ? blockIdForAtom(atom.relations.parentId) : undefined,
+    threadIds: atom.relations.threadIds ?? [],
+    labels: atom.facetData.meta?.labels ?? [],
+    categories: atom.facetData.meta?.categories ?? [],
+    taskStatus: atom.facetData.task?.status,
+    priority: atom.facetData.task?.priority,
+    attentionLayer: atom.facetData.task?.attentionLayer,
+    commitmentLevel: atom.facetData.task?.commitmentLevel,
+    completedAt: atom.facetData.task?.completedAt,
+    archivedAt: atom.archivedAt,
+    createdAt: atom.createdAt,
+    updatedAt: atom.updatedAt,
+    revision: atom.revision
+  };
+}
+
+function mockBlocksSnapshot(): BlockRecord[] {
+  return mockStore.atoms.map((atom) => atomToBlockRecord(atom));
+}
+
+function nextPlacementOrderKey(existing: PlacementRecord[]): string {
+  const index = existing.length;
+  return `${String(index).padStart(8, "0")}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function conditionIdForAtomMode(atomIdValue: string, mode: string): string {
+  return `condition_${atomIdValue.replace(/[^a-zA-Z0-9_-]/g, "_")}_${mode.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function getMockAtomOrThrow(atomIdValue: string): AtomRecord {
+  const atom = mockStore.atoms.find((entry) => entry.id === atomIdValue);
+  if (!atom) {
+    throw new Error(`Atom not found: ${atomIdValue}`);
+  }
+  return atom;
+}
+
+function ensureTaskFacet(atom: AtomRecord): NonNullable<AtomRecord["facetData"]["task"]> {
+  if (!atom.facetData.task) {
+    atom.facetData.task = {
+      title: deriveTaskTitle(atom.rawText),
+      status: "todo",
+      priority: 3
+    };
+  }
+  return atom.facetData.task;
+}
+
+function applyConditionToAtom(condition: ConditionRecord): void {
+  const atom = getMockAtomOrThrow(condition.atomId);
+  const task = ensureTaskFacet(atom);
+  task.status = "blocked";
+  atom.facetData.blocking = {
+    mode: condition.mode as "date" | "person" | "task",
+    blockedUntil: condition.blockedUntil,
+    waitingOnPerson: condition.waitingOnPerson,
+    waitingCadenceDays: condition.waitingCadenceDays,
+    blockedByAtomId: condition.blockerAtomId,
+    lastFollowupAt: condition.lastFollowupAt
+  };
+  atom.updatedAt = nowIso();
+  atom.revision += 1;
+}
+
+function clearBlockingIfNoActiveCondition(atomIdValue: string): void {
+  const stillBlocked = mockStore.conditions.some(
+    (condition) => condition.atomId === atomIdValue && condition.status === "active"
+  );
+  if (stillBlocked) {
+    return;
+  }
+  const atom = mockStore.atoms.find((entry) => entry.id === atomIdValue);
+  if (!atom || !atom.facetData.blocking) {
+    return;
+  }
+  atom.facetData.blocking = undefined;
+  if (atom.facetData.task?.status === "blocked") {
+    atom.facetData.task.status = "todo";
+  }
+  atom.updatedAt = nowIso();
+  atom.revision += 1;
+}
+
+function nextRecurrenceRun(template: RecurrenceTemplate, fromIso: string): string {
+  const from = new Date(fromIso);
+  const interval = Math.max(1, Number(template.interval) || 1);
+  switch ((template.frequency ?? "daily").toLowerCase()) {
+    case "weekly":
+      return new Date(from.getTime() + interval * 7 * 24 * 60 * 60 * 1000).toISOString();
+    case "monthly":
+      return new Date(from.getTime() + interval * 30 * 24 * 60 * 60 * 1000).toISOString();
+    case "daily":
+    default:
+      return new Date(from.getTime() + interval * 24 * 60 * 60 * 1000).toISOString();
+  }
+}
+
 function ensureNowNotepad(): void {
   const existing = mockStore.notepads.find((notepad) => notepad.id === "now");
   if (existing) {
@@ -185,6 +347,11 @@ function ensureNowNotepad(): void {
     isSystem: true,
     filters: { facet: "task", statuses: ["todo", "doing", "blocked"], includeArchived: false },
     sorts: [{ field: "priority", direction: "asc" }],
+    captureDefaults: {
+      initialFacets: ["task"],
+      taskStatus: "todo",
+      taskPriority: 3
+    },
     layoutMode: "list",
     createdAt: now,
     updatedAt: now,
@@ -220,7 +387,13 @@ function emptyMockStore(): MockStore {
     metricSnapshots: [],
     screenMetrics: [],
     atoms: [],
+    blocks: [],
+    placements: [],
+    conditions: [],
     notepads: [],
+    workSessions: [],
+    recurrenceTemplates: [],
+    recurrenceInstances: [],
     workspaceEvents: [],
     rules: [],
     workspaceJobs: [],
@@ -261,7 +434,13 @@ function loadMockStore(): MockStore {
       metricSnapshots: parsed.metricSnapshots ?? [],
       screenMetrics: parsed.screenMetrics ?? [],
       atoms: parsed.atoms ?? [],
+      blocks: parsed.blocks ?? [],
+      placements: parsed.placements ?? [],
+      conditions: parsed.conditions ?? [],
       notepads: parsed.notepads ?? [],
+      workSessions: parsed.workSessions ?? [],
+      recurrenceTemplates: parsed.recurrenceTemplates ?? [],
+      recurrenceInstances: parsed.recurrenceInstances ?? [],
       workspaceEvents: parsed.workspaceEvents ?? [],
       rules: parsed.rules ?? [],
       workspaceJobs: parsed.workspaceJobs ?? [],
@@ -1008,6 +1187,7 @@ export async function workspaceCapabilitiesGet(): Promise<WorkspaceCapabilities>
     supportedCommands: [
       "workspace_capabilities_get",
       "workspace_health_get",
+      "obsidian_tasks_sync",
       "atoms_list",
       "atom_get",
       "atom_create",
@@ -1022,6 +1202,21 @@ export async function workspaceCapabilitiesGet(): Promise<WorkspaceCapabilities>
       "notepad_save",
       "notepad_delete",
       "notepad_atoms_list",
+      "notepad_block_create",
+      "blocks_list",
+      "block_get",
+      "placements_list",
+      "placement_save",
+      "placement_delete",
+      "placements_reorder",
+      "conditions_list",
+      "condition_get",
+      "condition_set_date",
+      "condition_set_person",
+      "condition_set_task",
+      "condition_followup_log",
+      "condition_resolve",
+      "condition_cancel",
       "events_list",
       "atom_events_list",
       "classification_preview",
@@ -1044,6 +1239,20 @@ export async function workspaceCapabilitiesGet(): Promise<WorkspaceCapabilities>
       "decision_resolve",
       "decision_snooze",
       "decision_dismiss",
+      "work_sessions_list",
+      "work_session_get",
+      "work_session_start",
+      "work_session_note",
+      "work_session_end",
+      "work_session_cancel",
+      "recurrence_templates_list",
+      "recurrence_template_get",
+      "recurrence_template_save",
+      "recurrence_template_update",
+      "recurrence_instances_list",
+      "recurrence_spawn",
+      "system_apply_attention_update",
+      "system_generate_decision_cards",
       "notification_channels_list",
       "notification_send",
       "notification_deliveries_list",
@@ -1087,6 +1296,21 @@ export async function workspaceHealthGet(): Promise<WorkspaceHealth> {
   };
 }
 
+export async function obsidianTasksSync(): Promise<ObsidianTaskSyncResult> {
+  if (IS_TAURI) {
+    return tauriInvoke("obsidian_tasks_sync");
+  }
+  return {
+    vaultPath: "",
+    scannedFiles: 0,
+    discoveredTasks: 0,
+    createdAtoms: 0,
+    updatedAtoms: 0,
+    unchangedAtoms: 0,
+    archivedAtoms: 0
+  };
+}
+
 function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomRecord[] {
   const filter = request?.filter;
   let result = [...atoms];
@@ -1106,6 +1330,47 @@ function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomR
   if (filter?.threadIds?.length) {
     const expected = new Set(filter.threadIds);
     result = result.filter((atom) => atom.relations.threadIds.some((threadId) => expected.has(threadId)));
+  }
+  if (filter?.labels?.length) {
+    const expected = new Set(filter.labels.map((value) => value.toLowerCase()));
+    result = result.filter((atom) => {
+      const labels = atom.facetData.meta?.labels ?? [];
+      return labels.some((label) => expected.has(label.toLowerCase()));
+    });
+  }
+  if (filter?.categories?.length) {
+    const expected = new Set(filter.categories.map((value) => value.toLowerCase()));
+    result = result.filter((atom) => {
+      const categories = atom.facetData.meta?.categories ?? [];
+      return categories.some((category) => expected.has(category.toLowerCase()));
+    });
+  }
+  if (filter?.attentionLayers?.length) {
+    const expected = new Set(filter.attentionLayers);
+    result = result.filter((atom) => {
+      const layer = atom.facetData.task?.attentionLayer ?? atom.facetData.attention?.layer;
+      return layer ? expected.has(layer) : false;
+    });
+  }
+  if (filter?.commitmentLevels?.length) {
+    const expected = new Set(filter.commitmentLevels);
+    result = result.filter((atom) => {
+      const level = atom.facetData.task?.commitmentLevel ?? atom.facetData.commitment?.level;
+      return level ? expected.has(level) : false;
+    });
+  }
+  if (filter?.dueFrom || filter?.dueTo) {
+    const from = filter.dueFrom ? new Date(filter.dueFrom) : undefined;
+    const to = filter.dueTo ? new Date(filter.dueTo) : undefined;
+    result = result.filter((atom) => {
+      const due = atom.facetData.task?.hardDueAt ?? atom.facetData.task?.softDueAt;
+      if (!due) return false;
+      const dt = new Date(due);
+      if (Number.isNaN(dt.valueOf())) return false;
+      if (from && dt < from) return false;
+      if (to && dt > to) return false;
+      return true;
+    });
   }
   if (filter?.textQuery?.trim()) {
     const q = filter.textQuery.toLowerCase();
@@ -1134,6 +1399,29 @@ function sortAtoms(atoms: AtomRecord[], request?: ListAtomsRequest): AtomRecord[
         case "priority":
           compare = (a.facetData.task?.priority ?? 99) - (b.facetData.task?.priority ?? 99);
           break;
+        case "softDueAt":
+          compare =
+            (a.facetData.task?.softDueAt ? new Date(a.facetData.task.softDueAt).valueOf() : Number.MAX_SAFE_INTEGER) -
+            (b.facetData.task?.softDueAt ? new Date(b.facetData.task.softDueAt).valueOf() : Number.MAX_SAFE_INTEGER);
+          break;
+        case "hardDueAt":
+          compare =
+            (a.facetData.task?.hardDueAt ? new Date(a.facetData.task.hardDueAt).valueOf() : Number.MAX_SAFE_INTEGER) -
+            (b.facetData.task?.hardDueAt ? new Date(b.facetData.task.hardDueAt).valueOf() : Number.MAX_SAFE_INTEGER);
+          break;
+        case "attentionLayer": {
+          const rank: Record<AttentionLayer, number> = {
+            l3: 0,
+            ram: 1,
+            short: 2,
+            long: 3,
+            archive: 4
+          };
+          const ar = rank[(a.facetData.task?.attentionLayer ?? "archive") as AttentionLayer] ?? 99;
+          const br = rank[(b.facetData.task?.attentionLayer ?? "archive") as AttentionLayer] ?? 99;
+          compare = ar - br;
+          break;
+        }
         case "title":
           compare = (a.facetData.task?.title ?? "").localeCompare(b.facetData.task?.title ?? "");
           break;
@@ -1256,6 +1544,9 @@ export async function atomUpdate(atomIdValue: string, payload: UpdateAtomRequest
       ...request.relationsPatch,
       threadIds: request.relationsPatch.threadIds ?? atom.relations.threadIds
     };
+  }
+  if (request.clearParentId) {
+    atom.relations.parentId = undefined;
   }
   if (request.bodyPatch) {
     if (request.bodyPatch.mode === "replace") {
@@ -1444,6 +1735,515 @@ export async function notepadAtomsList(
   return atomsList({ limit, cursor, filter: notepad.filters, sort: notepad.sorts });
 }
 
+export async function notepadBlockCreate(request: CreateBlockInNotepadRequest): Promise<BlockRecord> {
+  const payload: CreateBlockInNotepadRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("notepad_block_create", { request: payload });
+  }
+  const notepad = await notepadGet(payload.notepadId);
+  if (!notepad) {
+    throw new Error(`Notepad not found: ${payload.notepadId}`);
+  }
+  const capture = notepad.captureDefaults;
+  const atom = await atomCreate({
+    rawText: payload.rawText,
+    body: payload.body,
+    captureSource: payload.captureSource ?? "ui",
+    initialFacets: capture?.initialFacets ?? ["task"],
+    relations: { threadIds: capture?.threadIds ?? [] },
+    facetData: {
+      task: {
+        title: deriveTaskTitle(payload.rawText),
+        status: capture?.taskStatus ?? "todo",
+        priority: capture?.taskPriority ?? 3,
+        commitmentLevel: capture?.commitmentLevel,
+        attentionLayer: capture?.attentionLayer
+      },
+      meta: {
+        labels: capture?.labels,
+        categories: capture?.categories
+      }
+    }
+  });
+  const block = atomToBlockRecord(atom);
+  const exists = mockStore.placements.some(
+    (placement) => placement.viewId === payload.notepadId && placement.blockId === block.id
+  );
+  if (!exists) {
+    const now = nowIso();
+    const placementsForView = mockStore.placements.filter((placement) => placement.viewId === payload.notepadId);
+    mockStore.placements.push({
+      id: uid("placement"),
+      schemaVersion: 1,
+      viewId: payload.notepadId,
+      blockId: block.id,
+      parentPlacementId: undefined,
+      orderKey: nextPlacementOrderKey(placementsForView),
+      pinned: false,
+      createdAt: now,
+      updatedAt: now,
+      revision: 1
+    });
+  }
+  persistMockStore();
+  return block;
+}
+
+export async function blocksList(request: ListBlocksRequest = {}): Promise<PageResponse<BlockRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("blocks_list", { request });
+  }
+  let items = mockBlocksSnapshot();
+  if (request.atomId) {
+    items = items.filter((block) => block.atomId === request.atomId);
+  }
+  if (request.lifecycle) {
+    items = items.filter((block) => block.lifecycle === request.lifecycle);
+  }
+  if (request.textQuery) {
+    const needle = request.textQuery.toLowerCase();
+    items = items.filter((block) => block.text.toLowerCase().includes(needle));
+  }
+  if (request.notepadId) {
+    const ids = new Set(
+      mockStore.placements.filter((placement) => placement.viewId === request.notepadId).map((placement) => placement.blockId)
+    );
+    items = items.filter((block) => ids.has(block.id));
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const offset = Number.parseInt(request.cursor ?? "0", 10) || 0;
+  const pageSize = Math.max(1, Math.min(500, request.limit ?? 100));
+  const page = items.slice(offset, offset + pageSize);
+  return {
+    items: page,
+    nextCursor: offset + page.length < items.length ? String(offset + page.length) : undefined,
+    totalApprox: items.length
+  };
+}
+
+export async function blockGet(blockId: string): Promise<BlockRecord | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("block_get", { blockId });
+  }
+  return mockBlocksSnapshot().find((block) => block.id === blockId) ?? null;
+}
+
+export async function placementsList(
+  request: ListPlacementsRequest = {}
+): Promise<PageResponse<PlacementRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("placements_list", { request });
+  }
+  let items = [...mockStore.placements];
+  if (request.viewId) {
+    items = items.filter((placement) => placement.viewId === request.viewId);
+  }
+  if (request.blockId) {
+    items = items.filter((placement) => placement.blockId === request.blockId);
+  }
+  items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.orderKey.localeCompare(b.orderKey));
+  const offset = Number.parseInt(request.cursor ?? "0", 10) || 0;
+  const pageSize = Math.max(1, Math.min(500, request.limit ?? 100));
+  const page = items.slice(offset, offset + pageSize);
+  return {
+    items: page,
+    nextCursor: offset + page.length < items.length ? String(offset + page.length) : undefined,
+    totalApprox: items.length
+  };
+}
+
+export async function placementSave(placement: WorkspaceMutationPayload): Promise<PlacementRecord> {
+  if (IS_TAURI) {
+    return tauriInvoke("placement_save", { placement });
+  }
+  const viewId = String(placement.viewId ?? "");
+  const blockId = String(placement.blockId ?? "");
+  if (!viewId || !blockId) {
+    throw new Error("VALIDATION_ERROR: placement viewId and blockId are required");
+  }
+  if (!(await notepadGet(viewId))) {
+    throw new Error(`Notepad not found: ${viewId}`);
+  }
+  if (!(await blockGet(blockId))) {
+    throw new Error(`Block not found: ${blockId}`);
+  }
+
+  const now = nowIso();
+  const explicitId = placement.id ? String(placement.id) : undefined;
+  const idx = explicitId ? mockStore.placements.findIndex((item) => item.id === explicitId) : -1;
+  const existing = idx >= 0 ? mockStore.placements[idx] : undefined;
+  const expectedRevision =
+    typeof placement.expectedRevision === "number" ? placement.expectedRevision : undefined;
+  if (expectedRevision !== undefined) {
+    const actual = existing?.revision ?? 0;
+    if (actual !== expectedRevision) {
+      throw new Error(`CONFLICT: expected revision ${expectedRevision} but found ${actual}`);
+    }
+  }
+
+  const next: PlacementRecord = {
+    id: explicitId ?? uid("placement"),
+    schemaVersion: typeof placement.schemaVersion === "number" ? placement.schemaVersion : 1,
+    viewId,
+    blockId,
+    parentPlacementId: placement.parentPlacementId ? String(placement.parentPlacementId) : undefined,
+    orderKey:
+      typeof placement.orderKey === "string"
+        ? placement.orderKey
+        : nextPlacementOrderKey(mockStore.placements.filter((item) => item.viewId === viewId)),
+    pinned: typeof placement.pinned === "boolean" ? placement.pinned : false,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (existing && idx >= 0) {
+    mockStore.placements[idx] = next;
+  } else {
+    mockStore.placements.unshift(next);
+  }
+  persistMockStore();
+  return next;
+}
+
+export async function placementDelete(
+  placementId: string,
+  idempotencyKey?: string
+): Promise<{ success: boolean }> {
+  const key = ensureIdempotencyKey(idempotencyKey);
+  if (IS_TAURI) {
+    return tauriInvoke("placement_delete", { placementId, idempotencyKey: key });
+  }
+  const idx = mockStore.placements.findIndex((placement) => placement.id === placementId);
+  if (idx === -1) {
+    return { success: false };
+  }
+  mockStore.placements.splice(idx, 1);
+  persistMockStore();
+  return { success: true };
+}
+
+export async function placementsReorder(
+  viewId: string,
+  request: PlacementReorderRequest
+): Promise<PlacementRecord[]> {
+  const payload: PlacementReorderRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("placements_reorder", { viewId, request: payload });
+  }
+  const placements = mockStore.placements.filter((placement) => placement.viewId === viewId);
+  if (placements.length !== payload.orderedPlacementIds.length) {
+    throw new Error("VALIDATION_ERROR: placement reorder requires full placement id list");
+  }
+  const now = nowIso();
+  const byId = new Map(placements.map((placement) => [placement.id, placement]));
+  const result: PlacementRecord[] = [];
+  payload.orderedPlacementIds.forEach((placementId, index) => {
+    const existing = byId.get(placementId);
+    if (!existing) {
+      throw new Error(`VALIDATION_ERROR: placement ${placementId} does not belong to ${viewId}`);
+    }
+    const next: PlacementRecord = {
+      ...existing,
+      orderKey: `${String(index).padStart(8, "0")}-${existing.id.slice(-6)}`,
+      updatedAt: now,
+      revision: existing.revision + 1
+    };
+    result.push(next);
+  });
+  const nextSet = new Set(result.map((placement) => placement.id));
+  mockStore.placements = [...mockStore.placements.filter((placement) => !nextSet.has(placement.id)), ...result];
+  persistMockStore();
+  return result.sort((a, b) => a.orderKey.localeCompare(b.orderKey));
+}
+
+export async function conditionsList(
+  request: ListConditionsRequest = {}
+): Promise<PageResponse<ConditionRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("conditions_list", { request });
+  }
+  let items = [...mockStore.conditions];
+  if (request.atomId) {
+    items = items.filter((condition) => condition.atomId === request.atomId);
+  }
+  if (request.status) {
+    items = items.filter((condition) => condition.status === request.status);
+  }
+  if (request.mode) {
+    items = items.filter((condition) => condition.mode === request.mode);
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return paginateItems(items, request.limit, request.cursor);
+}
+
+export async function conditionGet(conditionId: string): Promise<ConditionRecord | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("condition_get", { conditionId });
+  }
+  return mockStore.conditions.find((condition) => condition.id === conditionId) ?? null;
+}
+
+export async function conditionSetDate(request: ConditionSetDateRequest): Promise<ConditionRecord> {
+  const payload: ConditionSetDateRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("condition_set_date", { request: payload });
+  }
+
+  getMockAtomOrThrow(payload.atomId);
+  const now = nowIso();
+  const id = conditionIdForAtomMode(payload.atomId, "date");
+  const idx = mockStore.conditions.findIndex((condition) => condition.id === id);
+  const existing = idx >= 0 ? mockStore.conditions[idx] : undefined;
+  const next: ConditionRecord = {
+    id,
+    schemaVersion: 1,
+    atomId: payload.atomId,
+    status: "active",
+    mode: "date",
+    blockedUntil: payload.untilAt,
+    waitingOnPerson: undefined,
+    waitingCadenceDays: undefined,
+    blockerAtomId: undefined,
+    lastFollowupAt: undefined,
+    nextFollowupAt: undefined,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    resolvedAt: undefined,
+    canceledAt: undefined,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (idx >= 0) {
+    mockStore.conditions[idx] = next;
+  } else {
+    mockStore.conditions.unshift(next);
+  }
+  applyConditionToAtom(next);
+  recordWorkspaceEvent("condition.set", { ...next }, next.atomId);
+  persistMockStore();
+  return next;
+}
+
+export async function conditionSetPerson(request: ConditionSetPersonRequest): Promise<ConditionRecord> {
+  const payload: ConditionSetPersonRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("condition_set_person", { request: payload });
+  }
+
+  getMockAtomOrThrow(payload.atomId);
+  const now = nowIso();
+  const cadenceDays = Math.max(1, payload.cadenceDays);
+  const nextFollowupAt = new Date(Date.parse(now) + cadenceDays * 24 * 60 * 60 * 1000).toISOString();
+  const id = conditionIdForAtomMode(payload.atomId, "person");
+  const idx = mockStore.conditions.findIndex((condition) => condition.id === id);
+  const existing = idx >= 0 ? mockStore.conditions[idx] : undefined;
+  const next: ConditionRecord = {
+    id,
+    schemaVersion: 1,
+    atomId: payload.atomId,
+    status: "active",
+    mode: "person",
+    blockedUntil: undefined,
+    waitingOnPerson: payload.waitingOnPerson,
+    waitingCadenceDays: cadenceDays,
+    blockerAtomId: undefined,
+    lastFollowupAt: now,
+    nextFollowupAt,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    resolvedAt: undefined,
+    canceledAt: undefined,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (idx >= 0) {
+    mockStore.conditions[idx] = next;
+  } else {
+    mockStore.conditions.unshift(next);
+  }
+  applyConditionToAtom(next);
+  recordWorkspaceEvent("condition.set", { ...next }, next.atomId);
+  persistMockStore();
+  return next;
+}
+
+export async function conditionSetTask(request: ConditionSetTaskRequest): Promise<ConditionRecord> {
+  const payload: ConditionSetTaskRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("condition_set_task", { request: payload });
+  }
+
+  getMockAtomOrThrow(payload.atomId);
+  getMockAtomOrThrow(payload.blockerAtomId);
+  const now = nowIso();
+  const id = conditionIdForAtomMode(payload.atomId, "task");
+  const idx = mockStore.conditions.findIndex((condition) => condition.id === id);
+  const existing = idx >= 0 ? mockStore.conditions[idx] : undefined;
+  const next: ConditionRecord = {
+    id,
+    schemaVersion: 1,
+    atomId: payload.atomId,
+    status: "active",
+    mode: "task",
+    blockedUntil: undefined,
+    waitingOnPerson: undefined,
+    waitingCadenceDays: undefined,
+    blockerAtomId: payload.blockerAtomId,
+    lastFollowupAt: undefined,
+    nextFollowupAt: undefined,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    resolvedAt: undefined,
+    canceledAt: undefined,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (idx >= 0) {
+    mockStore.conditions[idx] = next;
+  } else {
+    mockStore.conditions.unshift(next);
+  }
+  applyConditionToAtom(next);
+  recordWorkspaceEvent("condition.set", { ...next }, next.atomId);
+  persistMockStore();
+  return next;
+}
+
+export async function conditionFollowupLog(
+  conditionId: string,
+  request: ConditionFollowupRequest
+): Promise<ConditionRecord> {
+  const payload: ConditionFollowupRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("condition_followup_log", { conditionId, request: payload });
+  }
+  const idx = mockStore.conditions.findIndex(
+    (condition) => condition.id === conditionId && condition.status === "active"
+  );
+  if (idx === -1) {
+    throw new Error(`Condition not found: ${conditionId}`);
+  }
+  const existing = mockStore.conditions[idx];
+  if (existing.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${existing.revision}`);
+  }
+  if (existing.mode !== "person") {
+    throw new Error("VALIDATION_ERROR: followup can only be logged on person conditions");
+  }
+  const followedUpAt = payload.followedUpAt ?? nowIso();
+  const cadenceDays = Math.max(1, existing.waitingCadenceDays ?? 7);
+  const nextFollowupAt = new Date(Date.parse(followedUpAt) + cadenceDays * 24 * 60 * 60 * 1000).toISOString();
+  const next: ConditionRecord = {
+    ...existing,
+    lastFollowupAt: followedUpAt,
+    nextFollowupAt,
+    updatedAt: nowIso(),
+    revision: existing.revision + 1
+  };
+  mockStore.conditions[idx] = next;
+  applyConditionToAtom(next);
+  recordWorkspaceEvent(
+    "condition.followup_logged",
+    { conditionId: next.id, followedUpAt },
+    next.atomId
+  );
+  persistMockStore();
+  return next;
+}
+
+export async function conditionResolve(
+  conditionId: string,
+  request: ConditionResolveRequest
+): Promise<ConditionRecord> {
+  const payload: ConditionResolveRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("condition_resolve", { conditionId, request: payload });
+  }
+  const idx = mockStore.conditions.findIndex(
+    (condition) => condition.id === conditionId && condition.status === "active"
+  );
+  if (idx === -1) {
+    throw new Error(`Condition not found: ${conditionId}`);
+  }
+  const existing = mockStore.conditions[idx];
+  if (existing.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${existing.revision}`);
+  }
+  const transitioned: ConditionRecord = {
+    ...existing,
+    status: "satisfied",
+    resolvedAt: nowIso(),
+    updatedAt: nowIso(),
+    revision: existing.revision + 1
+  };
+  mockStore.conditions[idx] = transitioned;
+  clearBlockingIfNoActiveCondition(transitioned.atomId);
+  recordWorkspaceEvent(
+    "condition.transitioned",
+    { conditionId: transitioned.id, status: transitioned.status },
+    transitioned.atomId
+  );
+  persistMockStore();
+  return transitioned;
+}
+
+export async function conditionCancel(
+  conditionId: string,
+  request: ConditionCancelRequest
+): Promise<ConditionRecord> {
+  const payload: ConditionCancelRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("condition_cancel", { conditionId, request: payload });
+  }
+  const idx = mockStore.conditions.findIndex(
+    (condition) => condition.id === conditionId && condition.status === "active"
+  );
+  if (idx === -1) {
+    throw new Error(`Condition not found: ${conditionId}`);
+  }
+  const existing = mockStore.conditions[idx];
+  if (existing.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${existing.revision}`);
+  }
+  const transitioned: ConditionRecord = {
+    ...existing,
+    status: "cancelled",
+    canceledAt: nowIso(),
+    updatedAt: nowIso(),
+    revision: existing.revision + 1
+  };
+  mockStore.conditions[idx] = transitioned;
+  clearBlockingIfNoActiveCondition(transitioned.atomId);
+  recordWorkspaceEvent(
+    "condition.transitioned",
+    { conditionId: transitioned.id, status: transitioned.status, reason: payload.reason },
+    transitioned.atomId
+  );
+  persistMockStore();
+  return transitioned;
+}
+
 export async function eventsList(request: ListEventsRequest = {}): Promise<PageResponse<WorkspaceEventRecord>> {
   if (IS_TAURI) {
     return tauriInvoke("events_list", { request });
@@ -1523,6 +2323,9 @@ function ensureFeatureFlags(): void {
   }
   const now = nowIso();
   const keys: FeatureFlag["key"][] = [
+    "workspace.blocks_v2",
+    "workspace.placements_v2",
+    "workspace.capture_policy_v2",
     "workspace.rules_engine",
     "workspace.scheduler",
     "workspace.decision_queue",
@@ -1531,7 +2334,9 @@ function ensureFeatureFlags(): void {
     "workspace.registry",
     "workspace.semantic_index",
     "workspace.decay_engine",
+    "workspace.focus_sessions_v2",
     "workspace.recurrence",
+    "workspace.recurrence_v2",
     "workspace.agent_handoff"
   ];
   mockStore.featureFlags = keys.map((key) => ({
@@ -1932,6 +2737,349 @@ export async function decisionDismiss(
     resolvedAt: nowIso(),
     resolutionNotes: reason
   });
+}
+
+export async function workSessionsList(
+  request: WorkSessionsListRequest = {}
+): Promise<PageResponse<WorkSessionRecord>> {
+  if (IS_TAURI) {
+    return tauriInvoke("work_sessions_list", { ...request });
+  }
+  let items = [...mockStore.workSessions];
+  if (request.status) {
+    items = items.filter((session) => session.status === request.status);
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return paginateWithRequest(items, request);
+}
+
+export async function workSessionGet(sessionId: string): Promise<WorkSessionRecord | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("work_session_get", { sessionId });
+  }
+  return mockStore.workSessions.find((session) => session.id === sessionId) ?? null;
+}
+
+export async function workSessionStart(request: WorkSessionStartRequest): Promise<WorkSessionRecord> {
+  const payload: WorkSessionStartRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("work_session_start", { request: payload });
+  }
+  const now = nowIso();
+  const next: WorkSessionRecord = {
+    id: uid("ws"),
+    status: "running",
+    focusBlockIds: payload.focusBlockIds ?? [],
+    startedAt: now,
+    notes: payload.note ? [payload.note] : [],
+    createdAt: now,
+    updatedAt: now,
+    revision: 1
+  };
+  mockStore.workSessions.unshift(next);
+  persistMockStore();
+  return next;
+}
+
+export async function workSessionNote(
+  sessionId: string,
+  request: WorkSessionNoteRequest
+): Promise<WorkSessionRecord> {
+  const payload: WorkSessionNoteRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("work_session_note", { sessionId, request: payload });
+  }
+  const session = await workSessionGet(sessionId);
+  if (!session) {
+    throw new Error(`Work session not found: ${sessionId}`);
+  }
+  if (session.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${session.revision}`);
+  }
+  session.notes = [...session.notes, payload.note];
+  session.updatedAt = nowIso();
+  session.revision += 1;
+  persistMockStore();
+  return session;
+}
+
+export async function workSessionEnd(
+  sessionId: string,
+  request: WorkSessionEndRequest
+): Promise<WorkSessionRecord> {
+  const payload: WorkSessionEndRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("work_session_end", { sessionId, request: payload });
+  }
+  const session = await workSessionGet(sessionId);
+  if (!session) {
+    throw new Error(`Work session not found: ${sessionId}`);
+  }
+  if (session.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${session.revision}`);
+  }
+  session.status = "ended";
+  session.endedAt = nowIso();
+  session.summaryNote = payload.summaryNote;
+  session.updatedAt = nowIso();
+  session.revision += 1;
+  persistMockStore();
+  return session;
+}
+
+export async function workSessionCancel(
+  sessionId: string,
+  request: WorkSessionCancelRequest
+): Promise<WorkSessionRecord> {
+  const payload: WorkSessionCancelRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("work_session_cancel", { sessionId, request: payload });
+  }
+  const session = await workSessionGet(sessionId);
+  if (!session) {
+    throw new Error(`Work session not found: ${sessionId}`);
+  }
+  if (session.revision !== payload.expectedRevision) {
+    throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${session.revision}`);
+  }
+  session.status = "canceled";
+  session.canceledAt = nowIso();
+  session.summaryNote = payload.reason;
+  session.updatedAt = nowIso();
+  session.revision += 1;
+  persistMockStore();
+  return session;
+}
+
+export async function recurrenceTemplatesList(
+  request: RecurrenceTemplatesListRequest = {}
+): Promise<PageResponse<RecurrenceTemplate>> {
+  if (IS_TAURI) {
+    return tauriInvoke("recurrence_templates_list", { ...request });
+  }
+  let items = [...mockStore.recurrenceTemplates];
+  if (request.status) {
+    items = items.filter((template) => template.status === request.status);
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return paginateWithRequest(items, request);
+}
+
+export async function recurrenceTemplateGet(templateId: string): Promise<RecurrenceTemplate | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("recurrence_template_get", { templateId });
+  }
+  return mockStore.recurrenceTemplates.find((template) => template.id === templateId) ?? null;
+}
+
+export async function recurrenceTemplateSave(payload: WorkspaceMutationPayload): Promise<RecurrenceTemplate> {
+  const request: Record<string, unknown> = {
+    ...payload,
+    idempotencyKey:
+      typeof payload.idempotencyKey === "string"
+        ? ensureIdempotencyKey(payload.idempotencyKey)
+        : ensureIdempotencyKey()
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("recurrence_template_save", { payload: request });
+  }
+  const now = nowIso();
+  const id = request.id ? String(request.id) : uid("recurrence-template");
+  const idx = mockStore.recurrenceTemplates.findIndex((template) => template.id === id);
+  const existing = idx >= 0 ? mockStore.recurrenceTemplates[idx] : undefined;
+  const expectedRevision = typeof request.expectedRevision === "number" ? request.expectedRevision : undefined;
+  if (expectedRevision !== undefined) {
+    const actual = existing?.revision ?? 0;
+    if (actual !== expectedRevision) {
+      throw new Error(`CONFLICT: expected revision ${expectedRevision} but found ${actual}`);
+    }
+  }
+  const next: RecurrenceTemplate = {
+    id,
+    schemaVersion: typeof request.schemaVersion === "number" ? request.schemaVersion : 1,
+    status: typeof request.status === "string" ? request.status : "active",
+    titleTemplate: typeof request.titleTemplate === "string" ? request.titleTemplate : "Recurring item",
+    rawTextTemplate: typeof request.rawTextTemplate === "string" ? request.rawTextTemplate : "- [ ] Recurring item",
+    defaultNotepadId: typeof request.defaultNotepadId === "string" ? request.defaultNotepadId : "now",
+    threadIds: Array.isArray(request.threadIds) ? (request.threadIds as string[]) : [],
+    frequency: typeof request.frequency === "string" ? request.frequency : "daily",
+    interval: typeof request.interval === "number" ? request.interval : 1,
+    byDay: Array.isArray(request.byDay) ? (request.byDay as string[]) : [],
+    nextRunAt: typeof request.nextRunAt === "string" ? request.nextRunAt : existing?.nextRunAt ?? now,
+    lastSpawnedAt: typeof request.lastSpawnedAt === "string" ? request.lastSpawnedAt : existing?.lastSpawnedAt,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (existing && idx >= 0) {
+    mockStore.recurrenceTemplates[idx] = next;
+  } else {
+    mockStore.recurrenceTemplates.unshift(next);
+  }
+  persistMockStore();
+  return next;
+}
+
+export async function recurrenceTemplateUpdate(
+  templateId: string,
+  patch: WorkspaceMutationPayload
+): Promise<RecurrenceTemplate> {
+  const request: Record<string, unknown> = {
+    ...patch,
+    idempotencyKey:
+      typeof patch.idempotencyKey === "string"
+        ? ensureIdempotencyKey(patch.idempotencyKey)
+        : ensureIdempotencyKey()
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("recurrence_template_update", { templateId, payload: request });
+  }
+  const existing = await recurrenceTemplateGet(templateId);
+  if (!existing) {
+    throw new Error(`Recurrence template not found: ${templateId}`);
+  }
+  return recurrenceTemplateSave({ ...existing, ...request, id: templateId });
+}
+
+export async function recurrenceInstancesList(
+  request: RecurrenceInstancesListRequest = {}
+): Promise<PageResponse<RecurrenceInstance>> {
+  if (IS_TAURI) {
+    return tauriInvoke("recurrence_instances_list", { ...request });
+  }
+  let items = [...mockStore.recurrenceInstances];
+  if (request.templateId) {
+    items = items.filter((instance) => instance.templateId === request.templateId);
+  }
+  if (request.status) {
+    items = items.filter((instance) => instance.status === request.status);
+  }
+  items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return paginateWithRequest(items, request);
+}
+
+export async function recurrenceSpawn(request: RecurrenceSpawnRequest = {}): Promise<RecurrenceSpawnResponse> {
+  const payload: RecurrenceSpawnRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("recurrence_spawn", { request: payload });
+  }
+  const now = payload.now ?? nowIso();
+  const templateIds = payload.templateIds ? new Set(payload.templateIds) : null;
+  const spawnedInstanceIds: string[] = [];
+  const touchedTemplateIds: string[] = [];
+
+  for (const template of mockStore.recurrenceTemplates) {
+    if (template.status !== "active") continue;
+    if (templateIds && !templateIds.has(template.id)) continue;
+    const dueAt = template.nextRunAt ?? template.createdAt;
+    if (dueAt > now) continue;
+
+    const block = await notepadBlockCreate({
+      notepadId: template.defaultNotepadId ?? "now",
+      rawText: template.rawTextTemplate || template.titleTemplate,
+      captureSource: "agent"
+    });
+    const instance: RecurrenceInstance = {
+      id: uid("recurrence-instance"),
+      templateId: template.id,
+      status: "spawned",
+      scheduledFor: dueAt,
+      spawnedAt: now,
+      atomId: block.atomId,
+      blockId: block.id,
+      createdAt: now,
+      updatedAt: now,
+      revision: 1
+    };
+    mockStore.recurrenceInstances.unshift(instance);
+    spawnedInstanceIds.push(instance.id);
+    touchedTemplateIds.push(template.id);
+    template.lastSpawnedAt = now;
+    template.nextRunAt = nextRecurrenceRun(template, dueAt);
+    template.updatedAt = now;
+    template.revision += 1;
+  }
+  persistMockStore();
+  return { accepted: true, spawnedInstanceIds, touchedTemplateIds };
+}
+
+export async function systemApplyAttentionUpdate(
+  request: AttentionUpdateRequest = {}
+): Promise<AttentionUpdateResponse> {
+  const payload: AttentionUpdateRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("system_apply_attention_update", { request: payload });
+  }
+  const now = payload.now ? new Date(payload.now) : new Date();
+  const updatedAtomIds: string[] = [];
+  for (const atom of mockStore.atoms) {
+    if (!atom.facetData.task || atom.archivedAt) continue;
+    if (atom.facetData.task.status === "done" || atom.facetData.task.status === "archived") continue;
+    let layer: AttentionLayer = "long";
+    if (atom.facetData.task.status === "doing" || (atom.facetData.task.priority ?? 5) <= 1) layer = "l3";
+    else if ((atom.facetData.task.priority ?? 5) <= 2) layer = "ram";
+    else if ((atom.facetData.task.priority ?? 5) <= 3) layer = "short";
+    if (atom.facetData.task.hardDueAt && new Date(atom.facetData.task.hardDueAt) <= now) layer = "l3";
+    if (atom.facetData.task.attentionLayer !== layer) {
+      atom.facetData.task.attentionLayer = layer;
+      atom.updatedAt = nowIso();
+      atom.revision += 1;
+      updatedAtomIds.push(atom.id);
+    }
+  }
+  persistMockStore();
+  return { accepted: true, updatedAtomIds, decisionIds: [] };
+}
+
+export async function systemGenerateDecisionCards(
+  request: DecisionGenerateRequest = {}
+): Promise<DecisionGenerateResponse> {
+  const payload: DecisionGenerateRequest = {
+    ...request,
+    idempotencyKey: ensureIdempotencyKey(request.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("system_generate_decision_cards", { request: payload });
+  }
+  const now = payload.now ? new Date(payload.now) : new Date();
+  const createdOrUpdatedIds: string[] = [];
+  for (const atom of mockStore.atoms) {
+    const task = atom.facetData.task;
+    if (!task || task.status === "done" || task.status === "archived") continue;
+    if (task.hardDueAt && new Date(task.hardDueAt) < now) {
+      const decision = await decisionCreate({
+        type: "force_decision",
+        title: `Overdue task: ${task.title}`,
+        body: "Hard due date has passed. Choose an action.",
+        atomIds: [atom.id],
+        options: [
+          { id: "do_now", label: "Do now", actionKind: "task.do_now" },
+          { id: "reschedule", label: "Reschedule", actionKind: "task.reschedule" },
+          { id: "drop", label: "Drop", actionKind: "task.drop" }
+        ]
+      });
+      createdOrUpdatedIds.push(decision.id);
+    }
+  }
+  return { accepted: true, createdOrUpdatedIds: [...new Set(createdOrUpdatedIds)] };
 }
 
 export async function notificationChannelsList(): Promise<NotificationChannel[]> {

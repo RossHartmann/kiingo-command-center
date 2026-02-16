@@ -23,6 +23,7 @@ import { CpoPrinciplesScreen } from "./screens/CpoPrinciplesScreen";
 import { CcoPrinciplesScreen } from "./screens/CcoPrinciplesScreen";
 import { ChroPrinciplesScreen } from "./screens/ChroPrinciplesScreen";
 import { TasksScreen } from "./screens/TasksScreen";
+import { NotepadScreen } from "./screens/NotepadScreen";
 
 export default function App(): JSX.Element {
   const state = useAppState();
@@ -46,6 +47,8 @@ export default function App(): JSX.Element {
         return <QueueScreen />;
       case "tasks":
         return <TasksScreen />;
+      case "notepad":
+        return <NotepadScreen />;
       case "settings":
         return <SettingsScreen />;
       case "chat":

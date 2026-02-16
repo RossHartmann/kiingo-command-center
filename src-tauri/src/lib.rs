@@ -12,11 +12,14 @@ mod workspace;
 
 use crate::models::{
     AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
-    ArchiveAtomRequest, AtomRecord, ClassificationResult, ClassificationSource, CreateAtomRequest,
+    ArchiveAtomRequest, AtomRecord, AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord,
+    ClassificationResult, ClassificationSource, CreateAtomRequest, CreateBlockInNotepadRequest,
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
-    ExportResponse, ListAtomsRequest, ListConversationsFilters, ListEventsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
-    NotepadViewDefinition, PageResponse, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail, SaveMetricDefinitionPayload,
-    SaveNotepadViewRequest, SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
+    DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest, ListConversationsFilters,
+    ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse, MetricSnapshot,
+    NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, RecurrenceInstance,
+    RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
+    SaveMetricDefinitionPayload, SaveNotepadViewRequest, SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
     SetTaskStatusRequest, TaskReopenRequest,
     SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
     UnbindMetricResponse, UpdateAtomRequest, UpdateScreenMetricLayoutPayload, WorkspaceCapabilities,
@@ -27,7 +30,10 @@ use crate::models::{
     ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
     RegistrySuggestionsResponse, SemanticChunk, SemanticReindexResponse, SemanticSearchRequest,
     SemanticSearchResponse, GovernancePoliciesResponse, FeatureFlag, WorkspaceCapabilitySnapshot, MigrationPlan,
-    MigrationRun,
+    MigrationRun, WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord,
+    WorkSessionStartRequest, WorkspaceMutationPayload, ConditionCancelRequest, ConditionFollowupRequest,
+    ConditionRecord, ConditionResolveRequest, ConditionSetDateRequest, ConditionSetPersonRequest,
+    ConditionSetTaskRequest, ListConditionsRequest, ObsidianTaskSyncResult,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -399,6 +405,15 @@ fn workspace_health_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceHe
 }
 
 #[tauri::command]
+async fn obsidian_tasks_sync(state: tauri::State<'_, AppState>) -> Result<ObsidianTaskSyncResult, String> {
+    let runner = state.runner.clone();
+    match tauri::async_runtime::spawn_blocking(move || runner.obsidian_tasks_sync()).await {
+        Ok(result) => result.map_err(to_client_error),
+        Err(error) => Err(to_client_error(error)),
+    }
+}
+
+#[tauri::command]
 fn atoms_list(
     state: tauri::State<'_, AppState>,
     request: ListAtomsRequest,
@@ -521,6 +536,158 @@ fn notepad_atoms_list(
     state
         .runner
         .notepad_atoms_list(&notepad_id, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notepad_block_create(
+    state: tauri::State<'_, AppState>,
+    request: CreateBlockInNotepadRequest,
+) -> Result<BlockRecord, String> {
+    state
+        .runner
+        .notepad_block_create(request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn blocks_list(
+    state: tauri::State<'_, AppState>,
+    request: ListBlocksRequest,
+) -> Result<PageResponse<BlockRecord>, String> {
+    state.runner.blocks_list(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn block_get(state: tauri::State<'_, AppState>, block_id: String) -> Result<Option<BlockRecord>, String> {
+    state.runner.block_get(&block_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn placements_list(
+    state: tauri::State<'_, AppState>,
+    request: ListPlacementsRequest,
+) -> Result<PageResponse<PlacementRecord>, String> {
+    state.runner.placements_list(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn placement_save(
+    state: tauri::State<'_, AppState>,
+    placement: WorkspaceMutationPayload,
+) -> Result<PlacementRecord, String> {
+    state.runner.placement_save(placement).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn placement_delete(
+    state: tauri::State<'_, AppState>,
+    placement_id: String,
+    idempotency_key: Option<String>,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .placement_delete(&placement_id, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn placements_reorder(
+    state: tauri::State<'_, AppState>,
+    view_id: String,
+    request: PlacementReorderRequest,
+) -> Result<Vec<PlacementRecord>, String> {
+    state
+        .runner
+        .placements_reorder(&view_id, request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn conditions_list(
+    state: tauri::State<'_, AppState>,
+    request: ListConditionsRequest,
+) -> Result<PageResponse<ConditionRecord>, String> {
+    state.runner.conditions_list(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_get(
+    state: tauri::State<'_, AppState>,
+    condition_id: String,
+) -> Result<Option<ConditionRecord>, String> {
+    state
+        .runner
+        .condition_get(&condition_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_set_date(
+    state: tauri::State<'_, AppState>,
+    request: ConditionSetDateRequest,
+) -> Result<ConditionRecord, String> {
+    state
+        .runner
+        .condition_set_date(request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_set_person(
+    state: tauri::State<'_, AppState>,
+    request: ConditionSetPersonRequest,
+) -> Result<ConditionRecord, String> {
+    state
+        .runner
+        .condition_set_person(request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_set_task(
+    state: tauri::State<'_, AppState>,
+    request: ConditionSetTaskRequest,
+) -> Result<ConditionRecord, String> {
+    state
+        .runner
+        .condition_set_task(request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_followup_log(
+    state: tauri::State<'_, AppState>,
+    condition_id: String,
+    request: ConditionFollowupRequest,
+) -> Result<ConditionRecord, String> {
+    state
+        .runner
+        .condition_followup_log(&condition_id, request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_resolve(
+    state: tauri::State<'_, AppState>,
+    condition_id: String,
+    request: ConditionResolveRequest,
+) -> Result<ConditionRecord, String> {
+    state
+        .runner
+        .condition_resolve(&condition_id, request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn condition_cancel(
+    state: tauri::State<'_, AppState>,
+    condition_id: String,
+    request: ConditionCancelRequest,
+) -> Result<ConditionRecord, String> {
+    state
+        .runner
+        .condition_cancel(&condition_id, request)
         .map_err(to_client_error)
 }
 
@@ -750,6 +917,159 @@ fn decision_dismiss(
     state
         .runner
         .decision_dismiss(&decision_id, reason, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn work_sessions_list(
+    state: tauri::State<'_, AppState>,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<WorkSessionRecord>, String> {
+    state
+        .runner
+        .work_sessions_list(status, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn work_session_get(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<WorkSessionRecord>, String> {
+    state.runner.work_session_get(&session_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn work_session_start(
+    state: tauri::State<'_, AppState>,
+    request: WorkSessionStartRequest,
+) -> Result<WorkSessionRecord, String> {
+    state.runner.work_session_start(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn work_session_note(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    request: WorkSessionNoteRequest,
+) -> Result<WorkSessionRecord, String> {
+    state
+        .runner
+        .work_session_note(&session_id, request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn work_session_end(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    request: WorkSessionEndRequest,
+) -> Result<WorkSessionRecord, String> {
+    state
+        .runner
+        .work_session_end(&session_id, request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn work_session_cancel(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    request: WorkSessionCancelRequest,
+) -> Result<WorkSessionRecord, String> {
+    state
+        .runner
+        .work_session_cancel(&session_id, request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn recurrence_templates_list(
+    state: tauri::State<'_, AppState>,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<RecurrenceTemplate>, String> {
+    state
+        .runner
+        .recurrence_templates_list(status, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn recurrence_template_get(
+    state: tauri::State<'_, AppState>,
+    template_id: String,
+) -> Result<Option<RecurrenceTemplate>, String> {
+    state
+        .runner
+        .recurrence_template_get(&template_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn recurrence_template_save(
+    state: tauri::State<'_, AppState>,
+    payload: WorkspaceMutationPayload,
+) -> Result<RecurrenceTemplate, String> {
+    state.runner.recurrence_template_save(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn recurrence_template_update(
+    state: tauri::State<'_, AppState>,
+    template_id: String,
+    payload: WorkspaceMutationPayload,
+) -> Result<RecurrenceTemplate, String> {
+    state
+        .runner
+        .recurrence_template_update(&template_id, payload)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn recurrence_instances_list(
+    state: tauri::State<'_, AppState>,
+    template_id: Option<String>,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<RecurrenceInstance>, String> {
+    state
+        .runner
+        .recurrence_instances_list(template_id, status, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn recurrence_spawn(
+    state: tauri::State<'_, AppState>,
+    request: RecurrenceSpawnRequest,
+) -> Result<RecurrenceSpawnResponse, String> {
+    state.runner.recurrence_spawn(request).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn system_apply_attention_update(
+    state: tauri::State<'_, AppState>,
+    request: AttentionUpdateRequest,
+) -> Result<AttentionUpdateResponse, String> {
+    state
+        .runner
+        .system_apply_attention_update(request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn system_generate_decision_cards(
+    state: tauri::State<'_, AppState>,
+    request: DecisionGenerateRequest,
+) -> Result<DecisionGenerateResponse, String> {
+    state
+        .runner
+        .system_generate_decision_cards(request)
         .map_err(to_client_error)
 }
 
@@ -1170,6 +1490,7 @@ pub fn run() {
             refresh_screen_metrics,
             workspace_capabilities_get,
             workspace_health_get,
+            obsidian_tasks_sync,
             atoms_list,
             atom_get,
             atom_create,
@@ -1184,6 +1505,21 @@ pub fn run() {
             notepad_save,
             notepad_delete,
             notepad_atoms_list,
+            notepad_block_create,
+            blocks_list,
+            block_get,
+            placements_list,
+            placement_save,
+            placement_delete,
+            placements_reorder,
+            conditions_list,
+            condition_get,
+            condition_set_date,
+            condition_set_person,
+            condition_set_task,
+            condition_followup_log,
+            condition_resolve,
+            condition_cancel,
             events_list,
             atom_events_list,
             classification_preview,
@@ -1206,6 +1542,20 @@ pub fn run() {
             decision_resolve,
             decision_snooze,
             decision_dismiss,
+            work_sessions_list,
+            work_session_get,
+            work_session_start,
+            work_session_note,
+            work_session_end,
+            work_session_cancel,
+            recurrence_templates_list,
+            recurrence_template_get,
+            recurrence_template_save,
+            recurrence_template_update,
+            recurrence_instances_list,
+            recurrence_spawn,
+            system_apply_attention_update,
+            system_generate_decision_cards,
             notification_channels_list,
             notification_send,
             notification_deliveries_list,

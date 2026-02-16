@@ -855,6 +855,9 @@ pub struct AttentionFacet {
     pub layer: AttentionLayer,
     pub last_promoted_at: Option<DateTime<Utc>>,
     pub decay_eligible_at: Option<DateTime<Utc>>,
+    pub heat_score: Option<f64>,
+    pub dwell_started_at: Option<DateTime<Utc>>,
+    pub hidden_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -885,6 +888,27 @@ pub struct RecurrenceFacet {
     pub interval: Option<i32>,
     pub by_day: Option<Vec<String>>,
     pub instance_index: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ConditionRecord {
+    pub id: String,
+    pub schema_version: i32,
+    pub atom_id: String,
+    pub status: String,
+    pub mode: String,
+    pub blocked_until: Option<DateTime<Utc>>,
+    pub waiting_on_person: Option<String>,
+    pub waiting_cadence_days: Option<i32>,
+    pub blocker_atom_id: Option<String>,
+    pub last_followup_at: Option<DateTime<Utc>>,
+    pub next_followup_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub canceled_at: Option<DateTime<Utc>>,
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -969,6 +993,8 @@ pub struct NotepadFilter {
     pub facet: Option<FacetKind>,
     pub statuses: Option<Vec<TaskStatus>>,
     pub thread_ids: Option<Vec<String>>,
+    pub labels: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
     pub parent_id: Option<String>,
     pub attention_layers: Option<Vec<AttentionLayer>>,
     pub commitment_levels: Option<Vec<CommitmentLevel>>,
@@ -985,6 +1011,19 @@ pub struct NotepadSort {
     pub direction: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NotepadCaptureDefaults {
+    pub initial_facets: Option<Vec<FacetKind>>,
+    pub task_status: Option<TaskStatus>,
+    pub task_priority: Option<i32>,
+    pub thread_ids: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub labels: Option<Vec<String>>,
+    pub commitment_level: Option<CommitmentLevel>,
+    pub attention_layer: Option<AttentionLayer>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotepadViewDefinition {
@@ -995,7 +1034,47 @@ pub struct NotepadViewDefinition {
     pub is_system: bool,
     pub filters: NotepadFilter,
     pub sorts: Vec<NotepadSort>,
+    pub capture_defaults: Option<NotepadCaptureDefaults>,
     pub layout_mode: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockRecord {
+    pub id: String,
+    pub schema_version: i32,
+    pub atom_id: Option<String>,
+    pub text: String,
+    pub kind: String,
+    pub lifecycle: String,
+    pub parent_block_id: Option<String>,
+    pub thread_ids: Vec<String>,
+    pub labels: Vec<String>,
+    pub categories: Vec<String>,
+    pub task_status: Option<TaskStatus>,
+    pub priority: Option<i32>,
+    pub attention_layer: Option<AttentionLayer>,
+    pub commitment_level: Option<CommitmentLevel>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub archived_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacementRecord {
+    pub id: String,
+    pub schema_version: i32,
+    pub view_id: String,
+    pub block_id: String,
+    pub parent_placement_id: Option<String>,
+    pub order_key: String,
+    pub pinned: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub revision: i64,
@@ -1031,6 +1110,16 @@ pub struct ListEventsRequest {
     pub atom_id: Option<String>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConditionsRequest {
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub atom_id: Option<String>,
+    pub status: Option<String>,
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1078,6 +1167,7 @@ pub struct UpdateAtomRequest {
     pub raw_text: Option<String>,
     pub facet_data_patch: Option<AtomFacets>,
     pub relations_patch: Option<AtomRelationsPatch>,
+    pub clear_parent_id: Option<bool>,
     pub body_patch: Option<BodyPatch>,
 }
 
@@ -1116,7 +1206,223 @@ pub struct NotepadViewDefinitionInput {
     pub is_system: bool,
     pub filters: NotepadFilter,
     pub sorts: Vec<NotepadSort>,
+    pub capture_defaults: Option<NotepadCaptureDefaults>,
     pub layout_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBlocksRequest {
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub notepad_id: Option<String>,
+    pub atom_id: Option<String>,
+    pub lifecycle: Option<String>,
+    pub text_query: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ListPlacementsRequest {
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub view_id: Option<String>,
+    pub block_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBlockInNotepadRequest {
+    pub notepad_id: String,
+    pub raw_text: String,
+    pub body: Option<String>,
+    pub capture_source: Option<CaptureSource>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionSetDateRequest {
+    pub atom_id: String,
+    pub until_at: DateTime<Utc>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionSetPersonRequest {
+    pub atom_id: String,
+    pub waiting_on_person: String,
+    pub cadence_days: i32,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionSetTaskRequest {
+    pub atom_id: String,
+    pub blocker_atom_id: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionFollowupRequest {
+    pub expected_revision: i64,
+    pub followed_up_at: Option<DateTime<Utc>>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionResolveRequest {
+    pub expected_revision: i64,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionCancelRequest {
+    pub expected_revision: i64,
+    pub reason: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacementReorderRequest {
+    pub expected_revisions: Option<Vec<i64>>,
+    pub ordered_placement_ids: Vec<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkSessionRecord {
+    pub id: String,
+    pub status: String,
+    pub focus_block_ids: Vec<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub canceled_at: Option<DateTime<Utc>>,
+    pub notes: Vec<String>,
+    pub summary_note: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkSessionStartRequest {
+    pub focus_block_ids: Option<Vec<String>>,
+    pub note: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkSessionNoteRequest {
+    pub expected_revision: i64,
+    pub note: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkSessionEndRequest {
+    pub expected_revision: i64,
+    pub summary_note: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkSessionCancelRequest {
+    pub expected_revision: i64,
+    pub reason: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecurrenceTemplate {
+    pub id: String,
+    pub schema_version: i32,
+    pub status: String,
+    pub title_template: String,
+    pub raw_text_template: String,
+    pub default_notepad_id: Option<String>,
+    pub thread_ids: Vec<String>,
+    pub frequency: String,
+    pub interval: i32,
+    pub by_day: Vec<String>,
+    pub next_run_at: Option<DateTime<Utc>>,
+    pub last_spawned_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecurrenceInstance {
+    pub id: String,
+    pub template_id: String,
+    pub status: String,
+    pub scheduled_for: DateTime<Utc>,
+    pub spawned_at: Option<DateTime<Utc>>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub atom_id: Option<String>,
+    pub block_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecurrenceSpawnRequest {
+    pub template_ids: Option<Vec<String>>,
+    pub now: Option<DateTime<Utc>>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecurrenceSpawnResponse {
+    pub accepted: bool,
+    pub spawned_instance_ids: Vec<String>,
+    pub touched_template_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AttentionUpdateRequest {
+    pub now: Option<DateTime<Utc>>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AttentionUpdateResponse {
+    pub accepted: bool,
+    pub updated_atom_ids: Vec<String>,
+    pub decision_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DecisionGenerateRequest {
+    pub now: Option<DateTime<Utc>>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DecisionGenerateResponse {
+    pub accepted: bool,
+    pub created_or_updated_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1428,6 +1734,18 @@ pub struct WorkspaceCapabilitySnapshot {
     pub semantic_available: bool,
     pub notification_channels: Vec<String>,
     pub feature_flags: Vec<FeatureFlag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ObsidianTaskSyncResult {
+    pub vault_path: String,
+    pub scanned_files: usize,
+    pub discovered_tasks: usize,
+    pub created_atoms: usize,
+    pub updated_atoms: usize,
+    pub unchanged_atoms: usize,
+    pub archived_atoms: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

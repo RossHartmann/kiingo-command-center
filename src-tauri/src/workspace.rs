@@ -1,42 +1,60 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     ArchiveAtomRequest, AtomFacets, AtomRecord, AtomRelations, BodyPatch, BooleanResponse,
+    BlockRecord, CreateBlockInNotepadRequest,
     ClassificationResult, ClassificationSource, CreateAtomRequest, EncryptionScope, FacetKind,
-    GovernanceMeta, ListAtomsRequest, ListEventsRequest, NotepadFilter, NotepadSort, NotepadViewDefinition,
-    PageResponse, SaveNotepadViewRequest, SensitivityLevel, SetTaskStatusRequest, TaskFacet, TaskReopenRequest,
+    ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest,
+    ConditionSetDateRequest, ConditionSetPersonRequest, ConditionSetTaskRequest, GovernanceMeta, ListAtomsRequest,
+    ListBlocksRequest, ListConditionsRequest, ListEventsRequest, ListPlacementsRequest, NotepadFilter,
+    NotepadSort, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest,
+    SaveNotepadViewRequest, SensitivityLevel, SetTaskStatusRequest, TaskFacet, TaskReopenRequest,
     TaskStatus, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord, WorkspaceHealth,
-    AtomRelationsPatch, DecisionMutationPayload, DecisionPrompt, FeatureFlag, GovernancePoliciesResponse,
+    AtomRelationsPatch, AttentionUpdateRequest, AttentionUpdateResponse, DecisionGenerateRequest,
+    DecisionGenerateResponse, DecisionMutationPayload, DecisionPrompt, FeatureFlag, GovernancePoliciesResponse,
     JobDefinition, JobMutationPayload, JobRunRecord, MigrationPlan, MigrationRun, NotificationDeliveryRecord,
     NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint, ProjectionDefinition,
     ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
+    RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate,
     RegistrySuggestionsResponse, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload,
-    SemanticChunk, SemanticReindexResponse, SemanticSearchHit, SemanticSearchRequest,
-    SemanticSearchResponse,
-    WorkspaceCapabilitySnapshot, WorkspaceMutationPayload,
+    SemanticChunk, SemanticReindexResponse, SemanticSearchHit, SemanticSearchRequest, SemanticSearchResponse,
+    WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord,
+    WorkSessionStartRequest, WorkspaceCapabilitySnapshot, WorkspaceMutationPayload, ObsidianTaskSyncResult,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
+use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashSet};
-use std::hash::{Hash, Hasher};
 use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::Mutex;
 use std::time::Duration;
-use uuid::Uuid;
 use wait_timeout::ChildExt;
+use uuid::Uuid;
 
 const ROOT_DIRS: &[&str] = &[
     "atoms/active",
     "atoms/done",
     "atoms/archive",
+    "blocks/active",
+    "blocks/completed",
+    "blocks/archived",
+    "placements/by-view",
+    "conditions/active",
+    "conditions/history",
     "notepads",
     "events",
     "threads",
     "categories",
+    "sessions/work",
+    "recurrence/templates",
+    "recurrence/instances",
     "prompts/pending",
     "prompts/resolved",
     "rules/definitions",
@@ -68,6 +86,29 @@ struct IdempotencyRecord {
 }
 
 const OBSIDIAN_CLI_TIMEOUT_MS: u64 = 5_000;
+static MARKDOWN_TASK_RE: Lazy<regex::Regex> = Lazy::new(|| {
+    regex::Regex::new(r"^\s*[-*]\s+\[( |x|X)\]\s+(.+?)\s*$").expect("valid markdown task regex")
+});
+static OBSIDIAN_CLI_WRITE_CIRCUIT_OPEN: AtomicBool = AtomicBool::new(false);
+static CLI_WRITE_SUPPRESSION_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static OBSIDIAN_CLI_WRITE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+struct CliWriteSuppressionGuard;
+
+impl Drop for CliWriteSuppressionGuard {
+    fn drop(&mut self) {
+        CLI_WRITE_SUPPRESSION_DEPTH.fetch_sub(1, AtomicOrdering::SeqCst);
+    }
+}
+
+fn suppress_obsidian_cli_writes() -> CliWriteSuppressionGuard {
+    CLI_WRITE_SUPPRESSION_DEPTH.fetch_add(1, AtomicOrdering::SeqCst);
+    CliWriteSuppressionGuard
+}
+
+fn obsidian_cli_writes_suppressed() -> bool {
+    CLI_WRITE_SUPPRESSION_DEPTH.load(AtomicOrdering::SeqCst) > 0
+}
 
 pub fn capabilities(root: &Path) -> AppResult<WorkspaceCapabilities> {
     ensure_topology(root)?;
@@ -78,6 +119,7 @@ pub fn capabilities(root: &Path) -> AppResult<WorkspaceCapabilities> {
         supported_commands: vec![
             "workspace_capabilities_get".to_string(),
             "workspace_health_get".to_string(),
+            "obsidian_tasks_sync".to_string(),
             "atoms_list".to_string(),
             "atom_get".to_string(),
             "atom_create".to_string(),
@@ -92,10 +134,39 @@ pub fn capabilities(root: &Path) -> AppResult<WorkspaceCapabilities> {
             "notepad_save".to_string(),
             "notepad_delete".to_string(),
             "notepad_atoms_list".to_string(),
+            "notepad_block_create".to_string(),
+            "blocks_list".to_string(),
+            "block_get".to_string(),
+            "placements_list".to_string(),
+            "placement_save".to_string(),
+            "placement_delete".to_string(),
+            "placements_reorder".to_string(),
+            "conditions_list".to_string(),
+            "condition_get".to_string(),
+            "condition_set_date".to_string(),
+            "condition_set_person".to_string(),
+            "condition_set_task".to_string(),
+            "condition_followup_log".to_string(),
+            "condition_resolve".to_string(),
+            "condition_cancel".to_string(),
             "events_list".to_string(),
             "atom_events_list".to_string(),
             "classification_preview".to_string(),
             "atom_classify".to_string(),
+            "work_sessions_list".to_string(),
+            "work_session_get".to_string(),
+            "work_session_start".to_string(),
+            "work_session_note".to_string(),
+            "work_session_end".to_string(),
+            "work_session_cancel".to_string(),
+            "recurrence_templates_list".to_string(),
+            "recurrence_template_get".to_string(),
+            "recurrence_template_save".to_string(),
+            "recurrence_template_update".to_string(),
+            "recurrence_instances_list".to_string(),
+            "recurrence_spawn".to_string(),
+            "system_apply_attention_update".to_string(),
+            "system_generate_decision_cards".to_string(),
             "rules_list".to_string(),
             "rule_get".to_string(),
             "rule_save".to_string(),
@@ -159,6 +230,409 @@ pub fn health(root: &Path) -> AppResult<WorkspaceHealth> {
         last_successful_command_at: last,
         message: None,
     })
+}
+
+#[derive(Debug, Clone)]
+struct ImportedObsidianTask {
+    source_ref: String,
+    raw_text: String,
+    title: String,
+    status: TaskStatus,
+}
+
+pub fn obsidian_tasks_sync(root: &Path) -> AppResult<ObsidianTaskSyncResult> {
+    ensure_topology(root)?;
+    let vault_root = detect_obsidian_vault_path().ok_or_else(|| {
+        AppError::Policy(
+            "POLICY_DENIED: Obsidian vault path unavailable. Ensure Obsidian is configured with an open/default vault.".to_string(),
+        )
+    })?;
+    obsidian_tasks_sync_for_vault(root, &vault_root)
+}
+
+fn obsidian_tasks_sync_for_vault(root: &Path, vault_root: &Path) -> AppResult<ObsidianTaskSyncResult> {
+    let _suppress_cli_writes = suppress_obsidian_cli_writes();
+    let (candidates, scanned_files) = collect_importable_obsidian_tasks(root, vault_root)?;
+    let discovered_tasks = candidates.len();
+    let now = Utc::now();
+
+    let atoms = load_all_atoms(root)?;
+    let mut imported_by_source: HashMap<String, AtomRecord> = HashMap::new();
+    let mut existing_ids: HashSet<String> = HashSet::new();
+    for atom in atoms {
+        existing_ids.insert(atom.id.clone());
+        if atom.governance.origin == "imported" {
+            if let Some(source_ref) = atom.governance.source_ref.clone() {
+                if source_ref.starts_with("obsidian:") {
+                    imported_by_source.insert(source_ref, atom);
+                }
+            }
+        }
+    }
+
+    let mut created_atoms = 0usize;
+    let mut updated_atoms = 0usize;
+    let mut unchanged_atoms = 0usize;
+    let mut archived_atoms = 0usize;
+    let mut seen_sources = HashSet::new();
+
+    for candidate in candidates {
+        seen_sources.insert(candidate.source_ref.clone());
+        if let Some(mut atom) = imported_by_source.remove(&candidate.source_ref) {
+            let previous_status = atom_status(&atom);
+            let changed = apply_imported_task_candidate(&mut atom, &candidate, now);
+            if changed {
+                atom.revision += 1;
+                atom.updated_at = now;
+                write_atom(root, Some(previous_status), &atom)?;
+                let block = upsert_block_from_atom(root, &atom)?;
+                let _ = ensure_placement_for_view(root, &block.id, "now", None)?;
+                updated_atoms += 1;
+            } else {
+                unchanged_atoms += 1;
+            }
+            existing_ids.insert(atom.id.clone());
+            continue;
+        }
+
+        let atom_id = next_imported_atom_id(&candidate.source_ref, &existing_ids);
+        existing_ids.insert(atom_id.clone());
+        let atom = AtomRecord {
+            id: atom_id.clone(),
+            schema_version: 1,
+            created_at: now,
+            updated_at: now,
+            raw_text: candidate.raw_text.clone(),
+            capture_source: crate::models::CaptureSource::Import,
+            facets: vec![FacetKind::Task],
+            facet_data: AtomFacets {
+                task: Some(TaskFacet {
+                    title: candidate.title.clone(),
+                    status: candidate.status,
+                    priority: 3,
+                    completed_at: if candidate.status == TaskStatus::Done {
+                        Some(now)
+                    } else {
+                        None
+                    },
+                    ..TaskFacet::default()
+                }),
+                ..AtomFacets::default()
+            },
+            relations: AtomRelations::default(),
+            governance: GovernanceMeta {
+                origin: "imported".to_string(),
+                source_ref: Some(candidate.source_ref.clone()),
+                ..default_governance()
+            },
+            body: None,
+            revision: 1,
+            archived_at: None,
+        };
+        write_atom(root, None, &atom)?;
+        append_event(
+            root,
+            build_event(
+                "atom.created",
+                Some(&atom.id),
+                json!({"atom": atom.clone(), "importedFrom": candidate.source_ref}),
+            ),
+        )?;
+        let block = upsert_block_from_atom(root, &atom)?;
+        let _ = ensure_placement_for_view(root, &block.id, "now", None)?;
+        created_atoms += 1;
+    }
+
+    for mut atom in imported_by_source.into_values() {
+        if seen_sources.contains(atom.governance.source_ref.as_deref().unwrap_or_default()) {
+            continue;
+        }
+        if atom.archived_at.is_some()
+            && atom
+                .facet_data
+                .task
+                .as_ref()
+                .map(|task| task.status == TaskStatus::Archived)
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let previous_status = atom_status(&atom);
+        upsert_task_facet(&mut atom);
+        if let Some(task) = atom.facet_data.task.as_mut() {
+            task.status = TaskStatus::Archived;
+        }
+        atom.archived_at = Some(now);
+        atom.revision += 1;
+        atom.updated_at = now;
+        write_atom(root, Some(previous_status), &atom)?;
+        append_event(
+            root,
+            build_event(
+                "atom.archived",
+                Some(&atom.id),
+                json!({"reason": "obsidian_task_removed"}),
+            ),
+        )?;
+        let _ = upsert_block_from_atom(root, &atom)?;
+        archived_atoms += 1;
+    }
+
+    let result = ObsidianTaskSyncResult {
+        vault_path: vault_root.to_string_lossy().to_string(),
+        scanned_files,
+        discovered_tasks,
+        created_atoms,
+        updated_atoms,
+        unchanged_atoms,
+        archived_atoms,
+    };
+    append_event(
+        root,
+        build_event(
+            "obsidian.tasks.synced",
+            None,
+            json!({
+                "vaultPath": result.vault_path,
+                "scannedFiles": result.scanned_files,
+                "discoveredTasks": result.discovered_tasks,
+                "createdAtoms": result.created_atoms,
+                "updatedAtoms": result.updated_atoms,
+                "unchangedAtoms": result.unchanged_atoms,
+                "archivedAtoms": result.archived_atoms
+            }),
+        ),
+    )?;
+
+    Ok(result)
+}
+
+fn apply_imported_task_candidate(
+    atom: &mut AtomRecord,
+    candidate: &ImportedObsidianTask,
+    now: DateTime<Utc>,
+) -> bool {
+    let mut changed = false;
+    if atom.raw_text != candidate.raw_text {
+        atom.raw_text = candidate.raw_text.clone();
+        changed = true;
+    }
+    if atom.capture_source != crate::models::CaptureSource::Import {
+        atom.capture_source = crate::models::CaptureSource::Import;
+        changed = true;
+    }
+    if !atom.facets.contains(&FacetKind::Task) {
+        atom.facets.push(FacetKind::Task);
+        changed = true;
+    }
+    if atom.governance.origin != "imported" {
+        atom.governance.origin = "imported".to_string();
+        changed = true;
+    }
+    if atom.governance.source_ref.as_deref() != Some(candidate.source_ref.as_str()) {
+        atom.governance.source_ref = Some(candidate.source_ref.clone());
+        changed = true;
+    }
+    upsert_task_facet(atom);
+    if let Some(task) = atom.facet_data.task.as_mut() {
+        if task.title != candidate.title {
+            task.title = candidate.title.clone();
+            changed = true;
+        }
+        if task.status != candidate.status {
+            task.status = candidate.status;
+            changed = true;
+        }
+        if candidate.status == TaskStatus::Done {
+            if task.completed_at.is_none() {
+                task.completed_at = Some(now);
+                changed = true;
+            }
+        } else if task.completed_at.is_some() {
+            task.completed_at = None;
+            changed = true;
+        }
+    }
+    if candidate.status == TaskStatus::Archived {
+        if atom.archived_at.is_none() {
+            atom.archived_at = Some(now);
+            changed = true;
+        }
+    } else if atom.archived_at.is_some() {
+        atom.archived_at = None;
+        changed = true;
+    }
+    changed
+}
+
+fn next_imported_atom_id(source_ref: &str, existing_ids: &HashSet<String>) -> String {
+    let base = format!("atom_import_{:016x}", stable_hash_64(source_ref));
+    if !existing_ids.contains(&base) {
+        return base;
+    }
+    let mut idx = 1usize;
+    loop {
+        let candidate = format!("{}_{}", base, idx);
+        if !existing_ids.contains(&candidate) {
+            return candidate;
+        }
+        idx += 1;
+    }
+}
+
+fn stable_hash_64(input: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn collect_importable_obsidian_tasks(
+    command_center_root: &Path,
+    vault_root: &Path,
+) -> AppResult<(Vec<ImportedObsidianTask>, usize)> {
+    let mut scanned_files = 0usize;
+    let mut tasks = Vec::new();
+    if !command_center_root.is_dir() {
+        return Ok((tasks, scanned_files));
+    }
+    let mut stack = vec![command_center_root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).map_err(|error| AppError::Io(error.to_string()))? {
+            let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+                if name.eq_ignore_ascii_case(".obsidian") || name.eq_ignore_ascii_case(".git") {
+                    continue;
+                }
+                if is_command_center_system_path(command_center_root, &path) {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|value| value.to_str()) != Some("md") {
+                continue;
+            }
+            if is_command_center_system_path(command_center_root, &path) {
+                continue;
+            }
+
+            scanned_files += 1;
+            let content = match fs::read_to_string(&path) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(path = %path.to_string_lossy(), error = %error, "skipping unreadable vault note during task sync");
+                    continue;
+                }
+            };
+            let rel = path
+                .strip_prefix(vault_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            parse_importable_tasks_from_markdown(&rel, &content, &mut tasks);
+        }
+    }
+
+    Ok((tasks, scanned_files))
+}
+
+fn is_command_center_system_path(command_center_root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(command_center_root) else {
+        return false;
+    };
+    let Some(first) = rel.components().next() else {
+        return false;
+    };
+    let first = first.as_os_str().to_string_lossy();
+    matches!(
+        first.as_ref(),
+        "atoms"
+            | "blocks"
+            | "placements"
+            | "conditions"
+            | "notepads"
+            | "events"
+            | "threads"
+            | "categories"
+            | "sessions"
+            | "recurrence"
+            | "prompts"
+            | "rules"
+            | "jobs"
+            | "projections"
+            | "semantic"
+            | "governance"
+            | "migrations"
+            | "bases"
+            | "idempotency"
+            | "notifications"
+            | "registry"
+    )
+}
+
+fn parse_importable_tasks_from_markdown(
+    rel_path: &str,
+    content: &str,
+    out: &mut Vec<ImportedObsidianTask>,
+) {
+    let mut lines = content.lines().enumerate();
+    let mut in_frontmatter = false;
+    if let Some((_, first_line)) = lines.next() {
+        if first_line.trim() == "---" {
+            in_frontmatter = true;
+        } else {
+            parse_importable_task_line(rel_path, 1, first_line, out);
+        }
+    }
+
+    for (index, line) in lines {
+        let line_no = index + 1;
+        if in_frontmatter {
+            let trimmed = line.trim();
+            if trimmed == "---" || trimmed == "..." {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        parse_importable_task_line(rel_path, line_no, line, out);
+    }
+}
+
+fn parse_importable_task_line(
+    rel_path: &str,
+    line_no: usize,
+    line: &str,
+    out: &mut Vec<ImportedObsidianTask>,
+) {
+    let Some(captures) = MARKDOWN_TASK_RE.captures(line) else {
+        return;
+    };
+    let marker = captures.get(1).map(|value| value.as_str()).unwrap_or(" ");
+    let text = captures
+        .get(2)
+        .map(|value| value.as_str().trim())
+        .unwrap_or_default();
+    if text.is_empty() {
+        return;
+    }
+    let done = marker.eq_ignore_ascii_case("x");
+    let raw_text = if done {
+        format!("- [x] {}", text)
+    } else {
+        format!("- [ ] {}", text)
+    };
+    out.push(ImportedObsidianTask {
+        source_ref: format!("obsidian:{}#L{}", rel_path, line_no),
+        raw_text: raw_text.clone(),
+        title: derive_title(&raw_text),
+        status: if done { TaskStatus::Done } else { TaskStatus::Todo },
+    });
 }
 
 pub fn atoms_list(root: &Path, request: ListAtomsRequest) -> AppResult<PageResponse<AtomRecord>> {
@@ -245,6 +719,7 @@ fn atom_unarchive_inner(root: &Path, atom_id: &str, expected_revision: i64) -> A
 
     write_atom(root, Some(previous_status), &atom)?;
     append_event(root, build_event("atom.updated", Some(&atom.id), json!({"atom": atom.clone()})))?;
+    let _ = upsert_block_from_atom(root, &atom)?;
 
     Ok(atom)
 }
@@ -380,6 +855,26 @@ pub fn notepad_atoms_list(
     let notepad = notepad_get(root, notepad_id)?
         .ok_or_else(|| AppError::NotFound(format!("Notepad '{}' not found", notepad_id)))?;
 
+    let placements = load_placements_for_view(root, notepad_id)?;
+    if !placements.is_empty() {
+        let mut ranked: Vec<(usize, AtomRecord)> = Vec::new();
+        for (index, placement) in placements.into_iter().enumerate() {
+            let Some(block) = find_block(root, &placement.block_id)? else {
+                continue;
+            };
+            let Some(atom_id) = block.atom_id else {
+                continue;
+            };
+            let Some(atom) = atom_get(root, &atom_id)? else {
+                continue;
+            };
+            ranked.push((index, atom));
+        }
+        let mut atoms = ranked.into_iter().map(|(_, atom)| atom).collect::<Vec<_>>();
+        apply_atom_filter(&mut atoms, Some(&notepad.filters));
+        return paginate(atoms, limit, cursor);
+    }
+
     atoms_list(
         root,
         ListAtomsRequest {
@@ -387,6 +882,597 @@ pub fn notepad_atoms_list(
             cursor,
             filter: Some(notepad.filters),
             sort: Some(notepad.sorts),
+        },
+    )
+}
+
+pub fn notepad_block_create(
+    root: &Path,
+    request: CreateBlockInNotepadRequest,
+) -> AppResult<BlockRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "notepad.block.create",
+        key.as_deref(),
+        &request,
+        || notepad_block_create_inner(root, request.clone()),
+    )
+}
+
+fn notepad_block_create_inner(
+    root: &Path,
+    request: CreateBlockInNotepadRequest,
+) -> AppResult<BlockRecord> {
+    let notepad = notepad_get(root, &request.notepad_id)?
+        .ok_or_else(|| AppError::NotFound(format!("Notepad '{}' not found", request.notepad_id)))?;
+    let capture_defaults = notepad.capture_defaults.clone().unwrap_or_default();
+
+    let mut initial_facets = capture_defaults
+        .initial_facets
+        .clone()
+        .unwrap_or_else(|| vec![FacetKind::Task]);
+    if initial_facets.is_empty() {
+        initial_facets.push(FacetKind::Task);
+    }
+
+    let task_status = capture_defaults.task_status.unwrap_or(TaskStatus::Todo);
+    let task_priority = capture_defaults.task_priority.unwrap_or(3).clamp(1, 5);
+
+    let task_facet = if initial_facets.contains(&FacetKind::Task) {
+        Some(TaskFacet {
+            title: derive_title(&request.raw_text),
+            status: task_status,
+            priority: task_priority,
+            commitment_level: capture_defaults.commitment_level,
+            attention_layer: capture_defaults.attention_layer,
+            ..TaskFacet::default()
+        })
+    } else {
+        None
+    };
+
+    let facet_data = AtomFacets {
+        task: task_facet,
+        meta: Some(crate::models::MetaFacet {
+            labels: capture_defaults.labels.clone(),
+            categories: capture_defaults.categories.clone(),
+        }),
+        ..AtomFacets::default()
+    };
+
+    let atom = atom_create_inner(
+        root,
+        CreateAtomRequest {
+            raw_text: request.raw_text,
+            body: request.body,
+            capture_source: request.capture_source.unwrap_or_default(),
+            initial_facets: Some(initial_facets),
+            facet_data: Some(facet_data),
+            relations: Some(AtomRelations {
+                thread_ids: capture_defaults.thread_ids.unwrap_or_default(),
+                ..AtomRelations::default()
+            }),
+            governance: None,
+            idempotency_key: None,
+        },
+    )?;
+    let block = upsert_block_from_atom(root, &atom)?;
+    let _ = ensure_placement_for_view(root, &block.id, &notepad.id, None)?;
+    Ok(block)
+}
+
+pub fn blocks_list(root: &Path, request: ListBlocksRequest) -> AppResult<PageResponse<BlockRecord>> {
+    ensure_topology(root)?;
+    backfill_blocks_from_atoms(root)?;
+    let mut blocks = load_all_blocks(root)?;
+
+    if let Some(atom_id) = request.atom_id.as_ref() {
+        blocks.retain(|block| block.atom_id.as_deref() == Some(atom_id.as_str()));
+    }
+    if let Some(lifecycle) = request.lifecycle.as_ref() {
+        blocks.retain(|block| block.lifecycle.eq_ignore_ascii_case(lifecycle));
+    }
+    if let Some(query) = request.text_query.as_ref().map(|value| value.to_ascii_lowercase()) {
+        blocks.retain(|block| block.text.to_ascii_lowercase().contains(&query));
+    }
+    if let Some(notepad_id) = request.notepad_id.as_ref() {
+        let ids: HashSet<String> = load_placements_for_view(root, notepad_id)?
+            .into_iter()
+            .map(|placement| placement.block_id)
+            .collect();
+        blocks.retain(|block| ids.contains(&block.id));
+    }
+
+    blocks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    paginate(blocks, request.limit, request.cursor)
+}
+
+pub fn block_get(root: &Path, block_id: &str) -> AppResult<Option<BlockRecord>> {
+    ensure_topology(root)?;
+    backfill_blocks_from_atoms(root)?;
+    find_block(root, block_id)
+}
+
+pub fn placements_list(
+    root: &Path,
+    request: ListPlacementsRequest,
+) -> AppResult<PageResponse<PlacementRecord>> {
+    ensure_topology(root)?;
+    let mut placements: Vec<PlacementRecord> = list_json_entities(root, "placements/by-view")?
+        .into_iter()
+        .map(|value| deserialize_entity(value, "placement"))
+        .collect::<AppResult<Vec<_>>>()?;
+
+    if let Some(view_id) = request.view_id.as_ref() {
+        placements.retain(|placement| placement.view_id == *view_id);
+    }
+    if let Some(block_id) = request.block_id.as_ref() {
+        placements.retain(|placement| placement.block_id == *block_id);
+    }
+
+    placements.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| a.order_key.cmp(&b.order_key))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    paginate(placements, request.limit, request.cursor)
+}
+
+pub fn placement_save(root: &Path, placement: WorkspaceMutationPayload) -> AppResult<PlacementRecord> {
+    ensure_topology(root)?;
+    let mut placement = mutation_payload_to_value(placement);
+    let idempotency_key = extract_required_idempotency_key(&mut placement, "placement.save")?;
+    let expected_revision = pop_expected_revision(&mut placement);
+    let payload = json!({"placement": placement, "expectedRevision": expected_revision});
+    with_idempotency(
+        root,
+        "placement.save",
+        Some(idempotency_key.as_str()),
+        &payload,
+        || {
+            let object = get_object_mut(&mut placement)?;
+            let view_id = object
+                .get("viewId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::Policy("VALIDATION_ERROR: placement viewId required".to_string()))?;
+            let block_id = object
+                .get("blockId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::Policy("VALIDATION_ERROR: placement blockId required".to_string()))?;
+            if !notepad_path(root, view_id).exists() {
+                return Err(AppError::NotFound(format!("Notepad '{}' not found", view_id)));
+            }
+            if find_block(root, block_id)?.is_none() {
+                return Err(AppError::NotFound(format!("Block '{}' not found", block_id)));
+            }
+            object
+                .entry("schemaVersion".to_string())
+                .or_insert_with(|| Value::from(1));
+            object
+                .entry("orderKey".to_string())
+                .or_insert_with(|| Value::String(new_order_key(9_999)));
+            object
+                .entry("pinned".to_string())
+                .or_insert_with(|| Value::Bool(false));
+            let saved = upsert_json_entity(
+                root,
+                "placements/by-view",
+                "placement",
+                placement.clone(),
+                expected_revision,
+            )?;
+            append_event(
+                root,
+                build_event("placement.saved", None, saved.clone()),
+            )?;
+            deserialize_entity(saved, "placement")
+        },
+    )
+}
+
+pub fn placement_delete(
+    root: &Path,
+    placement_id: &str,
+    idempotency_key: Option<String>,
+) -> AppResult<BooleanResponse> {
+    ensure_topology(root)?;
+    let key = idempotency_key.clone();
+    with_idempotency(
+        root,
+        "placement.delete",
+        key.as_deref(),
+        &json!({"placementId": placement_id}),
+        || {
+            let existing = get_json_entity(root, "placements/by-view", placement_id)?;
+            let path = json_entity_path(root, "placements/by-view", placement_id);
+            if !path.exists() {
+                return Ok(BooleanResponse { success: false });
+            }
+            fs::remove_file(path).map_err(|error| AppError::Io(error.to_string()))?;
+            append_event(
+                root,
+                build_event(
+                    "placement.deleted",
+                    None,
+                    json!({"placementId": placement_id, "previous": existing}),
+                ),
+            )?;
+            Ok(BooleanResponse { success: true })
+        },
+    )
+}
+
+pub fn placements_reorder(
+    root: &Path,
+    view_id: &str,
+    request: PlacementReorderRequest,
+) -> AppResult<Vec<PlacementRecord>> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "placements.reorder",
+        key.as_deref(),
+        &json!({
+            "viewId": view_id,
+            "orderedPlacementIds": request.ordered_placement_ids,
+            "expectedRevisions": request.expected_revisions
+        }),
+        || placements_reorder_inner(root, view_id, request.clone()),
+    )
+}
+
+fn placements_reorder_inner(
+    root: &Path,
+    view_id: &str,
+    request: PlacementReorderRequest,
+) -> AppResult<Vec<PlacementRecord>> {
+    let mut by_id: HashMap<String, PlacementRecord> = load_placements_for_view(root, view_id)?
+        .into_iter()
+        .map(|placement| (placement.id.clone(), placement))
+        .collect();
+
+    if by_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    if request.ordered_placement_ids.len() != by_id.len() {
+        return Err(AppError::Policy(
+            "VALIDATION_ERROR: placement reorder requires a full ordered placement id list".to_string(),
+        ));
+    }
+
+    let expected_map: HashMap<String, i64> = request
+        .expected_revisions
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, revision)| {
+            request
+                .ordered_placement_ids
+                .get(index)
+                .map(|placement_id| (placement_id.clone(), revision))
+        })
+        .collect();
+
+    let mut updated: Vec<PlacementRecord> = Vec::new();
+    for (index, placement_id) in request.ordered_placement_ids.iter().enumerate() {
+        let existing = by_id.remove(placement_id).ok_or_else(|| {
+            AppError::Policy(format!(
+                "VALIDATION_ERROR: placement '{}' is not in view '{}'",
+                placement_id, view_id
+            ))
+        })?;
+        if let Some(expected) = expected_map.get(placement_id) {
+            if existing.revision != *expected {
+                return Err(conflict_payload_error(
+                    "placement",
+                    *expected,
+                    existing.revision,
+                    &existing,
+                ));
+            }
+        }
+
+        let patch = json!({
+            "orderKey": new_order_key(index as i64),
+        });
+        let saved = patch_json_entity(
+            root,
+            "placements/by-view",
+            "placement",
+            placement_id,
+            patch,
+            Some(existing.revision),
+        )?;
+        updated.push(deserialize_entity(saved, "placement")?);
+    }
+    updated.sort_by(|a, b| a.order_key.cmp(&b.order_key));
+    append_event(
+        root,
+        build_event(
+            "placement.reordered",
+            None,
+            json!({"viewId": view_id, "placementIds": request.ordered_placement_ids}),
+        ),
+    )?;
+    Ok(updated)
+}
+
+pub fn conditions_list(
+    root: &Path,
+    request: ListConditionsRequest,
+) -> AppResult<PageResponse<ConditionRecord>> {
+    ensure_topology(root)?;
+    let mut items = list_json_entities(root, "conditions/active")?;
+    items.extend(list_json_entities(root, "conditions/history")?);
+    if let Some(atom_id) = request.atom_id.as_ref() {
+        items.retain(|item| item.get("atomId").and_then(Value::as_str) == Some(atom_id.as_str()));
+    }
+    if let Some(status) = request.status.as_ref() {
+        items.retain(|item| item.get("status").and_then(Value::as_str) == Some(status.as_str()));
+    }
+    if let Some(mode) = request.mode.as_ref() {
+        items.retain(|item| item.get("mode").and_then(Value::as_str) == Some(mode.as_str()));
+    }
+    sort_json_by_updated_at_desc(&mut items);
+    let page = paginate(items, request.limit, request.cursor)?;
+    deserialize_page(page, "condition")
+}
+
+pub fn condition_get(root: &Path, condition_id: &str) -> AppResult<Option<ConditionRecord>> {
+    ensure_topology(root)?;
+    if let Some(value) = get_json_entity(root, "conditions/active", condition_id)? {
+        return deserialize_optional_entity(Some(value), "condition");
+    }
+    let value = get_json_entity(root, "conditions/history", condition_id)?;
+    deserialize_optional_entity(value, "condition")
+}
+
+pub fn condition_set_date(root: &Path, request: ConditionSetDateRequest) -> AppResult<ConditionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(root, "condition.set_date", key.as_deref(), &request, || {
+        let condition = json!({
+            "id": condition_id_for_atom_mode(&request.atom_id, "date"),
+            "schemaVersion": 1,
+            "atomId": request.atom_id,
+            "status": "active",
+            "mode": "date",
+            "blockedUntil": request.until_at,
+        });
+        let saved = upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
+        if let Some(atom) = atom_get(root, saved.get("atomId").and_then(Value::as_str).unwrap_or_default())? {
+            apply_blocking_to_atom(
+                root,
+                &atom.id,
+                "date",
+                saved.get("blockedUntil").and_then(Value::as_str).map(|value| value.to_string()),
+                None,
+                None,
+                None,
+            )?;
+        }
+        append_event(
+            root,
+            build_event("condition.set", saved.get("atomId").and_then(Value::as_str), saved.clone()),
+        )?;
+        deserialize_entity(saved, "condition")
+    })
+}
+
+pub fn condition_set_person(root: &Path, request: ConditionSetPersonRequest) -> AppResult<ConditionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(root, "condition.set_person", key.as_deref(), &request, || {
+        let now = Utc::now();
+        let cadence = request.cadence_days.max(1);
+        let condition = json!({
+            "id": condition_id_for_atom_mode(&request.atom_id, "person"),
+            "schemaVersion": 1,
+            "atomId": request.atom_id,
+            "status": "active",
+            "mode": "person",
+            "waitingOnPerson": request.waiting_on_person,
+            "waitingCadenceDays": cadence,
+            "lastFollowupAt": now,
+            "nextFollowupAt": now + chrono::Duration::days(i64::from(cadence)),
+        });
+        let saved = upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
+        if let Some(atom) = atom_get(root, saved.get("atomId").and_then(Value::as_str).unwrap_or_default())? {
+            apply_blocking_to_atom(
+                root,
+                &atom.id,
+                "person",
+                None,
+                saved.get("waitingOnPerson").and_then(Value::as_str).map(|value| value.to_string()),
+                Some(cadence),
+                None,
+            )?;
+        }
+        append_event(
+            root,
+            build_event("condition.set", saved.get("atomId").and_then(Value::as_str), saved.clone()),
+        )?;
+        deserialize_entity(saved, "condition")
+    })
+}
+
+pub fn condition_set_task(root: &Path, request: ConditionSetTaskRequest) -> AppResult<ConditionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(root, "condition.set_task", key.as_deref(), &request, || {
+        let condition = json!({
+            "id": condition_id_for_atom_mode(&request.atom_id, "task"),
+            "schemaVersion": 1,
+            "atomId": request.atom_id,
+            "status": "active",
+            "mode": "task",
+            "blockerAtomId": request.blocker_atom_id,
+        });
+        let saved = upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
+        if let Some(atom) = atom_get(root, saved.get("atomId").and_then(Value::as_str).unwrap_or_default())? {
+            apply_blocking_to_atom(
+                root,
+                &atom.id,
+                "task",
+                None,
+                None,
+                None,
+                Some(request.blocker_atom_id.clone()),
+            )?;
+        }
+        append_event(
+            root,
+            build_event("condition.set", saved.get("atomId").and_then(Value::as_str), saved.clone()),
+        )?;
+        deserialize_entity(saved, "condition")
+    })
+}
+
+pub fn condition_followup_log(
+    root: &Path,
+    condition_id: &str,
+    request: ConditionFollowupRequest,
+) -> AppResult<ConditionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "condition.followup_log",
+        key.as_deref(),
+        &json!({"conditionId": condition_id, "request": request}),
+        || {
+            let mut condition = get_json_entity(root, "conditions/active", condition_id)?
+                .ok_or_else(|| AppError::NotFound(format!("Condition '{}' not found", condition_id)))?;
+            let current_revision = condition.get("revision").and_then(Value::as_i64).unwrap_or(0);
+            if current_revision != request.expected_revision {
+                return Err(conflict_payload_error(
+                    "condition",
+                    request.expected_revision,
+                    current_revision,
+                    &condition,
+                ));
+            }
+            if condition.get("mode").and_then(Value::as_str) != Some("person") {
+                return Err(AppError::Policy(
+                    "VALIDATION_ERROR: followup can only be logged on person conditions".to_string(),
+                ));
+            }
+            let now = request.followed_up_at.unwrap_or_else(Utc::now);
+            let cadence_days = condition
+                .get("waitingCadenceDays")
+                .and_then(Value::as_i64)
+                .unwrap_or(7);
+            let obj = get_object_mut(&mut condition)?;
+            obj.insert("lastFollowupAt".to_string(), Value::String(now.to_rfc3339()));
+            obj.insert(
+                "nextFollowupAt".to_string(),
+                Value::String((now + chrono::Duration::days(cadence_days)).to_rfc3339()),
+            );
+            bump_json_revision(obj, Utc::now());
+            write_json_file(&json_entity_path(root, "conditions/active", condition_id), &condition)?;
+            append_event(
+                root,
+                build_event(
+                    "condition.followup_logged",
+                    condition.get("atomId").and_then(Value::as_str),
+                    json!({"conditionId": condition_id, "followedUpAt": now}),
+                ),
+            )?;
+            deserialize_entity(condition, "condition")
+        },
+    )
+}
+
+pub fn condition_resolve(
+    root: &Path,
+    condition_id: &str,
+    request: ConditionResolveRequest,
+) -> AppResult<ConditionRecord> {
+    transition_condition(root, condition_id, request.expected_revision, "satisfied", None, request.idempotency_key)
+}
+
+pub fn condition_cancel(
+    root: &Path,
+    condition_id: &str,
+    request: ConditionCancelRequest,
+) -> AppResult<ConditionRecord> {
+    transition_condition(
+        root,
+        condition_id,
+        request.expected_revision,
+        "cancelled",
+        request.reason,
+        request.idempotency_key,
+    )
+}
+
+fn transition_condition(
+    root: &Path,
+    condition_id: &str,
+    expected_revision: i64,
+    target_status: &str,
+    reason: Option<String>,
+    idempotency_key: Option<String>,
+) -> AppResult<ConditionRecord> {
+    ensure_topology(root)?;
+    let key = idempotency_key.clone();
+    with_idempotency(
+        root,
+        &format!("condition.{}", target_status),
+        key.as_deref(),
+        &json!({"conditionId": condition_id, "expectedRevision": expected_revision, "reason": reason}),
+        || {
+            let mut condition = get_json_entity(root, "conditions/active", condition_id)?
+                .ok_or_else(|| AppError::NotFound(format!("Condition '{}' not found", condition_id)))?;
+            let current_revision = condition.get("revision").and_then(Value::as_i64).unwrap_or(0);
+            if current_revision != expected_revision {
+                return Err(conflict_payload_error(
+                    "condition",
+                    expected_revision,
+                    current_revision,
+                    &condition,
+                ));
+            }
+            let now = Utc::now();
+            let atom_id = condition
+                .get("atomId")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            let obj = get_object_mut(&mut condition)?;
+            obj.insert("status".to_string(), Value::String(target_status.to_string()));
+            if target_status == "cancelled" {
+                obj.insert("canceledAt".to_string(), Value::String(now.to_rfc3339()));
+            } else {
+                obj.insert("resolvedAt".to_string(), Value::String(now.to_rfc3339()));
+            }
+            if let Some(reason) = reason {
+                obj.insert("reason".to_string(), Value::String(reason));
+            }
+            bump_json_revision(obj, now);
+            let target = json_entity_path(root, "conditions/history", condition_id);
+            write_json_file(&target, &condition)?;
+            let active = json_entity_path(root, "conditions/active", condition_id);
+            if active.exists() {
+                let _ = fs::remove_file(active);
+            }
+
+            if let Some(atom_id) = atom_id {
+                clear_blocking_from_atom_if_unblocked(root, &atom_id)?;
+            }
+
+            append_event(
+                root,
+                build_event(
+                    "condition.transitioned",
+                    condition.get("atomId").and_then(Value::as_str),
+                    json!({"conditionId": condition_id, "status": target_status}),
+                ),
+            )?;
+            deserialize_entity(condition, "condition")
         },
     )
 }
@@ -556,6 +1642,8 @@ fn atom_create_inner(root: &Path, request: CreateAtomRequest) -> AppResult<AtomR
 
     write_atom(root, None, &atom)?;
     append_event(root, build_event("atom.created", Some(&atom.id), json!({"atom": atom.clone()})))?;
+    let block = upsert_block_from_atom(root, &atom)?;
+    let _ = ensure_placement_for_view(root, &block.id, "now", None)?;
     Ok(atom)
 }
 
@@ -574,6 +1662,9 @@ fn atom_update_inner(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> 
     if let Some(relations_patch) = request.relations_patch {
         atom.relations = merge_atom_relations(atom.relations, relations_patch);
     }
+    if request.clear_parent_id.unwrap_or(false) {
+        atom.relations.parent_id = None;
+    }
     if let Some(body_patch) = request.body_patch {
         atom.body = apply_body_patch(atom.body, body_patch);
     }
@@ -590,6 +1681,7 @@ fn atom_update_inner(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> 
             json!({"beforeRevision": request.expected_revision, "atom": atom.clone()}),
         ),
     )?;
+    let _ = upsert_block_from_atom(root, &atom)?;
 
     Ok(atom)
 }
@@ -618,6 +1710,7 @@ fn atom_archive_inner(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -
             json!({"archivedAt": now, "reason": request.reason}),
         ),
     )?;
+    let _ = upsert_block_from_atom(root, &atom)?;
 
     Ok(atom)
 }
@@ -664,6 +1757,7 @@ fn task_status_set_inner(root: &Path, atom_id: &str, request: SetTaskStatusReque
             build_event("task.completed", Some(&atom.id), json!({"completedAt": now})),
         )?;
     }
+    let _ = upsert_block_from_atom(root, &atom)?;
 
     Ok(atom)
 }
@@ -716,6 +1810,7 @@ fn notepad_save_inner(root: &Path, request: SaveNotepadViewRequest) -> AppResult
         is_system: input.is_system || input.id == "now",
         filters: input.filters,
         sorts: input.sorts,
+        capture_defaults: input.capture_defaults,
         layout_mode: if input.layout_mode.is_empty() {
             "list".to_string()
         } else {
@@ -763,8 +1858,7 @@ fn ensure_topology(root: &Path) -> AppResult<()> {
 }
 
 fn detect_obsidian_cli() -> bool {
-    run_obsidian_cli_status("obsidian", &["help"], Path::new("."))
-        || run_obsidian_cli_status("obsidian-cli", &["help"], Path::new("."))
+    resolve_binary("obsidian").is_some()
 }
 
 fn default_governance() -> GovernanceMeta {
@@ -1067,8 +2161,15 @@ fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> AppResult<()>
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| AppError::Io(error.to_string()))?;
     }
-    let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(path, bytes).map_err(|error| AppError::Io(error.to_string()))
+    let rendered = serde_json::to_string_pretty(value)?;
+    if !obsidian_cli_writes_suppressed() {
+        if let Some(root) = detect_obsidian_command_center_root() {
+            if path.starts_with(&root) && try_obsidian_cli_write(&root, path, &rendered) {
+                return Ok(());
+            }
+        }
+    }
+    fs::write(path, rendered).map_err(|error| AppError::Io(error.to_string()))
 }
 
 fn read_json_file<T: DeserializeOwned>(path: &Path) -> AppResult<T> {
@@ -1076,18 +2177,8 @@ fn read_json_file<T: DeserializeOwned>(path: &Path) -> AppResult<T> {
     serde_json::from_slice(&bytes).map_err(AppError::from)
 }
 
-fn read_markdown_frontmatter(root: &Path, path: &Path) -> AppResult<(Value, String)> {
-    let content = match try_obsidian_cli_read(root, path) {
-        Some(cli_content) if cli_content.trim_start().starts_with("---") => cli_content,
-        Some(_) => {
-            tracing::warn!(
-                path = %path.to_string_lossy(),
-                "obsidian cli read returned malformed frontmatter; using filesystem fallback"
-            );
-            fs::read_to_string(path).map_err(|error| AppError::Io(error.to_string()))?
-        }
-        None => fs::read_to_string(path).map_err(|error| AppError::Io(error.to_string()))?,
-    };
+fn read_markdown_frontmatter(_root: &Path, path: &Path) -> AppResult<(Value, String)> {
+    let content = fs::read_to_string(path).map_err(|error| AppError::Io(error.to_string()))?;
     let Some(rest) = content.strip_prefix("---\n") else {
         return Err(AppError::Policy(format!(
             "Malformed markdown frontmatter file (missing opening delimiter): {}",
@@ -1115,23 +2206,18 @@ fn read_markdown_frontmatter(root: &Path, path: &Path) -> AppResult<(Value, Stri
     Ok((metadata, body))
 }
 
-fn write_markdown_frontmatter(root: &Path, path: &Path, metadata: &Value, body: &str) -> AppResult<()> {
+fn write_markdown_frontmatter(_root: &Path, path: &Path, metadata: &Value, body: &str) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| AppError::Io(error.to_string()))?;
     }
 
     let metadata_yaml = serde_yaml::to_string(metadata).map_err(|error| AppError::Internal(error.to_string()))?;
     let rendered = format!("---\n{}---\n\n{}", metadata_yaml, body);
-
-    if try_obsidian_cli_write(root, path, &rendered) {
-        if let Ok(written) = fs::read_to_string(path) {
-            if written.trim_start().starts_with("---") {
+    if !obsidian_cli_writes_suppressed() {
+        if let Some(root) = detect_obsidian_command_center_root() {
+            if path.starts_with(&root) && try_obsidian_cli_write(&root, path, &rendered) {
                 return Ok(());
             }
-            tracing::warn!(
-                path = %path.to_string_lossy(),
-                "obsidian cli write produced malformed frontmatter; rewriting via filesystem fallback"
-            );
         }
     }
 
@@ -1183,139 +2269,266 @@ fn write_notepad_file(root: &Path, path: &Path, definition: &NotepadViewDefiniti
 }
 
 fn try_obsidian_cli_write(root: &Path, path: &Path, content: &str) -> bool {
+    if OBSIDIAN_CLI_WRITE_CIRCUIT_OPEN.load(AtomicOrdering::Relaxed) {
+        return false;
+    }
+    let _write_lock = OBSIDIAN_CLI_WRITE_LOCK.lock().ok();
+    if OBSIDIAN_CLI_WRITE_CIRCUIT_OPEN.load(AtomicOrdering::Relaxed) {
+        return false;
+    }
+
+    let Some(vault_name) = detect_obsidian_vault_name() else {
+        OBSIDIAN_CLI_WRITE_CIRCUIT_OPEN.store(true, AtomicOrdering::Relaxed);
+        tracing::warn!("obsidian CLI write disabled for process: unable to resolve vault name");
+        return false;
+    };
+
+    if !obsidian_cli_can_target_vault(root, &vault_name) {
+        OBSIDIAN_CLI_WRITE_CIRCUIT_OPEN.store(true, AtomicOrdering::Relaxed);
+        tracing::warn!(
+            vault = %vault_name,
+            "obsidian CLI write disabled for process: vault not targetable"
+        );
+        return false;
+    }
+
     let rel_path = path
         .strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
-        .to_string();
-    let path_arg = format!("path={}", rel_path);
-    let content_arg = format!("content={}", content);
-
-    let candidates: [Vec<String>; 1] = [vec![
+        .replace('\\', "/");
+    let before = fs::read_to_string(path).ok();
+    let args = vec![
+        format!("vault={}", vault_name),
         "create".to_string(),
-        path_arg,
-        content_arg,
+        format!("path={}", rel_path),
+        format!("content={}", encode_obsidian_cli_content(content)),
         "overwrite".to_string(),
-    ]];
+        "silent".to_string(),
+    ];
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
-    for bin in ["obsidian", "obsidian-cli"] {
-        for args in &candidates {
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            if run_obsidian_cli_status(bin, &arg_refs, root) && path.exists() {
-                return true;
-            }
-        }
+    if run_obsidian_cli_status("obsidian", &arg_refs, root)
+        && obsidian_cli_write_applied(path, content, before.as_deref())
+    {
+        return true;
     }
+
+    OBSIDIAN_CLI_WRITE_CIRCUIT_OPEN.store(true, AtomicOrdering::Relaxed);
     tracing::warn!(
         path = %path.to_string_lossy(),
-        "obsidian CLI write failed for path; using filesystem fallback"
+        vault = %vault_name,
+        "obsidian CLI write failed; disabling CLI writes for this app process"
     );
     false
 }
 
-fn try_obsidian_cli_read(root: &Path, path: &Path) -> Option<String> {
-    let rel_path = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string();
-    let path_arg = format!("path={}", rel_path);
+fn obsidian_cli_can_target_vault(root: &Path, vault_name: &str) -> bool {
+    let args = [
+        format!("vault={}", vault_name),
+        "vault".to_string(),
+        "active".to_string(),
+        "key=path".to_string(),
+        "silent".to_string(),
+    ];
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_obsidian_cli_status("obsidian", &arg_refs, root)
+}
 
-    let candidates: [Vec<String>; 1] = [vec!["read".to_string(), path_arg]];
+fn encode_obsidian_cli_content(content: &str) -> String {
+    normalize_newlines(content)
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t")
+}
 
-    for bin in ["obsidian", "obsidian-cli"] {
-        for args in &candidates {
-            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            if let Some(output) = run_obsidian_cli_output(bin, &arg_refs, root) {
-                if !output.trim().is_empty() {
-                    return Some(output);
-                }
-            }
-        }
+fn normalize_newlines(input: &str) -> String {
+    input.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn obsidian_cli_write_applied(path: &Path, expected_content: &str, previous_content: Option<&str>) -> bool {
+    let Ok(actual_content) = fs::read_to_string(path) else {
+        return false;
+    };
+    let actual = normalize_newlines(&actual_content);
+    let expected = normalize_newlines(expected_content);
+    if actual == expected {
+        return true;
     }
-    tracing::warn!(
-        path = %path.to_string_lossy(),
-        "obsidian CLI read failed for path; using filesystem fallback"
-    );
-    None
+    if let Some(previous) = previous_content {
+        return normalize_newlines(previous) != actual && actual.ends_with(&expected);
+    }
+    false
 }
 
 fn run_obsidian_cli_status(bin: &str, args: &[&str], root: &Path) -> bool {
     let mut command = prepare_obsidian_command(bin, root);
-    let mut child = match command.args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+    let mut child = match command.args(args).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
         Ok(child) => child,
-        Err(_) => return false,
+        Err(error) => {
+            tracing::warn!(binary = %bin, error = %error, "obsidian command spawn failed");
+            return false;
+        }
     };
 
     let timeout = Duration::from_millis(OBSIDIAN_CLI_TIMEOUT_MS);
     match child.wait_timeout(timeout) {
-        Ok(Some(status)) => status.success(),
+        Ok(Some(status)) => {
+            if status.success() {
+                return true;
+            }
+            let stderr = child
+                .stderr
+                .take()
+                .and_then(|mut stream| {
+                    let mut buffer = Vec::new();
+                    stream.read_to_end(&mut buffer).ok()?;
+                    String::from_utf8(buffer).ok()
+                })
+                .unwrap_or_default();
+            tracing::warn!(
+                binary = %bin,
+                status = ?status.code(),
+                args = ?args,
+                stderr = %stderr.trim(),
+                "obsidian command failed"
+            );
+            false
+        }
         Ok(None) => {
             let _ = child.kill();
             let _ = child.wait();
+            tracing::warn!(binary = %bin, args = ?args, "obsidian command timed out");
             false
         }
-        Err(_) => false,
-    }
-}
-
-fn run_obsidian_cli_output(bin: &str, args: &[&str], root: &Path) -> Option<String> {
-    let mut command = prepare_obsidian_command(bin, root);
-    let mut child = command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let timeout = Duration::from_millis(OBSIDIAN_CLI_TIMEOUT_MS);
-    match child.wait_timeout(timeout).ok()? {
-        Some(status) => {
-            if !status.success() {
-                return None;
-            }
-            let mut stdout = child.stdout.take()?;
-            let mut buffer = Vec::new();
-            stdout.read_to_end(&mut buffer).ok()?;
-            String::from_utf8(buffer).ok()
-        }
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            None
+        Err(error) => {
+            tracing::warn!(binary = %bin, error = %error, "obsidian command wait failed");
+            false
         }
     }
 }
 
 fn prepare_obsidian_command(bin: &str, root: &Path) -> std::process::Command {
-    const FALLBACK_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    const FALLBACK_PATH: &str =
+        "/Applications/Obsidian.app/Contents/MacOS:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
     let path = match std::env::var("PATH") {
         Ok(existing) if !existing.trim().is_empty() => format!("{}:{}", FALLBACK_PATH, existing),
         _ => FALLBACK_PATH.to_string(),
     };
-    let mut command = std::process::Command::new(bin);
+    let executable = resolve_binary(bin).unwrap_or_else(|| PathBuf::from(bin));
+    let mut command = std::process::Command::new(executable);
     command.current_dir(root).env("PATH", path);
     command
 }
 
+fn resolve_binary(bin: &str) -> Option<PathBuf> {
+    let candidate = PathBuf::from(bin);
+    if candidate.is_absolute() {
+        return candidate.is_file().then_some(candidate);
+    }
+    const FALLBACK_PATH: &str =
+        "/Applications/Obsidian.app/Contents/MacOS:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    let path = match std::env::var("PATH") {
+        Ok(existing) if !existing.trim().is_empty() => format!("{}:{}", FALLBACK_PATH, existing),
+        _ => FALLBACK_PATH.to_string(),
+    };
+    for dir in path.split(':').filter(|value| !value.is_empty()) {
+        let probe = Path::new(dir).join(bin);
+        if probe.is_file() {
+            return Some(probe);
+        }
+    }
+    None
+}
+
 fn detect_obsidian_vault_path() -> Option<PathBuf> {
-    for bin in ["obsidian", "obsidian-cli"] {
-        if let Some(output) = run_obsidian_cli_output(bin, &["vault", "info=path"], Path::new(".")) {
-            let first_line = output.lines().map(str::trim).find(|line| !line.is_empty())?;
-            let path = PathBuf::from(first_line);
-            if path.is_absolute() {
-                return Some(path);
-            }
+    if let Some(path) = detect_obsidian_vault_path_from_config() {
+        return Some(path);
+    }
+    if let Some(path) = std::env::var_os("OBSIDIAN_VAULT_PATH") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_absolute() {
+            return Some(candidate);
+        }
+    }
+    if let Some(path) = std::env::var_os("COMMAND_CENTER_OBSIDIAN_VAULT_PATH") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_absolute() {
+            return Some(candidate);
         }
     }
     None
 }
 
 fn detect_obsidian_vault_name() -> Option<String> {
-    for bin in ["obsidian", "obsidian-cli"] {
-        if let Some(output) = run_obsidian_cli_output(bin, &["vault", "info=name"], Path::new(".")) {
-            let first_line = output.lines().map(str::trim).find(|line| !line.is_empty())?;
-            return Some(first_line.to_string());
+    let path = detect_obsidian_vault_path()?;
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+}
+
+fn detect_obsidian_vault_path_from_config() -> Option<PathBuf> {
+    let mut config_candidates = Vec::new();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USER")
+                .map(PathBuf::from)
+                .map(|user| PathBuf::from("/Users").join(user))
+        });
+    if let Some(home) = home {
+        config_candidates.push(
+            home.join("Library")
+                .join("Application Support")
+                .join("obsidian")
+                .join("obsidian.json"),
+        );
+        config_candidates.push(
+            home.join("Library")
+                .join("Application Support")
+                .join("Obsidian")
+                .join("obsidian.json"),
+        );
+        config_candidates.push(home.join(".config").join("obsidian").join("obsidian.json"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        config_candidates.push(PathBuf::from(xdg).join("obsidian").join("obsidian.json"));
+    }
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        config_candidates.push(PathBuf::from(app_data).join("obsidian").join("obsidian.json"));
+    }
+
+    for config in config_candidates {
+        let bytes = match fs::read(&config) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let parsed: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let Some(vaults) = parsed.get("vaults").and_then(Value::as_object) else {
+            continue;
+        };
+        let mut selected: Option<(bool, i64, PathBuf)> = None;
+        for vault in vaults.values() {
+            let Some(path_str) = vault.get("path").and_then(Value::as_str) else {
+                continue;
+            };
+            let vault_path = PathBuf::from(path_str);
+            if !vault_path.is_absolute() {
+                continue;
+            }
+            let ts = vault.get("ts").and_then(Value::as_i64).unwrap_or(0);
+            let is_open = vault.get("open").and_then(Value::as_bool).unwrap_or(false);
+            match selected {
+                Some((selected_open, selected_ts, _))
+                    if (is_open as i32, ts) <= (selected_open as i32, selected_ts) => {}
+                _ => selected = Some((is_open, ts, vault_path)),
+            }
+        }
+        if let Some((_, _, path)) = selected {
+            return Some(path);
         }
     }
     None
@@ -1413,6 +2626,267 @@ fn load_all_atoms(root: &Path) -> AppResult<Vec<AtomRecord>> {
     Ok(atoms)
 }
 
+fn load_all_blocks(root: &Path) -> AppResult<Vec<BlockRecord>> {
+    let mut blocks = Vec::new();
+    for rel in ["blocks/active", "blocks/completed", "blocks/archived"] {
+        for value in list_json_entities(root, rel)? {
+            match deserialize_entity::<BlockRecord>(value, "block") {
+                Ok(block) => blocks.push(block),
+                Err(error) => {
+                    tracing::warn!(error = %error, "skipping malformed block file");
+                }
+            }
+        }
+    }
+    Ok(blocks)
+}
+
+fn find_block(root: &Path, block_id: &str) -> AppResult<Option<BlockRecord>> {
+    for rel in ["blocks/active", "blocks/completed", "blocks/archived"] {
+        if let Some(value) = get_json_entity(root, rel, block_id)? {
+            return deserialize_optional_entity(Some(value), "block");
+        }
+    }
+    Ok(None)
+}
+
+fn block_kind_from_atom(atom: &AtomRecord) -> String {
+    if atom.facets.contains(&FacetKind::Task) {
+        "task".to_string()
+    } else if atom.facets.contains(&FacetKind::Note) {
+        "note".to_string()
+    } else if atom.facets.contains(&FacetKind::Meta) {
+        "meta".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+fn block_lifecycle_from_atom(atom: &AtomRecord) -> String {
+    if atom.archived_at.is_some()
+        || atom
+            .facet_data
+            .task
+            .as_ref()
+            .map(|task| task.status == TaskStatus::Archived)
+            .unwrap_or(false)
+    {
+        return "archived".to_string();
+    }
+    if atom
+        .facet_data
+        .task
+        .as_ref()
+        .map(|task| task.status == TaskStatus::Done)
+        .unwrap_or(false)
+    {
+        return "completed".to_string();
+    }
+    "active".to_string()
+}
+
+fn block_id_for_atom(atom_id: &str) -> String {
+    format!("blk_{}", sanitize_component(atom_id))
+}
+
+fn atom_to_block_record(atom: &AtomRecord) -> BlockRecord {
+    let lifecycle = block_lifecycle_from_atom(atom);
+    let task = atom.facet_data.task.as_ref();
+    let meta = atom.facet_data.meta.as_ref();
+    BlockRecord {
+        id: block_id_for_atom(&atom.id),
+        schema_version: 1,
+        atom_id: Some(atom.id.clone()),
+        text: atom.raw_text.clone(),
+        kind: block_kind_from_atom(atom),
+        lifecycle,
+        parent_block_id: atom
+            .relations
+            .parent_id
+            .as_ref()
+            .map(|parent| block_id_for_atom(parent)),
+        thread_ids: atom.relations.thread_ids.clone(),
+        labels: meta.and_then(|value| value.labels.clone()).unwrap_or_default(),
+        categories: meta
+            .and_then(|value| value.categories.clone())
+            .unwrap_or_default(),
+        task_status: task.map(|value| value.status),
+        priority: task.map(|value| value.priority),
+        attention_layer: task.and_then(|value| value.attention_layer),
+        commitment_level: task.and_then(|value| value.commitment_level),
+        completed_at: task.and_then(|value| value.completed_at),
+        archived_at: atom.archived_at,
+        created_at: atom.created_at,
+        updated_at: atom.updated_at,
+        revision: atom.revision,
+    }
+}
+
+fn block_rel_dir_for_lifecycle(lifecycle: &str) -> &'static str {
+    match lifecycle.to_ascii_lowercase().as_str() {
+        "completed" => "blocks/completed",
+        "archived" => "blocks/archived",
+        _ => "blocks/active",
+    }
+}
+
+fn upsert_block_from_atom(root: &Path, atom: &AtomRecord) -> AppResult<BlockRecord> {
+    let mut block = atom_to_block_record(atom);
+    if let Some(existing) = find_block(root, &block.id)? {
+        block.created_at = existing.created_at;
+        block.revision = existing.revision + 1;
+        if block.updated_at <= existing.updated_at {
+            block.updated_at = Utc::now();
+        }
+    }
+
+    let target_rel = block_rel_dir_for_lifecycle(&block.lifecycle);
+    let target_path = json_entity_path(root, target_rel, &block.id);
+
+    for rel in ["blocks/active", "blocks/completed", "blocks/archived"] {
+        if rel == target_rel {
+            continue;
+        }
+        let stale = json_entity_path(root, rel, &block.id);
+        if stale.exists() {
+            let _ = fs::remove_file(stale);
+        }
+    }
+
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| AppError::Io(error.to_string()))?;
+    }
+    write_json_file(&target_path, &block)?;
+    Ok(block)
+}
+
+fn backfill_blocks_from_atoms(root: &Path) -> AppResult<()> {
+    for atom in load_all_atoms(root)? {
+        let block = upsert_block_from_atom(root, &atom)?;
+        let _ = ensure_placement_for_view(root, &block.id, "now", None)?;
+    }
+    Ok(())
+}
+
+fn load_placements_for_view(root: &Path, view_id: &str) -> AppResult<Vec<PlacementRecord>> {
+    let mut placements: Vec<PlacementRecord> = list_json_entities(root, "placements/by-view")?
+        .into_iter()
+        .filter_map(|value| deserialize_entity::<PlacementRecord>(value, "placement").ok())
+        .filter(|placement| placement.view_id == view_id)
+        .collect();
+    placements.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| a.order_key.cmp(&b.order_key))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(placements)
+}
+
+fn ensure_placement_for_view(
+    root: &Path,
+    block_id: &str,
+    view_id: &str,
+    parent_placement_id: Option<String>,
+) -> AppResult<PlacementRecord> {
+    let existing = load_placements_for_view(root, view_id)?
+        .into_iter()
+        .find(|placement| placement.block_id == block_id);
+    if let Some(existing) = existing {
+        return Ok(existing);
+    }
+
+    let next_index = load_placements_for_view(root, view_id)?.len() as i64;
+    let placement_value = json!({
+        "id": format!("placement_{}", Uuid::new_v4().simple()),
+        "schemaVersion": 1,
+        "viewId": view_id,
+        "blockId": block_id,
+        "parentPlacementId": parent_placement_id,
+        "orderKey": new_order_key(next_index),
+        "pinned": false
+    });
+    let saved = upsert_json_entity(root, "placements/by-view", "placement", placement_value, None)?;
+    deserialize_entity(saved, "placement")
+}
+
+fn new_order_key(index: i64) -> String {
+    format!(
+        "{:08}-{}",
+        index.max(0),
+        Uuid::new_v4().simple()
+    )
+}
+
+fn condition_id_for_atom_mode(atom_id: &str, mode: &str) -> String {
+    format!(
+        "condition_{}_{}",
+        sanitize_component(atom_id),
+        sanitize_component(mode)
+    )
+}
+
+fn apply_blocking_to_atom(
+    root: &Path,
+    atom_id: &str,
+    mode: &str,
+    blocked_until: Option<String>,
+    waiting_on_person: Option<String>,
+    waiting_cadence_days: Option<i32>,
+    blocked_by_atom_id: Option<String>,
+) -> AppResult<()> {
+    let mut atom = get_required_atom(root, atom_id)?;
+    let previous_status = atom_status(&atom);
+    upsert_task_facet(&mut atom);
+    if let Some(task) = atom.facet_data.task.as_mut() {
+        task.status = TaskStatus::Blocked;
+    }
+    atom.facet_data.blocking = Some(crate::models::BlockingFacet {
+        mode: mode.to_string(),
+        blocked_until: blocked_until
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok().map(|value| value.with_timezone(&Utc))),
+        waiting_on_person,
+        waiting_cadence_days,
+        blocked_by_atom_id,
+        last_followup_at: None,
+        followup_count: None,
+    });
+    atom.updated_at = Utc::now();
+    atom.revision += 1;
+    write_atom(root, Some(previous_status), &atom)?;
+    let _ = upsert_block_from_atom(root, &atom)?;
+    Ok(())
+}
+
+fn clear_blocking_from_atom_if_unblocked(root: &Path, atom_id: &str) -> AppResult<()> {
+    let active = list_json_entities(root, "conditions/active")?;
+    let has_active = active.iter().any(|condition| {
+        condition.get("atomId").and_then(Value::as_str) == Some(atom_id)
+            && condition.get("status").and_then(Value::as_str) == Some("active")
+    });
+    if has_active {
+        return Ok(());
+    }
+
+    let mut atom = get_required_atom(root, atom_id)?;
+    if atom.facet_data.blocking.is_none() {
+        return Ok(());
+    }
+    let previous_status = atom_status(&atom);
+    atom.facet_data.blocking = None;
+    if let Some(task) = atom.facet_data.task.as_mut() {
+        if task.status == TaskStatus::Blocked {
+            task.status = TaskStatus::Todo;
+        }
+    }
+    atom.updated_at = Utc::now();
+    atom.revision += 1;
+    write_atom(root, Some(previous_status), &atom)?;
+    let _ = upsert_block_from_atom(root, &atom)?;
+    Ok(())
+}
+
 fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>) {
     let Some(filter) = filter else {
         atoms.retain(|atom| atom.archived_at.is_none());
@@ -1422,7 +2896,13 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
     let include_archived = filter.include_archived.unwrap_or(false);
     let statuses = filter.statuses.clone();
     let thread_ids = filter.thread_ids.clone();
+    let labels = filter.labels.clone();
+    let categories = filter.categories.clone();
     let text_query = filter.text_query.as_ref().map(|value| value.to_ascii_lowercase());
+    let attention_layers = filter.attention_layers.clone();
+    let commitment_levels = filter.commitment_levels.clone();
+    let due_from = filter.due_from.as_deref().and_then(parse_filter_date);
+    let due_to = filter.due_to.as_deref().and_then(parse_filter_date);
 
     atoms.retain(|atom| {
         if !include_archived && atom.archived_at.is_some() {
@@ -1462,6 +2942,100 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
             }
         }
 
+        if let Some(expected_labels) = labels.as_ref() {
+            let expected_set: HashSet<String> = expected_labels
+                .iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect();
+            let actual_labels = atom
+                .facet_data
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.labels.clone())
+                .unwrap_or_default();
+            let matches = actual_labels
+                .iter()
+                .any(|label| expected_set.contains(&label.to_ascii_lowercase()));
+            if !matches {
+                return false;
+            }
+        }
+
+        if let Some(expected_categories) = categories.as_ref() {
+            let expected_set: HashSet<String> = expected_categories
+                .iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect();
+            let actual_categories = atom
+                .facet_data
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.categories.clone())
+                .unwrap_or_default();
+            let matches = actual_categories
+                .iter()
+                .any(|category| expected_set.contains(&category.to_ascii_lowercase()));
+            if !matches {
+                return false;
+            }
+        }
+
+        if let Some(expected_layers) = attention_layers.as_ref() {
+            let actual_layer = atom
+                .facet_data
+                .task
+                .as_ref()
+                .and_then(|task| task.attention_layer)
+                .or_else(|| atom.facet_data.attention.as_ref().map(|attention| attention.layer));
+            let Some(actual_layer) = actual_layer else {
+                return false;
+            };
+            if !expected_layers.contains(&actual_layer) {
+                return false;
+            }
+        }
+
+        if let Some(expected_levels) = commitment_levels.as_ref() {
+            let actual_level = atom
+                .facet_data
+                .task
+                .as_ref()
+                .and_then(|task| task.commitment_level)
+                .or_else(|| atom.facet_data.commitment.as_ref().map(|commitment| commitment.level));
+            let Some(actual_level) = actual_level else {
+                return false;
+            };
+            if !expected_levels.contains(&actual_level) {
+                return false;
+            }
+        }
+
+        if due_from.is_some() || due_to.is_some() {
+            let due = atom
+                .facet_data
+                .task
+                .as_ref()
+                .and_then(|task| {
+                    task.hard_due_at
+                        .as_ref()
+                        .or(task.soft_due_at.as_ref())
+                        .map(|value| value.date_naive())
+                });
+            let Some(due) = due else {
+                return false;
+            };
+            if let Some(from) = due_from {
+                if due < from {
+                    return false;
+                }
+            }
+            if let Some(to) = due_to {
+                if due > to {
+                    return false;
+                }
+            }
+        }
+
         if let Some(query) = text_query.as_ref() {
             let mut haystacks = vec![atom.raw_text.to_ascii_lowercase()];
             if let Some(body) = atom.body.as_ref() {
@@ -1497,6 +3071,28 @@ fn compare_atoms(a: &AtomRecord, b: &AtomRecord, sorts: Option<&Vec<NotepadSort>
                     .map(|task| task.priority)
                     .unwrap_or(99)
                     .cmp(&b.facet_data.task.as_ref().map(|task| task.priority).unwrap_or(99)),
+                "softDueAt" => compare_optional_datetime(
+                    a.facet_data
+                        .task
+                        .as_ref()
+                        .and_then(|task| task.soft_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
+                    b.facet_data
+                        .task
+                        .as_ref()
+                        .and_then(|task| task.soft_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
+                ),
+                "hardDueAt" => compare_optional_datetime(
+                    a.facet_data
+                        .task
+                        .as_ref()
+                        .and_then(|task| task.hard_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
+                    b.facet_data
+                        .task
+                        .as_ref()
+                        .and_then(|task| task.hard_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
+                ),
+                "attentionLayer" => attention_rank(a)
+                    .cmp(&attention_rank(b)),
                 "title" => a
                     .facet_data
                     .task
@@ -1526,6 +3122,41 @@ fn compare_atoms(a: &AtomRecord, b: &AtomRecord, sorts: Option<&Vec<NotepadSort>
     }
 
     b.updated_at.cmp(&a.updated_at)
+}
+
+fn compare_optional_datetime(a: Option<i64>, b: Option<i64>) -> Ordering {
+    (a.is_none(), a).cmp(&(b.is_none(), b))
+}
+
+fn attention_rank(atom: &AtomRecord) -> i32 {
+    let layer = atom
+        .facet_data
+        .task
+        .as_ref()
+        .and_then(|task| task.attention_layer)
+        .or_else(|| atom.facet_data.attention.as_ref().map(|attention| attention.layer));
+    match layer {
+        Some(crate::models::AttentionLayer::L3) => 0,
+        Some(crate::models::AttentionLayer::Ram) => 1,
+        Some(crate::models::AttentionLayer::Short) => 2,
+        Some(crate::models::AttentionLayer::Long) => 3,
+        Some(crate::models::AttentionLayer::Archive) => 4,
+        None => 99,
+    }
+}
+
+fn parse_filter_date(input: &str) -> Option<NaiveDate> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(trimmed)
+                .ok()
+                .map(|value| value.with_timezone(&Utc).date_naive())
+        })
 }
 
 fn paginate<T>(items: Vec<T>, limit: Option<u32>, cursor: Option<String>) -> AppResult<PageResponse<T>> {
@@ -1673,6 +3304,12 @@ fn default_now_notepad(now: DateTime<Utc>) -> NotepadViewDefinition {
             field: "priority".to_string(),
             direction: "asc".to_string(),
         }],
+        capture_defaults: Some(crate::models::NotepadCaptureDefaults {
+            initial_facets: Some(vec![FacetKind::Task]),
+            task_status: Some(TaskStatus::Todo),
+            task_priority: Some(3),
+            ..crate::models::NotepadCaptureDefaults::default()
+        }),
         layout_mode: "list".to_string(),
         created_at: now,
         updated_at: now,
@@ -2160,6 +3797,598 @@ pub fn decision_dismiss(
             deserialize_entity(decision, "decision")
         },
     )
+}
+
+pub fn work_sessions_list(
+    root: &Path,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> AppResult<PageResponse<WorkSessionRecord>> {
+    ensure_topology(root)?;
+    let mut items = list_json_entities(root, "sessions/work")?;
+    if let Some(status) = status.as_ref() {
+        items.retain(|item| item.get("status").and_then(Value::as_str) == Some(status.as_str()));
+    }
+    sort_json_by_updated_at_desc(&mut items);
+    let page = paginate(items, limit, cursor)?;
+    deserialize_page(page, "work session")
+}
+
+pub fn work_session_get(root: &Path, session_id: &str) -> AppResult<Option<WorkSessionRecord>> {
+    ensure_topology(root)?;
+    let item = get_json_entity(root, "sessions/work", session_id)?;
+    deserialize_optional_entity(item, "work session")
+}
+
+pub fn work_session_start(root: &Path, request: WorkSessionStartRequest) -> AppResult<WorkSessionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(root, "work.session.start", key.as_deref(), &request, || {
+        let now = Utc::now();
+        let session = json!({
+            "id": format!("ws_{}", Uuid::new_v4().simple()),
+            "status": "running",
+            "focusBlockIds": request.focus_block_ids.clone().unwrap_or_default(),
+            "startedAt": now,
+            "notes": request.note.clone().map(|note| vec![note]).unwrap_or_default(),
+        });
+        let saved = upsert_json_entity(root, "sessions/work", "work_session", session, None)?;
+        append_event(
+            root,
+            build_event("work.session.started", None, json!({"sessionId": saved.get("id")})),
+        )?;
+        deserialize_entity(saved, "work session")
+    })
+}
+
+pub fn work_session_note(
+    root: &Path,
+    session_id: &str,
+    request: WorkSessionNoteRequest,
+) -> AppResult<WorkSessionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "work.session.note",
+        key.as_deref(),
+        &json!({"sessionId": session_id, "request": request}),
+        || {
+            let mut session = get_json_entity(root, "sessions/work", session_id)?
+                .ok_or_else(|| AppError::NotFound(format!("Work session '{}' not found", session_id)))?;
+            let current_revision = session.get("revision").and_then(Value::as_i64).unwrap_or(0);
+            if current_revision != request.expected_revision {
+                return Err(conflict_payload_error(
+                    "work_session",
+                    request.expected_revision,
+                    current_revision,
+                    &session,
+                ));
+            }
+
+            let obj = get_object_mut(&mut session)?;
+            let notes = obj
+                .entry("notes".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(items) = notes {
+                items.push(Value::String(request.note.clone()));
+            }
+            bump_json_revision(obj, Utc::now());
+            write_json_file(&json_entity_path(root, "sessions/work", session_id), &session)?;
+            append_event(
+                root,
+                build_event(
+                    "work.session.noted",
+                    None,
+                    json!({"sessionId": session_id, "note": request.note}),
+                ),
+            )?;
+            deserialize_entity(session, "work session")
+        },
+    )
+}
+
+pub fn work_session_end(
+    root: &Path,
+    session_id: &str,
+    request: WorkSessionEndRequest,
+) -> AppResult<WorkSessionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "work.session.end",
+        key.as_deref(),
+        &json!({"sessionId": session_id, "request": request}),
+        || {
+            let mut patch = json!({
+                "status": "ended",
+                "endedAt": Utc::now()
+            });
+            if let Some(summary_note) = request.summary_note.clone() {
+                patch["summaryNote"] = Value::String(summary_note);
+            }
+            let saved = patch_json_entity(
+                root,
+                "sessions/work",
+                "work_session",
+                session_id,
+                patch,
+                Some(request.expected_revision),
+            )?;
+            append_event(
+                root,
+                build_event("work.session.ended", None, json!({"sessionId": session_id})),
+            )?;
+            deserialize_entity(saved, "work session")
+        },
+    )
+}
+
+pub fn work_session_cancel(
+    root: &Path,
+    session_id: &str,
+    request: WorkSessionCancelRequest,
+) -> AppResult<WorkSessionRecord> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "work.session.cancel",
+        key.as_deref(),
+        &json!({"sessionId": session_id, "request": request}),
+        || {
+            let mut patch = json!({
+                "status": "canceled",
+                "canceledAt": Utc::now()
+            });
+            if let Some(reason) = request.reason.clone() {
+                patch["summaryNote"] = Value::String(reason);
+            }
+            let saved = patch_json_entity(
+                root,
+                "sessions/work",
+                "work_session",
+                session_id,
+                patch,
+                Some(request.expected_revision),
+            )?;
+            append_event(
+                root,
+                build_event(
+                    "work.session.canceled",
+                    None,
+                    json!({"sessionId": session_id}),
+                ),
+            )?;
+            deserialize_entity(saved, "work session")
+        },
+    )
+}
+
+pub fn recurrence_templates_list(
+    root: &Path,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> AppResult<PageResponse<RecurrenceTemplate>> {
+    ensure_topology(root)?;
+    let mut items = list_json_entities(root, "recurrence/templates")?;
+    if let Some(status) = status.as_ref() {
+        items.retain(|item| item.get("status").and_then(Value::as_str) == Some(status.as_str()));
+    }
+    sort_json_by_updated_at_desc(&mut items);
+    let page = paginate(items, limit, cursor)?;
+    deserialize_page(page, "recurrence template")
+}
+
+pub fn recurrence_template_get(
+    root: &Path,
+    template_id: &str,
+) -> AppResult<Option<RecurrenceTemplate>> {
+    ensure_topology(root)?;
+    let value = get_json_entity(root, "recurrence/templates", template_id)?;
+    deserialize_optional_entity(value, "recurrence template")
+}
+
+pub fn recurrence_template_save(
+    root: &Path,
+    template: WorkspaceMutationPayload,
+) -> AppResult<RecurrenceTemplate> {
+    ensure_topology(root)?;
+    let mut template = mutation_payload_to_value(template);
+    let idempotency_key = extract_required_idempotency_key(&mut template, "recurrence.template.save")?;
+    let expected_revision = pop_expected_revision(&mut template);
+    with_idempotency(
+        root,
+        "recurrence.template.save",
+        Some(idempotency_key.as_str()),
+        &json!({"template": template, "expectedRevision": expected_revision}),
+        || {
+            let obj = get_object_mut(&mut template)?;
+            obj.entry("schemaVersion".to_string())
+                .or_insert_with(|| Value::from(1));
+            obj.entry("status".to_string())
+                .or_insert_with(|| Value::String("active".to_string()));
+            obj.entry("frequency".to_string())
+                .or_insert_with(|| Value::String("daily".to_string()));
+            obj.entry("interval".to_string())
+                .or_insert_with(|| Value::from(1));
+            obj.entry("titleTemplate".to_string())
+                .or_insert_with(|| Value::String("Recurring item".to_string()));
+            obj.entry("rawTextTemplate".to_string())
+                .or_insert_with(|| Value::String("- [ ] Recurring item".to_string()));
+            let saved = upsert_json_entity(
+                root,
+                "recurrence/templates",
+                "recurrence_template",
+                template.clone(),
+                expected_revision,
+            )?;
+            deserialize_entity(saved, "recurrence template")
+        },
+    )
+}
+
+pub fn recurrence_template_update(
+    root: &Path,
+    template_id: &str,
+    patch: WorkspaceMutationPayload,
+) -> AppResult<RecurrenceTemplate> {
+    ensure_topology(root)?;
+    let mut patch = mutation_payload_to_value(patch);
+    let idempotency_key = extract_required_idempotency_key(&mut patch, "recurrence.template.update")?;
+    let expected_revision = pop_expected_revision(&mut patch);
+    with_idempotency(
+        root,
+        "recurrence.template.update",
+        Some(idempotency_key.as_str()),
+        &json!({"templateId": template_id, "patch": patch, "expectedRevision": expected_revision}),
+        || {
+            let saved = patch_json_entity(
+                root,
+                "recurrence/templates",
+                "recurrence_template",
+                template_id,
+                patch.clone(),
+                expected_revision,
+            )?;
+            deserialize_entity(saved, "recurrence template")
+        },
+    )
+}
+
+pub fn recurrence_instances_list(
+    root: &Path,
+    template_id: Option<String>,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> AppResult<PageResponse<RecurrenceInstance>> {
+    ensure_topology(root)?;
+    let mut items = list_json_entities(root, "recurrence/instances")?;
+    if let Some(template_id) = template_id.as_ref() {
+        items.retain(|item| item.get("templateId").and_then(Value::as_str) == Some(template_id.as_str()));
+    }
+    if let Some(status) = status.as_ref() {
+        items.retain(|item| item.get("status").and_then(Value::as_str) == Some(status.as_str()));
+    }
+    sort_json_by_updated_at_desc(&mut items);
+    let page = paginate(items, limit, cursor)?;
+    deserialize_page(page, "recurrence instance")
+}
+
+pub fn recurrence_spawn(
+    root: &Path,
+    request: RecurrenceSpawnRequest,
+) -> AppResult<RecurrenceSpawnResponse> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(root, "recurrence.spawn", key.as_deref(), &request, || {
+        recurrence_spawn_inner(root, request.clone())
+    })
+}
+
+fn recurrence_spawn_inner(root: &Path, request: RecurrenceSpawnRequest) -> AppResult<RecurrenceSpawnResponse> {
+    let now = request.now.unwrap_or_else(Utc::now);
+    let allowed_ids: Option<HashSet<String>> = request.template_ids.map(|ids| ids.into_iter().collect());
+    let templates = recurrence_templates_list(root, Some("active".to_string()), Some(500), None)?.items;
+    let mut spawned_instance_ids = Vec::new();
+    let mut touched_template_ids = Vec::new();
+
+    for template in templates {
+        if let Some(allowed) = allowed_ids.as_ref() {
+            if !allowed.contains(&template.id) {
+                continue;
+            }
+        }
+        let next_run_at = template.next_run_at.unwrap_or(template.created_at);
+        if next_run_at > now {
+            continue;
+        }
+        let interval_next = next_recurrence_run(&template, next_run_at);
+        if now > interval_next {
+            let _ = upsert_system_decision(
+                root,
+                format!("recurrence-missed-cycle-{}", template.id),
+                format!("Missed recurrence cycle: {}", template.title_template),
+                "One or more recurrence cycles were missed. Decide whether to backfill or skip.".to_string(),
+                Vec::new(),
+            )?;
+        }
+
+        let capture = CreateBlockInNotepadRequest {
+            notepad_id: template.default_notepad_id.clone().unwrap_or_else(|| "now".to_string()),
+            raw_text: if template.raw_text_template.trim().is_empty() {
+                template.title_template.clone()
+            } else {
+                template.raw_text_template.clone()
+            },
+            body: None,
+            capture_source: Some(crate::models::CaptureSource::Agent),
+            idempotency_key: None,
+        };
+        let block = notepad_block_create_inner(root, capture)?;
+        let instance_value = json!({
+            "id": format!("recurrence_instance_{}", Uuid::new_v4().simple()),
+            "templateId": template.id,
+            "status": "spawned",
+            "scheduledFor": next_run_at,
+            "spawnedAt": now,
+            "atomId": block.atom_id,
+            "blockId": block.id,
+        });
+        let instance = upsert_json_entity(root, "recurrence/instances", "recurrence_instance", instance_value, None)?;
+        if let Some(id) = instance.get("id").and_then(Value::as_str) {
+            spawned_instance_ids.push(id.to_string());
+        }
+        touched_template_ids.push(template.id.clone());
+
+        let next_run = next_recurrence_run(&template, next_run_at);
+        let _ = patch_json_entity(
+            root,
+            "recurrence/templates",
+            "recurrence_template",
+            &template.id,
+            json!({
+                "lastSpawnedAt": now,
+                "nextRunAt": next_run
+            }),
+            Some(template.revision),
+        )?;
+    }
+
+    Ok(RecurrenceSpawnResponse {
+        accepted: true,
+        spawned_instance_ids,
+        touched_template_ids,
+    })
+}
+
+pub fn system_apply_attention_update(
+    root: &Path,
+    request: AttentionUpdateRequest,
+) -> AppResult<AttentionUpdateResponse> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "system.apply_attention_update",
+        key.as_deref(),
+        &request,
+        || system_apply_attention_update_inner(root, request.clone()),
+    )
+}
+
+fn system_apply_attention_update_inner(
+    root: &Path,
+    request: AttentionUpdateRequest,
+) -> AppResult<AttentionUpdateResponse> {
+    let now = request.now.unwrap_or_else(Utc::now);
+    let mut atoms = load_all_atoms(root)?;
+    let active_conditions = load_active_conditions_by_atom(root)?;
+    let mut updated_atom_ids = Vec::new();
+    let mut candidates: Vec<(String, f64, bool, crate::models::AttentionLayer, Option<String>)> = Vec::new();
+
+    for atom in &atoms {
+        if atom.archived_at.is_some() {
+            continue;
+        }
+        let Some(task) = atom.facet_data.task.as_ref() else {
+            continue;
+        };
+        if matches!(task.status, TaskStatus::Done | TaskStatus::Archived) {
+            continue;
+        }
+        let condition = active_conditions
+            .get(&atom.id)
+            .and_then(|items| items.first());
+        let hidden_reason = condition.map(|entry| format!("condition:{}", entry.mode));
+        let heat = compute_heat_score(atom, now);
+        let mut next_layer = derive_attention_layer(task, heat, now);
+        let is_hidden = hidden_reason.is_some();
+        if is_hidden {
+            next_layer = crate::models::AttentionLayer::Long;
+        }
+        candidates.push((atom.id.clone(), heat, is_hidden, next_layer, hidden_reason));
+    }
+
+    let mut visible = candidates
+        .iter()
+        .filter(|(_, _, hidden, _, _)| !hidden)
+        .map(|(id, heat, _, _, _)| (id.clone(), *heat))
+        .collect::<Vec<_>>();
+    visible.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+
+    let l3_allowed = visible
+        .iter()
+        .take(3)
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
+    let ram_allowed = visible
+        .iter()
+        .skip(3)
+        .take(18)
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
+
+    for atom in atoms.iter_mut() {
+        let Some(task) = atom.facet_data.task.as_ref() else {
+            continue;
+        };
+        let Some((_, heat, hidden, mut layer, hidden_reason)) = candidates
+            .iter()
+            .find(|(atom_id, _, _, _, _)| atom_id == &atom.id)
+            .cloned()
+        else {
+            continue;
+        };
+
+        if !hidden {
+            if l3_allowed.contains(&atom.id) {
+                layer = crate::models::AttentionLayer::L3;
+            } else if ram_allowed.contains(&atom.id) {
+                layer = crate::models::AttentionLayer::Ram;
+            } else if layer == crate::models::AttentionLayer::L3 || layer == crate::models::AttentionLayer::Ram {
+                layer = crate::models::AttentionLayer::Short;
+            }
+        }
+
+        let current_layer = task.attention_layer;
+        if current_layer != Some(layer) && should_preserve_dwell(atom, layer, now) {
+            continue;
+        }
+
+        let mut changed = false;
+        if let Some(task_mut) = atom.facet_data.task.as_mut() {
+            if task_mut.attention_layer != Some(layer) {
+                task_mut.attention_layer = Some(layer);
+                changed = true;
+            }
+        }
+
+        let mut attention = atom.facet_data.attention.clone().unwrap_or_default();
+        if attention.layer != layer {
+            attention.layer = layer;
+            attention.last_promoted_at = Some(now);
+            changed = true;
+        }
+        if attention.heat_score != Some(heat) {
+            attention.heat_score = Some(heat);
+            changed = true;
+        }
+        if attention.dwell_started_at.is_none() || changed {
+            attention.dwell_started_at = Some(now);
+        }
+        attention.hidden_reason = hidden_reason;
+        atom.facet_data.attention = Some(attention);
+
+        if changed {
+            let previous_status = atom_status(atom);
+            atom.updated_at = Utc::now();
+            atom.revision += 1;
+            write_atom(root, Some(previous_status), atom)?;
+            let _ = upsert_block_from_atom(root, atom)?;
+            updated_atom_ids.push(atom.id.clone());
+        }
+    }
+
+    let mut decision_ids = Vec::new();
+    let l3_atoms: Vec<&AtomRecord> = atoms
+        .iter()
+        .filter(|atom| {
+            atom.facet_data
+                .task
+                .as_ref()
+                .and_then(|task| task.attention_layer)
+                == Some(crate::models::AttentionLayer::L3)
+        })
+        .collect();
+    if l3_atoms.len() > 3 {
+        let atom_ids = l3_atoms
+            .iter()
+            .map(|atom| atom.id.clone())
+            .collect::<Vec<_>>();
+        let decision_id = upsert_system_decision(
+            root,
+            "attention-l3-overflow".to_string(),
+            "L3 overflow detected".to_string(),
+            "More than 3 tasks are currently in L3. Choose tasks to keep hot.".to_string(),
+            atom_ids,
+        )?;
+        decision_ids.push(decision_id);
+    }
+
+    Ok(AttentionUpdateResponse {
+        accepted: true,
+        updated_atom_ids,
+        decision_ids,
+    })
+}
+
+pub fn system_generate_decision_cards(
+    root: &Path,
+    request: DecisionGenerateRequest,
+) -> AppResult<DecisionGenerateResponse> {
+    ensure_topology(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(
+        root,
+        "system.generate_decision_cards",
+        key.as_deref(),
+        &request,
+        || system_generate_decision_cards_inner(root, request.clone()),
+    )
+}
+
+fn system_generate_decision_cards_inner(
+    root: &Path,
+    request: DecisionGenerateRequest,
+) -> AppResult<DecisionGenerateResponse> {
+    let now = request.now.unwrap_or_else(Utc::now);
+    let atoms = load_all_atoms(root)?;
+    let mut created_or_updated_ids = Vec::new();
+
+    for atom in atoms {
+        let Some(task) = atom.facet_data.task.as_ref() else {
+            continue;
+        };
+        if matches!(task.status, TaskStatus::Done | TaskStatus::Archived) {
+            continue;
+        }
+
+        if let Some(hard_due_at) = task.hard_due_at {
+            if hard_due_at < now {
+                let decision_id = upsert_system_decision(
+                    root,
+                    format!("overdue-hard-due-{}", atom.id),
+                    format!("Overdue task: {}", task.title),
+                    "Hard due date has passed. Choose whether to do now, reschedule, or de-scope.".to_string(),
+                    vec![atom.id.clone()],
+                )?;
+                created_or_updated_ids.push(decision_id);
+            }
+        }
+
+        if task.status == TaskStatus::Blocked && atom.facet_data.blocking.is_none() {
+            let decision_id = upsert_system_decision(
+                root,
+                format!("blocked-missing-condition-{}", atom.id),
+                format!("Blocked task missing condition: {}", task.title),
+                "Task is blocked but no explicit unblock condition is set.".to_string(),
+                vec![atom.id.clone()],
+            )?;
+            created_or_updated_ids.push(decision_id);
+        }
+    }
+
+    created_or_updated_ids.sort();
+    created_or_updated_ids.dedup();
+    Ok(DecisionGenerateResponse {
+        accepted: true,
+        created_or_updated_ids,
+    })
 }
 
 pub fn notification_channels_list(root: &Path) -> AppResult<Vec<String>> {
@@ -2879,18 +5108,30 @@ pub fn migration_plan_create(
             "dryRun": dry_run
         }),
         || {
+            let Some(canonical_domain) = canonical_migration_domain(&domain) else {
+                return Err(AppError::Policy(format!(
+                    "VALIDATION_ERROR: unsupported migration domain '{}'",
+                    domain
+                )));
+            };
+            if to_version <= from_version {
+                return Err(AppError::Policy(
+                    "VALIDATION_ERROR: toVersion must be greater than fromVersion".to_string(),
+                ));
+            }
+            if from_version < 0 {
+                return Err(AppError::Policy(
+                    "VALIDATION_ERROR: fromVersion must be non-negative".to_string(),
+                ));
+            }
+            let steps = migration_steps_for_domain(canonical_domain);
             let plan = json!({
                 "id": format!("migration_plan_{}", Uuid::new_v4().simple()),
-                "domain": domain,
+                "domain": canonical_domain,
                 "fromVersion": from_version,
                 "toVersion": to_version,
                 "dryRun": dry_run,
-                "steps": [
-                    "validate current version",
-                    "prepare migration assets",
-                    "apply migration",
-                    "verify post-migration invariants"
-                ],
+                "steps": steps,
                 "createdAt": Utc::now()
             });
             let saved = upsert_json_entity(root, "migrations/plans", "migration_plan", plan, None)?;
@@ -2915,15 +5156,23 @@ pub fn migration_run_start(
             let Some(plan) = get_json_entity(root, "migrations/plans", plan_id)? else {
                 return Err(AppError::NotFound(format!("Migration plan '{}' not found", plan_id)));
             };
+            let domain = plan
+                .get("domain")
+                .and_then(Value::as_str)
+                .unwrap_or("schema")
+                .to_string();
+            let dry_run = plan.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
 
             let now = Utc::now();
+            let (status, logs, error_message) = execute_migration_plan(root, &domain, dry_run)?;
             let run = json!({
                 "id": format!("migration_run_{}", Uuid::new_v4().simple()),
                 "planId": plan_id,
-                "status": "succeeded",
+                "status": status,
                 "startedAt": now,
                 "finishedAt": now,
-                "logs": ["migration applied successfully"],
+                "logs": logs,
+                "errorMessage": error_message,
                 "planSnapshot": plan
             });
             let saved = upsert_json_entity(root, "migrations/runs", "migration_run", run, None)?;
@@ -2932,15 +5181,20 @@ pub fn migration_run_start(
                 build_event(
                     "migration.run.started",
                     None,
-                    json!({"runId": saved.get("id"), "domain": plan.get("domain")}),
+                    json!({"runId": saved.get("id"), "domain": domain}),
                 ),
             )?;
+            let completed_event = if saved.get("status").and_then(Value::as_str) == Some("succeeded") {
+                "migration.run.completed"
+            } else {
+                "migration.run.failed"
+            };
             append_event(
                 root,
                 build_event(
-                    "migration.run.completed",
+                    completed_event,
                     None,
-                    json!({"runId": saved.get("id"), "domain": plan.get("domain")}),
+                    json!({"runId": saved.get("id"), "domain": domain}),
                 ),
             )?;
             deserialize_entity(saved, "migration run")
@@ -3015,6 +5269,509 @@ fn evaluate_rule_condition(context: &Value, condition: &Value) -> bool {
             .and_then(|(actual, pattern)| regex::Regex::new(pattern).ok().map(|regex| regex.is_match(actual)))
             .unwrap_or(false),
         _ => false,
+    }
+}
+
+fn canonical_migration_domain(domain: &str) -> Option<&'static str> {
+    match domain.trim().to_ascii_lowercase().as_str() {
+        "schema" => Some("schema"),
+        "projection" | "projections" => Some("projection"),
+        "rule" | "rules" => Some("rule"),
+        _ => None,
+    }
+}
+
+fn migration_steps_for_domain(domain: &str) -> Vec<String> {
+    match canonical_migration_domain(domain) {
+        Some("schema") => vec![
+            "validate migration boundaries".to_string(),
+            "backfill deterministic blocks from atoms".to_string(),
+            "materialize placements for notepad memberships".to_string(),
+            "validate atom-to-block and placement integrity".to_string(),
+            "record migration summary counters".to_string(),
+        ],
+        Some("projection") => vec![
+            "validate projection manifests".to_string(),
+            "verify snapshot/checkpoint consistency".to_string(),
+            "record projection migration summary".to_string(),
+        ],
+        Some("rule") => vec![
+            "validate rule definitions".to_string(),
+            "verify scheduler bindings".to_string(),
+            "record rule migration summary".to_string(),
+        ],
+        _ => vec!["validate migration domain".to_string()],
+    }
+}
+
+fn execute_migration_plan(
+    root: &Path,
+    domain: &str,
+    dry_run: bool,
+) -> AppResult<(String, Vec<String>, Option<String>)> {
+    let Some(canonical_domain) = canonical_migration_domain(domain) else {
+        return Ok((
+            "failed".to_string(),
+            vec![format!("unsupported migration domain: {}", domain)],
+            Some(format!("unsupported migration domain '{}'", domain)),
+        ));
+    };
+
+    let mut logs = vec![format!(
+        "starting migration domain={} dryRun={}",
+        canonical_domain, dry_run
+    )];
+
+    let outcome = match canonical_domain {
+        "schema" => execute_schema_migration(root, dry_run),
+        "projection" => execute_projection_migration(root, dry_run),
+        "rule" => execute_rule_migration(root, dry_run),
+        _ => Err(AppError::Policy(format!(
+            "unsupported migration domain '{}'",
+            canonical_domain
+        ))),
+    };
+
+    match outcome {
+        Ok(mut details) => {
+            logs.append(&mut details);
+            Ok(("succeeded".to_string(), logs, None))
+        }
+        Err(error) => {
+            logs.push(format!("failed: {}", error));
+            Ok(("failed".to_string(), logs, Some(error.to_string())))
+        }
+    }
+}
+
+fn list_notepads_for_migration(root: &Path, dry_run: bool) -> AppResult<Vec<NotepadViewDefinition>> {
+    if !dry_run {
+        return notepads_list(root);
+    }
+
+    let mut items = Vec::new();
+    for entry in fs::read_dir(root.join("notepads")).map_err(|error| AppError::Io(error.to_string()))? {
+        let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
+        let path = entry.path();
+        if !is_workspace_doc_file(&path) {
+            continue;
+        }
+        match read_notepad_file(root, &path) {
+            Ok(value) => items.push(value),
+            Err(error) => {
+                tracing::warn!(path = %path.to_string_lossy(), error = %error, "skipping malformed notepad file during migration dry-run");
+            }
+        }
+    }
+
+    if !items.iter().any(|item| item.id == "now") {
+        items.push(default_now_notepad(Utc::now()));
+    }
+    Ok(items)
+}
+
+fn execute_schema_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>> {
+    ensure_topology(root)?;
+    let atoms = load_all_atoms(root)?;
+    let atom_count = atoms.len();
+    let atom_ids: HashSet<String> = atoms.iter().map(|atom| atom.id.clone()).collect();
+    let notepads = list_notepads_for_migration(root, dry_run)?;
+
+    let mut logs = vec![
+        format!("atoms scanned: {}", atom_count),
+        format!("notepads scanned: {}", notepads.len()),
+    ];
+
+    let mut migrated_blocks = 0usize;
+    let mut missing_parent_conflicts = 0usize;
+
+    for atom in &atoms {
+        let parent_missing = atom
+            .relations
+            .parent_id
+            .as_ref()
+            .map(|parent_id| !atom_ids.contains(parent_id))
+            .unwrap_or(false);
+
+        if !dry_run {
+            let mut block = upsert_block_from_atom(root, atom)?;
+            if parent_missing && block.parent_block_id.is_some() {
+                block.parent_block_id = None;
+                block.updated_at = Utc::now();
+                block.revision += 1;
+                write_json_file(
+                    &json_entity_path(root, block_rel_dir_for_lifecycle(&block.lifecycle), &block.id),
+                    &block,
+                )?;
+            }
+        }
+
+        migrated_blocks += 1;
+        if parent_missing {
+            missing_parent_conflicts += 1;
+        }
+    }
+
+    let mut placements_created = 0usize;
+    let mut placements_existing = 0usize;
+
+    for notepad in &notepads {
+        let mut scoped_atoms = atoms.clone();
+        apply_atom_filter(&mut scoped_atoms, Some(&notepad.filters));
+        sort_atoms(&mut scoped_atoms, Some(&notepad.sorts));
+
+        let mut existing_ids: HashSet<String> = load_placements_for_view(root, &notepad.id)?
+            .into_iter()
+            .map(|placement| placement.block_id)
+            .collect();
+
+        for atom in scoped_atoms {
+            let block_id = block_id_for_atom(&atom.id);
+            if existing_ids.contains(&block_id) {
+                placements_existing += 1;
+                continue;
+            }
+
+            placements_created += 1;
+            if !dry_run {
+                let placement = ensure_placement_for_view(root, &block_id, &notepad.id, None)?;
+                existing_ids.insert(placement.block_id);
+            }
+        }
+    }
+
+    let mapped_atoms = if dry_run {
+        atom_count
+    } else {
+        let blocks = load_all_blocks(root)?;
+        let mapped_ids: HashSet<String> = blocks
+            .into_iter()
+            .filter_map(|block| block.atom_id)
+            .collect();
+        atoms.iter().filter(|atom| mapped_ids.contains(&atom.id)).count()
+    };
+
+    let unmapped_atoms = atom_count.saturating_sub(mapped_atoms);
+    logs.push(format!("blocks migrated: {}", migrated_blocks));
+    logs.push(format!(
+        "placements existing={} created={}",
+        placements_existing, placements_created
+    ));
+    logs.push(format!(
+        "migration conflicts: missing_parent={}",
+        missing_parent_conflicts
+    ));
+    logs.push(format!(
+        "validation atomToBlock mapped={} unmapped={}",
+        mapped_atoms, unmapped_atoms
+    ));
+
+    if !dry_run {
+        append_event(
+            root,
+            build_event(
+                "migration.schema.backfilled",
+                None,
+                json!({
+                    "atomsScanned": atom_count,
+                    "blocksMigrated": migrated_blocks,
+                    "placementsCreated": placements_created,
+                    "missingParentConflicts": missing_parent_conflicts,
+                    "unmappedAtoms": unmapped_atoms
+                }),
+            ),
+        )?;
+    }
+
+    if unmapped_atoms > 0 {
+        return Err(AppError::Policy(format!(
+            "MIGRATION_VALIDATION_FAILED: {} atoms did not map to blocks",
+            unmapped_atoms
+        )));
+    }
+
+    Ok(logs)
+}
+
+fn execute_projection_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>> {
+    ensure_topology(root)?;
+    let manifests = list_json_entities(root, "projections/manifests")?;
+    let snapshots = list_json_entities(root, "projections/snapshots")?;
+
+    let logs = vec![
+        format!("projection manifests: {}", manifests.len()),
+        format!("projection snapshots: {}", snapshots.len()),
+        format!("projection migration dryRun={}", dry_run),
+    ];
+    Ok(logs)
+}
+
+fn execute_rule_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>> {
+    ensure_topology(root)?;
+    let rules = list_json_entities(root, "rules/definitions")?;
+    let jobs = list_json_entities(root, "jobs/schedules")?;
+
+    let logs = vec![
+        format!("rules scanned: {}", rules.len()),
+        format!("scheduled jobs scanned: {}", jobs.len()),
+        format!("rule migration dryRun={}", dry_run),
+    ];
+    Ok(logs)
+}
+
+fn derive_attention_layer(task: &TaskFacet, heat: f64, now: DateTime<Utc>) -> crate::models::AttentionLayer {
+    if task.status == TaskStatus::Doing || task.hard_due_at.map(|due| due <= now).unwrap_or(false) {
+        return crate::models::AttentionLayer::L3;
+    }
+    if task.snoozed_until.map(|until| until > now).unwrap_or(false) {
+        return crate::models::AttentionLayer::Long;
+    }
+    if heat >= 85.0 {
+        return crate::models::AttentionLayer::L3;
+    }
+    if heat >= 60.0 {
+        return crate::models::AttentionLayer::Ram;
+    }
+    if heat >= 35.0 {
+        return crate::models::AttentionLayer::Short;
+    }
+    crate::models::AttentionLayer::Long
+}
+
+fn compute_heat_score(atom: &AtomRecord, now: DateTime<Utc>) -> f64 {
+    let Some(task) = atom.facet_data.task.as_ref() else {
+        return 0.0;
+    };
+    let mut heat = match task.priority {
+        1 => 85.0,
+        2 => 72.0,
+        3 => 56.0,
+        4 => 42.0,
+        _ => 30.0,
+    };
+    if task.status == TaskStatus::Doing {
+        heat += 20.0;
+    }
+    if task.commitment_level == Some(crate::models::CommitmentLevel::Hard) {
+        heat += 10.0;
+    }
+    if let Some(dread) = task.dread_level {
+        heat += f64::from(dread.max(0)) * 2.0;
+    }
+    if let Some(hard_due_at) = task.hard_due_at {
+        let hours_until = (hard_due_at - now).num_hours();
+        if hours_until <= 0 {
+            heat += 30.0;
+        } else if hours_until <= 24 {
+            heat += 16.0;
+        } else if hours_until <= 72 {
+            heat += 8.0;
+        }
+    } else if let Some(soft_due_at) = task.soft_due_at {
+        let hours_until = (soft_due_at - now).num_hours();
+        if hours_until <= 24 {
+            heat += 8.0;
+        } else if hours_until <= 72 {
+            heat += 4.0;
+        }
+    }
+
+    if let Some(attention) = atom.facet_data.attention.as_ref() {
+        if let Some(previous_heat) = attention.heat_score {
+            // Apply soft decay from last known heat so stale items drift down over time.
+            let decay_hours = atom
+                .updated_at
+                .signed_duration_since(atom.created_at)
+                .num_hours()
+                .max(1) as f64;
+            let decayed = previous_heat * (0.995_f64.powf(decay_hours.min(120.0)));
+            heat = (heat * 0.65) + (decayed * 0.35);
+        }
+    }
+
+    heat.clamp(0.0, 100.0)
+}
+
+fn should_preserve_dwell(atom: &AtomRecord, next_layer: crate::models::AttentionLayer, now: DateTime<Utc>) -> bool {
+    let Some(current_layer) = atom.facet_data.task.as_ref().and_then(|task| task.attention_layer) else {
+        return false;
+    };
+    if current_layer == next_layer {
+        return false;
+    }
+    let Some(attention) = atom.facet_data.attention.as_ref() else {
+        return false;
+    };
+    let Some(dwell_started_at) = attention.dwell_started_at else {
+        return false;
+    };
+    let dwell_minutes = (now - dwell_started_at).num_minutes();
+    if dwell_minutes >= 90 {
+        return false;
+    }
+    let task = atom.facet_data.task.as_ref();
+    let urgent = task
+        .and_then(|item| item.hard_due_at)
+        .map(|due| due <= now)
+        .unwrap_or(false)
+        || task
+            .map(|item| item.status == TaskStatus::Doing || item.priority <= 1)
+            .unwrap_or(false);
+    !urgent
+}
+
+fn load_active_conditions_by_atom(root: &Path) -> AppResult<HashMap<String, Vec<ConditionRecord>>> {
+    let mut map: HashMap<String, Vec<ConditionRecord>> = HashMap::new();
+    for value in list_json_entities(root, "conditions/active")? {
+        if let Ok(condition) = deserialize_entity::<ConditionRecord>(value, "condition") {
+            if condition.status == "active" {
+                map.entry(condition.atom_id.clone()).or_default().push(condition);
+            }
+        }
+    }
+    Ok(map)
+}
+
+fn upsert_system_decision(
+    root: &Path,
+    dedupe_key: String,
+    title: String,
+    body: String,
+    atom_ids: Vec<String>,
+) -> AppResult<String> {
+    let pending = list_json_entities(root, "prompts/pending")?;
+    for existing in pending {
+        if existing
+            .get("dedupeKey")
+            .and_then(Value::as_str)
+            .map(|value| value == dedupe_key.as_str())
+            .unwrap_or(false)
+        {
+            let decision_id = existing
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::Internal("existing decision missing id".to_string()))?;
+            let now = Utc::now();
+            let next_escalation = existing
+                .get("escalationLevel")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                + 1;
+            let next_notify_count = existing
+                .get("notifyCount")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                + 1;
+            let mut merged_atom_ids = existing
+                .get("atomIds")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            merged_atom_ids.extend(atom_ids);
+            merged_atom_ids.sort();
+            merged_atom_ids.dedup();
+            let _ = patch_json_entity(
+                root,
+                "prompts/pending",
+                "decision",
+                decision_id,
+                json!({
+                    "status": "pending",
+                    "title": title,
+                    "body": body,
+                    "atomIds": merged_atom_ids,
+                    "escalationLevel": next_escalation,
+                    "notifyCount": next_notify_count,
+                    "lastNotifiedAt": now,
+                }),
+                existing.get("revision").and_then(Value::as_i64),
+            )?;
+            return Ok(decision_id.to_string());
+        }
+    }
+
+    let decision = json!({
+        "id": format!("decision_{}", Uuid::new_v4().simple()),
+        "schemaVersion": 1,
+        "type": "force_decision",
+        "status": "pending",
+        "priority": 2,
+        "title": title,
+        "body": body,
+        "atomIds": atom_ids,
+        "options": [
+            {"id":"do_now","label":"Do now","actionKind":"task.do_now"},
+            {"id":"reschedule","label":"Reschedule","actionKind":"task.reschedule"},
+            {"id":"de_scope","label":"De-scope","actionKind":"task.de_scope"}
+        ],
+        "dedupeKey": dedupe_key,
+        "escalationLevel": 0,
+        "notifyCount": 1,
+        "lastNotifiedAt": Utc::now(),
+    });
+    let saved = upsert_json_entity(root, "prompts/pending", "decision", decision, None)?;
+    let decision_id = saved
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Internal("created decision missing id".to_string()))?
+        .to_string();
+    append_event(
+        root,
+        build_event(
+            "decision.created",
+            None,
+            json!({"decisionId": decision_id, "dedupeKey": dedupe_key}),
+        ),
+    )?;
+    Ok(decision_id)
+}
+
+fn next_recurrence_run(template: &RecurrenceTemplate, from: DateTime<Utc>) -> DateTime<Utc> {
+    let interval = i64::from(template.interval.max(1));
+    match template.frequency.to_ascii_lowercase().as_str() {
+        "daily" => from + chrono::Duration::days(interval),
+        "weekly" => {
+            let by_days = parse_weekday_list(&template.by_day);
+            if by_days.is_empty() {
+                return from + chrono::Duration::weeks(interval);
+            }
+            let max_probe_days = 14 * interval.max(1);
+            for offset in 1..=max_probe_days {
+                let candidate = from + chrono::Duration::days(offset);
+                if by_days.contains(&candidate.weekday()) {
+                    return candidate;
+                }
+            }
+            from + chrono::Duration::weeks(interval)
+        }
+        "monthly" => from + chrono::Duration::days(30 * interval),
+        _ => from + chrono::Duration::days(interval),
+    }
+}
+
+fn parse_weekday_list(items: &[String]) -> HashSet<Weekday> {
+    items
+        .iter()
+        .filter_map(|item| parse_weekday(item))
+        .collect::<HashSet<_>>()
+}
+
+fn parse_weekday(value: &str) -> Option<Weekday> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "mon" | "monday" => Some(Weekday::Mon),
+        "tue" | "tues" | "tuesday" => Some(Weekday::Tue),
+        "wed" | "wednesday" => Some(Weekday::Wed),
+        "thu" | "thurs" | "thursday" => Some(Weekday::Thu),
+        "fri" | "friday" => Some(Weekday::Fri),
+        "sat" | "saturday" => Some(Weekday::Sat),
+        "sun" | "sunday" => Some(Weekday::Sun),
+        _ => None,
     }
 }
 
@@ -3390,6 +6147,9 @@ fn validate_registry_uniqueness(root: &Path, candidate: &Value, current_id: Opti
 fn default_feature_flags() -> Vec<Value> {
     let now = Utc::now().to_rfc3339();
     [
+        "workspace.blocks_v2",
+        "workspace.placements_v2",
+        "workspace.capture_policy_v2",
         "workspace.rules_engine",
         "workspace.scheduler",
         "workspace.decision_queue",
@@ -3398,7 +6158,9 @@ fn default_feature_flags() -> Vec<Value> {
         "workspace.registry",
         "workspace.semantic_index",
         "workspace.decay_engine",
+        "workspace.focus_sessions_v2",
         "workspace.recurrence",
+        "workspace.recurrence_v2",
         "workspace.agent_handoff",
     ]
     .iter()
@@ -3496,6 +6258,248 @@ mod tests {
         assert!(atoms.items.is_empty());
         assert!(notepads.iter().any(|value| value.id == "now"));
         assert!(events.items.is_empty());
+    }
+
+    #[test]
+    fn condition_lifecycle_updates_atom_blocking_state() {
+        let root = temp_root();
+        let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
+
+        let condition = condition_set_person(
+            root.path(),
+            ConditionSetPersonRequest {
+                atom_id: atom.id.clone(),
+                waiting_on_person: "Sam".to_string(),
+                cadence_days: 3,
+                idempotency_key: Some("condition-person-key".to_string()),
+            },
+        )
+        .expect("condition set person");
+        assert_eq!(condition.status, "active");
+        assert_eq!(condition.mode, "person");
+
+        let blocked = atom_get(root.path(), &atom.id)
+            .expect("atom get")
+            .expect("atom exists");
+        assert_eq!(
+            blocked
+                .facet_data
+                .task
+                .as_ref()
+                .map(|task| task.status),
+            Some(TaskStatus::Blocked)
+        );
+        assert_eq!(
+            blocked
+                .facet_data
+                .blocking
+                .as_ref()
+                .and_then(|blocking| blocking.waiting_on_person.as_ref())
+                .map(String::as_str),
+            Some("Sam")
+        );
+
+        let followed_up = condition_followup_log(
+            root.path(),
+            &condition.id,
+            ConditionFollowupRequest {
+                expected_revision: condition.revision,
+                followed_up_at: None,
+                idempotency_key: Some("condition-followup-key".to_string()),
+            },
+        )
+        .expect("condition followup");
+        assert!(followed_up.last_followup_at.is_some());
+        assert!(followed_up.next_followup_at.is_some());
+
+        let resolved = condition_resolve(
+            root.path(),
+            &condition.id,
+            ConditionResolveRequest {
+                expected_revision: followed_up.revision,
+                idempotency_key: Some("condition-resolve-key".to_string()),
+            },
+        )
+        .expect("condition resolve");
+        assert_eq!(resolved.status, "satisfied");
+
+        let active = conditions_list(
+            root.path(),
+            ListConditionsRequest {
+                status: Some("active".to_string()),
+                ..ListConditionsRequest::default()
+            },
+        )
+        .expect("active conditions");
+        assert!(active.items.is_empty());
+
+        let after = atom_get(root.path(), &atom.id)
+            .expect("atom get after")
+            .expect("atom exists");
+        assert!(after.facet_data.blocking.is_none());
+        assert_eq!(
+            after.facet_data.task.as_ref().map(|task| task.status),
+            Some(TaskStatus::Todo)
+        );
+    }
+
+    #[test]
+    fn schema_migration_backfills_placements_for_matching_notepads() {
+        let root = temp_root();
+        let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
+
+        let _focus = notepad_save(
+            root.path(),
+            SaveNotepadViewRequest {
+                expected_revision: None,
+                idempotency_key: Some("focus-notepad-key".to_string()),
+                definition: crate::models::NotepadViewDefinitionInput {
+                    id: "focus".to_string(),
+                    schema_version: 1,
+                    name: "Focus".to_string(),
+                    description: Some("Focused tasks".to_string()),
+                    is_system: false,
+                    filters: NotepadFilter {
+                        facet: Some(FacetKind::Task),
+                        statuses: Some(vec![TaskStatus::Todo, TaskStatus::Doing, TaskStatus::Blocked]),
+                        include_archived: Some(false),
+                        ..NotepadFilter::default()
+                    },
+                    sorts: vec![NotepadSort {
+                        field: "priority".to_string(),
+                        direction: "asc".to_string(),
+                    }],
+                    capture_defaults: None,
+                    layout_mode: "list".to_string(),
+                },
+            },
+        )
+        .expect("focus notepad saved");
+
+        let plan = migration_plan_create(
+            root.path(),
+            "schema".to_string(),
+            1,
+            2,
+            false,
+            Some("schema-migration-plan-key".to_string()),
+        )
+        .expect("migration plan create");
+
+        let run = migration_run_start(root.path(), &plan.id, Some("schema-migration-run-key".to_string()))
+            .expect("migration run start");
+        assert_eq!(run.status, "succeeded");
+        assert!(run.logs.iter().any(|line| line.contains("blocks migrated")));
+
+        let block_id = block_id_for_atom(&atom.id);
+        let focus = placements_list(
+            root.path(),
+            ListPlacementsRequest {
+                view_id: Some("focus".to_string()),
+                ..ListPlacementsRequest::default()
+            },
+        )
+        .expect("focus placements");
+        assert!(focus.items.iter().any(|placement| placement.block_id == block_id));
+    }
+
+    #[test]
+    fn obsidian_task_sync_imports_and_archives_removed_tasks() {
+        let vault = temp_root();
+        let command_center_root = vault.path().join("command-center");
+        ensure_topology(&command_center_root).expect("topology");
+        fs::create_dir_all(command_center_root.join("tasks")).expect("create tasks folder");
+
+        fs::write(
+            vault.path().join("inbox.md"),
+            "---\ntitle: Outside Vault Root\n---\n\n- [ ] should stay out of sync\n",
+        )
+        .expect("write outside note");
+        fs::write(
+            command_center_root.join("tasks").join("inbox.md"),
+            "---\ntitle: Inbox\n---\n\n- [ ] call client\n- [x] shipped release\n",
+        )
+        .expect("write command-center inbox");
+        fs::write(
+            command_center_root.join("atoms/active/system.md"),
+            "- [ ] system-managed task should be ignored\n",
+        )
+        .expect("write system-managed atom");
+
+        let first = obsidian_tasks_sync_for_vault(&command_center_root, vault.path()).expect("first sync");
+        assert_eq!(first.discovered_tasks, 2);
+        assert_eq!(first.created_atoms, 2);
+
+        let first_page = atoms_list(
+            &command_center_root,
+            ListAtomsRequest {
+                limit: Some(200),
+                cursor: None,
+                filter: Some(NotepadFilter {
+                    facet: Some(FacetKind::Task),
+                    include_archived: Some(true),
+                    ..NotepadFilter::default()
+                }),
+                sort: None,
+            },
+        )
+        .expect("atoms list");
+        assert!(first_page.items.iter().any(|atom| atom.raw_text.contains("call client")));
+        assert!(first_page.items.iter().any(|atom| atom.raw_text.contains("shipped release")));
+        assert!(!first_page.items.iter().any(|atom| atom.raw_text.contains("should stay out of sync")));
+        assert!(!first_page.items.iter().any(|atom| atom.raw_text.contains("system-managed task")));
+
+        fs::write(
+            command_center_root.join("tasks").join("inbox.md"),
+            "- [x] call client\n",
+        )
+        .expect("rewrite inbox");
+        let second = obsidian_tasks_sync_for_vault(&command_center_root, vault.path()).expect("second sync");
+        assert_eq!(second.discovered_tasks, 1);
+        assert!(second.updated_atoms + second.created_atoms >= 1);
+        assert!(second.archived_atoms >= 1);
+
+        let second_page = atoms_list(
+            &command_center_root,
+            ListAtomsRequest {
+                limit: Some(200),
+                cursor: None,
+                filter: Some(NotepadFilter {
+                    facet: Some(FacetKind::Task),
+                    include_archived: Some(true),
+                    ..NotepadFilter::default()
+                }),
+                sort: None,
+            },
+        )
+        .expect("atoms list after second sync");
+        let call = second_page
+            .items
+            .iter()
+            .find(|atom| atom.raw_text.contains("call client"))
+            .expect("call task");
+        assert_eq!(
+            call.facet_data.task.as_ref().map(|task| task.status),
+            Some(TaskStatus::Done)
+        );
+    }
+
+    #[test]
+    fn obsidian_cli_content_encoding_escapes_multiline_payloads() {
+        let encoded = encode_obsidian_cli_content("line one\nline\\two\tend");
+        assert_eq!(encoded, "line one\\nline\\\\two\\tend");
+    }
+
+    #[test]
+    fn obsidian_cli_write_applied_requires_content_change() {
+        let root = temp_root();
+        let path = root.path().join("note.md");
+        fs::write(&path, "before").expect("write before");
+
+        assert!(!obsidian_cli_write_applied(&path, "after", Some("before")));
+
+        fs::write(&path, "after").expect("write after");
+        assert!(obsidian_cli_write_applied(&path, "after", Some("before")));
     }
 
     #[test]

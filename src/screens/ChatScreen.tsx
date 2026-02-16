@@ -18,7 +18,7 @@ const MODEL_OPTIONS: Record<Provider, string[]> = {
 
 const DEFAULT_CHAT_MODEL: Record<Provider, string> = {
   codex: "gpt-5.3-codex",
-  claude: "sonnet"
+  claude: "opus"
 };
 
 type CodexReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh";
@@ -287,6 +287,7 @@ export function ChatScreen(): JSX.Element {
   const conversationRuns = selectedDetail?.runs ?? [];
 
   useEffect(() => {
+    if (pendingChatHandled.current) return;
     if (selectedConversationId && conversations.some((conversation) => conversation.id === selectedConversationId)) {
       return;
     }
@@ -340,22 +341,28 @@ export function ChatScreen(): JSX.Element {
 
     setProvider("claude");
 
+    const capturedWorkspace = workspace;
+    const capturedModel = modelsByProvider.claude.trim() || undefined;
+    const capturedCtx = ctx;
+
+    actions.setPendingChatContext(null);
+
     void (async () => {
       try {
-        const title = ctx.initialMessage.length > 60
-          ? ctx.initialMessage.slice(0, 57) + "..."
-          : ctx.initialMessage;
+        const title = capturedCtx.initialMessage.length > 60
+          ? capturedCtx.initialMessage.slice(0, 57) + "..."
+          : capturedCtx.initialMessage;
         const created = await actions.createConversation("claude", title);
         if (!created) return;
 
         const { runId } = await actions.sendConversationMessage({
           provider: "claude",
           conversationId: created.id,
-          prompt: ctx.initialMessage,
-          model: modelsByProvider.claude.trim() || undefined,
+          prompt: capturedCtx.initialMessage,
+          model: capturedModel,
           outputFormat: "text",
-          cwd: workspace,
-          ...(ctx.systemPrompt ? { harness: { systemPrompt: ctx.systemPrompt } } : {}),
+          cwd: capturedWorkspace,
+          ...(capturedCtx.systemPrompt ? { harness: { systemPrompt: capturedCtx.systemPrompt } } : {}),
           queuePriority: 0,
           timeoutSeconds: 300,
           maxRetries: 0,
@@ -364,8 +371,9 @@ export function ChatScreen(): JSX.Element {
 
         await actions.selectConversation("claude", created.id);
         await actions.selectRun(runId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
-        actions.setPendingChatContext(null);
         pendingChatHandled.current = false;
       }
     })();

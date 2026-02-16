@@ -16,10 +16,13 @@ use crate::harness::shell_prelude::prepare_shell_prelude;
 use crate::harness::structured_output::{resolve_structured_output, validate_structured_output};
 use crate::models::{
     AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
-    ArchiveAtomRequest, AtomRecord, ClassificationResult, ClassificationSource, CreateAtomRequest,
+    ArchiveAtomRequest, AtomRecord, AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord,
+    ClassificationResult, ClassificationSource, CreateAtomRequest, CreateBlockInNotepadRequest,
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
-    ExportResponse, ListAtomsRequest, ListConversationsFilters, ListEventsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
-    MetricSnapshot, NotepadViewDefinition, PageResponse, Profile, Provider, RenameConversationPayload, RerunResponse, RunDetail,
+    DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest,
+    ListConversationsFilters, ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricRefreshResponse,
+    MetricSnapshot, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider,
+    RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
     SaveNotepadViewRequest, SetTaskStatusRequest, TaskReopenRequest,
     ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
@@ -30,7 +33,10 @@ use crate::models::{
     NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint,
     ProjectionDefinition, ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
     RegistrySuggestionsResponse, SemanticChunk, SemanticReindexResponse, SemanticSearchRequest, SemanticSearchResponse,
-    GovernancePoliciesResponse, FeatureFlag, WorkspaceCapabilitySnapshot, MigrationPlan, MigrationRun,
+    GovernancePoliciesResponse, FeatureFlag, WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest,
+    WorkSessionRecord, WorkSessionStartRequest, WorkspaceCapabilitySnapshot, MigrationPlan, MigrationRun,
+    ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest, ConditionSetDateRequest,
+    ConditionSetPersonRequest, ConditionSetTaskRequest, ListConditionsRequest, ObsidianTaskSyncResult,
 };
 use crate::policy::PolicyEngine;
 use crate::redaction::Redactor;
@@ -281,7 +287,7 @@ impl RunnerCore {
         };
         self.db.insert_capability_snapshot(&snapshot)?;
 
-        let grants = self.db.list_workspace_grants()?;
+        let grants = self.list_workspace_grants()?;
         self.policy
             .validate(&effective_payload, &settings, &grants, &capability)?;
         self.adapter_for(effective_payload.provider).validate(&effective_payload)?;
@@ -2060,7 +2066,26 @@ impl RunnerCore {
     }
 
     pub fn list_workspace_grants(&self) -> AppResult<Vec<WorkspaceGrant>> {
-        self.db.list_workspace_grants()
+        let mut grants = self.db.list_workspace_grants()?;
+        if let Some(obsidian_root) = workspace::detect_obsidian_command_center_root() {
+            let obsidian_path = obsidian_root.to_string_lossy().to_string();
+            let already_present = grants
+                .iter()
+                .any(|grant| grant.path == obsidian_path && grant.revoked_at.is_none());
+            if !already_present {
+                grants.insert(
+                    0,
+                    WorkspaceGrant {
+                        id: "obsidian-vault-command-center".to_string(),
+                        path: obsidian_path,
+                        granted_by: "obsidian".to_string(),
+                        granted_at: Utc::now(),
+                        revoked_at: None,
+                    },
+                );
+            }
+        }
+        Ok(grants)
     }
 
     pub fn grant_workspace(&self, path: &str) -> AppResult<WorkspaceGrant> {
@@ -2110,6 +2135,11 @@ impl RunnerCore {
     pub fn workspace_health_get(&self) -> AppResult<WorkspaceHealth> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::health(&root)
+    }
+
+    pub fn obsidian_tasks_sync(&self) -> AppResult<ObsidianTaskSyncResult> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::obsidian_tasks_sync(&root)
     }
 
     pub fn atoms_list(&self, request: ListAtomsRequest) -> AppResult<PageResponse<AtomRecord>> {
@@ -2199,6 +2229,110 @@ impl RunnerCore {
     ) -> AppResult<PageResponse<AtomRecord>> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::notepad_atoms_list(&root, notepad_id, limit, cursor)
+    }
+
+    pub fn notepad_block_create(&self, request: CreateBlockInNotepadRequest) -> AppResult<BlockRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notepad_block_create(&root, request)
+    }
+
+    pub fn blocks_list(&self, request: ListBlocksRequest) -> AppResult<PageResponse<BlockRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::blocks_list(&root, request)
+    }
+
+    pub fn block_get(&self, block_id: &str) -> AppResult<Option<BlockRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::block_get(&root, block_id)
+    }
+
+    pub fn placements_list(
+        &self,
+        request: ListPlacementsRequest,
+    ) -> AppResult<PageResponse<PlacementRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::placements_list(&root, request)
+    }
+
+    pub fn placement_save(
+        &self,
+        placement: crate::models::WorkspaceMutationPayload,
+    ) -> AppResult<PlacementRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::placement_save(&root, placement)
+    }
+
+    pub fn placement_delete(
+        &self,
+        placement_id: &str,
+        idempotency_key: Option<String>,
+    ) -> AppResult<BooleanResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::placement_delete(&root, placement_id, idempotency_key)
+    }
+
+    pub fn placements_reorder(
+        &self,
+        view_id: &str,
+        request: PlacementReorderRequest,
+    ) -> AppResult<Vec<PlacementRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::placements_reorder(&root, view_id, request)
+    }
+
+    pub fn conditions_list(
+        &self,
+        request: ListConditionsRequest,
+    ) -> AppResult<PageResponse<ConditionRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::conditions_list(&root, request)
+    }
+
+    pub fn condition_get(&self, condition_id: &str) -> AppResult<Option<ConditionRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_get(&root, condition_id)
+    }
+
+    pub fn condition_set_date(&self, request: ConditionSetDateRequest) -> AppResult<ConditionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_set_date(&root, request)
+    }
+
+    pub fn condition_set_person(&self, request: ConditionSetPersonRequest) -> AppResult<ConditionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_set_person(&root, request)
+    }
+
+    pub fn condition_set_task(&self, request: ConditionSetTaskRequest) -> AppResult<ConditionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_set_task(&root, request)
+    }
+
+    pub fn condition_followup_log(
+        &self,
+        condition_id: &str,
+        request: ConditionFollowupRequest,
+    ) -> AppResult<ConditionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_followup_log(&root, condition_id, request)
+    }
+
+    pub fn condition_resolve(
+        &self,
+        condition_id: &str,
+        request: ConditionResolveRequest,
+    ) -> AppResult<ConditionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_resolve(&root, condition_id, request)
+    }
+
+    pub fn condition_cancel(
+        &self,
+        condition_id: &str,
+        request: ConditionCancelRequest,
+    ) -> AppResult<ConditionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::condition_cancel(&root, condition_id, request)
     }
 
     pub fn events_list(&self, request: ListEventsRequest) -> AppResult<PageResponse<WorkspaceEventRecord>> {
@@ -2373,6 +2507,117 @@ impl RunnerCore {
     ) -> AppResult<DecisionPrompt> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::decision_dismiss(&root, decision_id, reason, idempotency_key)
+    }
+
+    pub fn work_sessions_list(
+        &self,
+        status: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<WorkSessionRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::work_sessions_list(&root, status, limit, cursor)
+    }
+
+    pub fn work_session_get(&self, session_id: &str) -> AppResult<Option<WorkSessionRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::work_session_get(&root, session_id)
+    }
+
+    pub fn work_session_start(&self, request: WorkSessionStartRequest) -> AppResult<WorkSessionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::work_session_start(&root, request)
+    }
+
+    pub fn work_session_note(
+        &self,
+        session_id: &str,
+        request: WorkSessionNoteRequest,
+    ) -> AppResult<WorkSessionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::work_session_note(&root, session_id, request)
+    }
+
+    pub fn work_session_end(
+        &self,
+        session_id: &str,
+        request: WorkSessionEndRequest,
+    ) -> AppResult<WorkSessionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::work_session_end(&root, session_id, request)
+    }
+
+    pub fn work_session_cancel(
+        &self,
+        session_id: &str,
+        request: WorkSessionCancelRequest,
+    ) -> AppResult<WorkSessionRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::work_session_cancel(&root, session_id, request)
+    }
+
+    pub fn recurrence_templates_list(
+        &self,
+        status: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<RecurrenceTemplate>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::recurrence_templates_list(&root, status, limit, cursor)
+    }
+
+    pub fn recurrence_template_get(&self, template_id: &str) -> AppResult<Option<RecurrenceTemplate>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::recurrence_template_get(&root, template_id)
+    }
+
+    pub fn recurrence_template_save(
+        &self,
+        payload: crate::models::WorkspaceMutationPayload,
+    ) -> AppResult<RecurrenceTemplate> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::recurrence_template_save(&root, payload)
+    }
+
+    pub fn recurrence_template_update(
+        &self,
+        template_id: &str,
+        payload: crate::models::WorkspaceMutationPayload,
+    ) -> AppResult<RecurrenceTemplate> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::recurrence_template_update(&root, template_id, payload)
+    }
+
+    pub fn recurrence_instances_list(
+        &self,
+        template_id: Option<String>,
+        status: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<RecurrenceInstance>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::recurrence_instances_list(&root, template_id, status, limit, cursor)
+    }
+
+    pub fn recurrence_spawn(&self, request: RecurrenceSpawnRequest) -> AppResult<RecurrenceSpawnResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::recurrence_spawn(&root, request)
+    }
+
+    pub fn system_apply_attention_update(
+        &self,
+        request: AttentionUpdateRequest,
+    ) -> AppResult<AttentionUpdateResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::system_apply_attention_update(&root, request)
+    }
+
+    pub fn system_generate_decision_cards(
+        &self,
+        request: DecisionGenerateRequest,
+    ) -> AppResult<DecisionGenerateResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::system_generate_decision_cards(&root, request)
     }
 
     pub fn notification_channels_list(&self) -> AppResult<Vec<String>> {
@@ -3278,6 +3523,9 @@ impl RunnerCore {
         if let Some(cwd) = requested.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
             return Ok(cwd);
         }
+        if let Some(obsidian_root) = workspace::detect_obsidian_command_center_root() {
+            return Ok(obsidian_root.to_string_lossy().to_string());
+        }
         let grants = self.db.list_workspace_grants()?;
         let active = grants
             .into_iter()
@@ -3291,8 +3539,26 @@ impl RunnerCore {
             tracing::info!(root = %obsidian_root.to_string_lossy(), "workspace root resolved from obsidian vault");
             return Ok(obsidian_root);
         }
+        let grants = self.db.list_workspace_grants()?;
+        if let Some(grant_path) = grants
+            .into_iter()
+            .find(|grant| grant.revoked_at.is_none())
+            .map(|grant| grant.path)
+        {
+            let grant = PathBuf::from(grant_path);
+            let fallback = if grant.ends_with("command-center") {
+                grant
+            } else {
+                grant.join("command-center")
+            };
+            tracing::warn!(
+                root = %fallback.to_string_lossy(),
+                "workspace root fallback to workspace grant because obsidian vault path is unavailable"
+            );
+            return Ok(fallback);
+        }
         Err(AppError::Policy(
-            "Obsidian vault path unavailable. Ensure the `obsidian` CLI is installed, a vault is open, and `obsidian vault info=path` returns a path.".to_string(),
+            "Obsidian vault path unavailable and no workspace grant fallback found. Ensure the `obsidian` CLI is installed and a vault is open, or add a workspace grant in Settings.".to_string(),
         ))
     }
 

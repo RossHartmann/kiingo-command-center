@@ -18,7 +18,7 @@ const MODEL_OPTIONS: Record<Provider, string[]> = {
 
 const DEFAULT_CHAT_MODEL: Record<Provider, string> = {
   codex: "gpt-5.3-codex",
-  claude: "sonnet"
+  claude: "opus"
 };
 
 type CodexReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh";

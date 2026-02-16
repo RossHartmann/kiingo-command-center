@@ -103,6 +103,7 @@ export type Screen =
   | "team-scorecard"
   | "team-rocks"
   | "tasks"
+  | "notepad"
   | "chat"
   | "composer"
   | "live"
@@ -416,10 +417,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         listWorkspaceGrants(),
         getSettings()
       ]);
-      const [atomPageResult, notepadsResult] = await Promise.allSettled([
-        atomsList({ limit: 500, filter: { facet: "task", includeArchived: false }, sort: [{ field: "updatedAt", direction: "desc" }] }),
-        notepadsList()
-      ]);
+      const [notepadsResult] = await Promise.allSettled([notepadsList()]);
 
       const errors: string[] = [];
       const collectError = (value: PromiseRejectedResult): void => {
@@ -460,12 +458,6 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         safeDispatch({ type: "set_settings", settings: settingsResult.value });
       } else {
         collectError(settingsResult);
-      }
-      if (atomPageResult.status === "fulfilled") {
-        safeDispatch({ type: "set_workspace_atoms", atoms: atomPageResult.value.items });
-      } else {
-        safeDispatch({ type: "set_workspace_atoms", atoms: [] });
-        console.warn("workspace atoms preload failed", atomPageResult.reason);
       }
       if (notepadsResult.status === "fulfilled") {
         safeDispatch({ type: "set_workspace_notepads", notepads: notepadsResult.value });
@@ -741,52 +733,31 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         safeDispatch({ type: "patch_screen_metric_layouts", screenId, layouts });
       },
       loadWorkspaceAtoms: async (request) => {
-        const page = await atomsList({
-          limit: 500,
-          filter: { facet: "task", includeArchived: false },
-          sort: [{ field: "updatedAt", direction: "desc" }],
-          ...request
-        });
-        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        const atoms = await fetchAllTaskAtoms(request);
+        safeDispatch({ type: "set_workspace_atoms", atoms });
       },
       createWorkspaceAtom: async (payload) => {
         const atom = await atomCreate(payload);
-        const page = await atomsList({
-          limit: 500,
-          filter: { facet: "task", includeArchived: false },
-          sort: [{ field: "updatedAt", direction: "desc" }]
-        });
-        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        const atoms = await fetchAllTaskAtoms();
+        safeDispatch({ type: "set_workspace_atoms", atoms });
         return atom;
       },
       updateWorkspaceAtom: async (atomId, payload) => {
         const atom = await atomUpdate(atomId, payload);
-        const page = await atomsList({
-          limit: 500,
-          filter: { facet: "task", includeArchived: false },
-          sort: [{ field: "updatedAt", direction: "desc" }]
-        });
-        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        const atoms = await fetchAllTaskAtoms();
+        safeDispatch({ type: "set_workspace_atoms", atoms });
         return atom;
       },
       setWorkspaceTaskStatus: async (atomId, payload) => {
         const atom = await taskStatusSet(atomId, payload);
-        const page = await atomsList({
-          limit: 500,
-          filter: { facet: "task", includeArchived: false },
-          sort: [{ field: "updatedAt", direction: "desc" }]
-        });
-        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        const atoms = await fetchAllTaskAtoms();
+        safeDispatch({ type: "set_workspace_atoms", atoms });
         return atom;
       },
       archiveWorkspaceAtom: async (atomId, payload) => {
         const atom = await atomArchive(atomId, payload);
-        const page = await atomsList({
-          limit: 500,
-          filter: { facet: "task", includeArchived: false },
-          sort: [{ field: "updatedAt", direction: "desc" }]
-        });
-        safeDispatch({ type: "set_workspace_atoms", atoms: page.items });
+        const atoms = await fetchAllTaskAtoms();
+        safeDispatch({ type: "set_workspace_atoms", atoms });
         return atom;
       },
       loadWorkspaceNotepads: async () => {
@@ -804,6 +775,41 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       <ActionContext.Provider value={actions}>{children}</ActionContext.Provider>
     </StateContext.Provider>
   );
+}
+
+async function fetchAllTaskAtoms(request?: ListAtomsRequest): Promise<AtomRecord[]> {
+  const defaults: ListAtomsRequest = {
+    filter: { facet: "task", includeArchived: false },
+    sort: [{ field: "updatedAt", direction: "desc" }]
+  };
+  const merged: ListAtomsRequest = {
+    ...defaults,
+    ...request,
+    filter: { ...defaults.filter, ...(request?.filter ?? {}) },
+    sort: request?.sort ?? defaults.sort
+  };
+
+  const all: AtomRecord[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined = merged.cursor;
+
+  for (;;) {
+    const page = await atomsList({
+      ...merged,
+      limit: 500,
+      cursor
+    });
+    for (const atom of page.items) {
+      if (seen.has(atom.id)) continue;
+      seen.add(atom.id);
+      all.push(atom);
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+    if (all.length >= 10_000) break;
+  }
+
+  return all;
 }
 
 async function reloadAllScreenMetrics(

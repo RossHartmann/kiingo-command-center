@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  atomCreate,
+  atomUpdate,
+  atomsList,
   createConversation,
   grantWorkspace,
   getConversation,
@@ -70,5 +73,43 @@ describe("tauriClient mock fallback", () => {
     expect(detail?.runs.some((run) => run.id === sent.runId)).toBe(true);
     const listed = await listConversations({ provider: "codex", includeArchived: false, limit: 20, offset: 0 });
     expect(listed.some((item) => item.id === conversation.id)).toBe(true);
+  });
+
+  it("supports label/category filters and clearParentId relation patch", async () => {
+    const parent = await atomCreate({
+      rawText: "Parent node for relation clear test",
+      captureSource: "ui",
+      initialFacets: ["task"],
+      facetData: {
+        task: { title: "Parent", status: "todo", priority: 3 }
+      }
+    });
+
+    const child = await atomCreate({
+      rawText: "Child node for relation clear test",
+      captureSource: "ui",
+      initialFacets: ["task"],
+      facetData: {
+        task: { title: "Child", status: "todo", priority: 3 },
+        meta: { labels: ["alpha"], categories: ["project-x"] }
+      },
+      relations: { parentId: parent.id, threadIds: [] }
+    });
+
+    const filtered = await atomsList({
+      limit: 200,
+      filter: {
+        labels: ["alpha"],
+        categories: ["project-x"],
+        includeArchived: true
+      }
+    });
+    expect(filtered.items.some((atom) => atom.id === child.id)).toBe(true);
+
+    const cleared = await atomUpdate(child.id, {
+      expectedRevision: child.revision,
+      clearParentId: true
+    });
+    expect(cleared.relations.parentId).toBeUndefined();
   });
 });

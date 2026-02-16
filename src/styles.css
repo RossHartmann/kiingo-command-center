@@ -1936,7 +1936,7 @@ body.metric-dragging {
 
 .tasks-columns {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.8rem;
 }
 
@@ -1970,6 +1970,11 @@ body.metric-dragging {
   opacity: 0.86;
 }
 
+.tasks-card.waiting {
+  border-style: dashed;
+  background: rgba(255, 250, 236, 0.96);
+}
+
 .tasks-card-main {
   min-width: 0;
   display: grid;
@@ -1999,6 +2004,186 @@ body.metric-dragging {
 
 @media (max-width: 980px) {
   .tasks-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===================================================================
+   WORKSPACE NOTEPAD
+   =================================================================== */
+
+.notepad-screen {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.notepad-toolbar {
+  gap: 0.6rem;
+}
+
+.notepad-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: end;
+}
+
+.notepad-toolbar-row label {
+  min-width: 220px;
+}
+
+.notepad-create-form {
+  gap: 0.6rem;
+}
+
+.notepad-create-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.notepad-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.notepad-outline {
+  min-height: 420px;
+  min-width: 0;
+  gap: 0.6rem;
+}
+
+.notepad-outline-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.notepad-outline-header h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.notepad-rows {
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+}
+
+.notepad-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 0.4rem;
+  align-items: start;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.3rem 0.35rem;
+}
+
+.notepad-row.selected {
+  border-color: var(--accent);
+  background: rgba(15, 125, 102, 0.06);
+}
+
+.notepad-toggle {
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 6px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.8rem;
+}
+
+.notepad-toggle:disabled {
+  opacity: 0.45;
+}
+
+.notepad-editor {
+  width: 100%;
+  min-height: 1.6rem;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fffef8;
+  padding: 0.38rem 0.45rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.notepad-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.4rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  background: #fffdf4;
+}
+
+.notepad-pill.overlay-person {
+  border-color: #b89764;
+  color: #5f4a1d;
+  background: #fff5df;
+}
+
+.notepad-pill.overlay-task {
+  border-color: #9a8770;
+  color: #3d3429;
+  background: #f6eee4;
+}
+
+.notepad-pill.overlay-date {
+  border-color: #8a92ac;
+  color: #2f405e;
+  background: #edf3ff;
+}
+
+.notepad-inspector {
+  align-content: start;
+  gap: 0.6rem;
+}
+
+.notepad-inspector h3 {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.notepad-inspector-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.notepad-inspector-grid p {
+  margin: 0;
+}
+
+.notepad-inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+@media (max-width: 1240px) {
+  .notepad-create-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1020px) {
+  .notepad-layout {
     grid-template-columns: 1fr;
   }
 }
