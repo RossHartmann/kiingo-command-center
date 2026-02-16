@@ -83,7 +83,10 @@ export const NAVIGATION: NavGroup[] = [
     icon: "\u2603",
     items: [
       { id: "team-scorecard", label: "Scorecard", icon: "\u2610" },
-      { id: "team-rocks", label: "Rocks", icon: "\u25B2" }
+      { id: "team-rocks", label: "Rocks", icon: "\u25B2" },
+      { id: "coo-principles", label: "COO Principles", icon: "\u2699" },
+      { id: "cmo-principles", label: "CMO Principles", icon: "\u2709" },
+      { id: "cro-principles", label: "CRO Principles", icon: "\u2197" }
     ]
   },
   {
@@ -162,6 +165,9 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
 
   "team-scorecard": { title: "Scorecard", description: "Company scorecard with owner-level accountability metrics", group: "team" },
   "team-rocks": { title: "Rocks", description: "Quarterly priorities and progress", group: "team" },
+  "coo-principles": { title: "COO Principles", description: "Operational principles for execution leadership", group: "team" },
+  "cmo-principles": { title: "CMO Principles", description: "Marketing principles for revenue-driven growth", group: "team" },
+  "cro-principles": { title: "CRO Principles", description: "Revenue leadership principles for predictable growth", group: "team" },
 
   tasks: { title: "Tasks", description: "Capture and manage workspace task atoms", group: "workspace" },
 

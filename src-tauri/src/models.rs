@@ -1050,6 +1050,7 @@ pub struct CreateAtomRequest {
     pub facet_data: Option<AtomFacets>,
     pub relations: Option<AtomRelations>,
     pub governance: Option<GovernanceMeta>,
+    pub idempotency_key: Option<String>,
     pub body: Option<String>,
 }
 
@@ -1062,11 +1063,21 @@ pub struct BodyPatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct AtomRelationsPatch {
+    pub parent_id: Option<String>,
+    pub blocked_by_atom_id: Option<String>,
+    pub thread_ids: Option<Vec<String>>,
+    pub derived_from_atom_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateAtomRequest {
     pub expected_revision: i64,
+    pub idempotency_key: Option<String>,
     pub raw_text: Option<String>,
     pub facet_data_patch: Option<AtomFacets>,
-    pub relations_patch: Option<AtomRelations>,
+    pub relations_patch: Option<AtomRelationsPatch>,
     pub body_patch: Option<BodyPatch>,
 }
 
@@ -1074,6 +1085,7 @@ pub struct UpdateAtomRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SetTaskStatusRequest {
     pub expected_revision: i64,
+    pub idempotency_key: Option<String>,
     pub status: TaskStatus,
     pub reason: Option<String>,
 }
@@ -1082,6 +1094,7 @@ pub struct SetTaskStatusRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveAtomRequest {
     pub expected_revision: i64,
+    pub idempotency_key: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -1089,6 +1102,7 @@ pub struct ArchiveAtomRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SaveNotepadViewRequest {
     pub expected_revision: Option<i64>,
+    pub idempotency_key: Option<String>,
     pub definition: NotepadViewDefinitionInput,
 }
 
@@ -1109,6 +1123,7 @@ pub struct NotepadViewDefinitionInput {
 #[serde(rename_all = "camelCase")]
 pub struct TaskReopenRequest {
     pub expected_revision: i64,
+    pub idempotency_key: Option<String>,
     pub status: Option<TaskStatus>,
 }
 
@@ -1128,4 +1143,313 @@ pub struct WorkspaceHealth {
     pub vault_accessible: bool,
     pub last_successful_command_at: Option<DateTime<Utc>>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMutationPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default, flatten)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl WorkspaceMutationPayload {
+    pub fn into_value(self) -> serde_json::Value {
+        let mut fields = self.fields;
+        if let Some(expected_revision) = self.expected_revision {
+            fields.insert(
+                "expectedRevision".to_string(),
+                serde_json::Value::from(expected_revision),
+            );
+        }
+        if let Some(idempotency_key) = self.idempotency_key {
+            fields.insert(
+                "idempotencyKey".to_string(),
+                serde_json::Value::String(idempotency_key),
+            );
+        }
+        serde_json::Value::Object(fields)
+    }
+}
+
+pub type RuleMutationPayload = WorkspaceMutationPayload;
+pub type JobMutationPayload = WorkspaceMutationPayload;
+pub type DecisionMutationPayload = WorkspaceMutationPayload;
+pub type NotificationMutationPayload = WorkspaceMutationPayload;
+pub type ProjectionMutationPayload = WorkspaceMutationPayload;
+pub type RegistryMutationPayload = WorkspaceMutationPayload;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RuleDefinition {
+    pub id: String,
+    pub schema_version: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub priority: i32,
+    pub scope: String,
+    pub trigger: serde_json::Value,
+    pub conditions: Vec<serde_json::Value>,
+    pub actions: Vec<serde_json::Value>,
+    pub cooldown_ms: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RuleEvaluateRequest {
+    #[serde(default)]
+    pub context: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RuleEvaluationResult {
+    pub rule_id: String,
+    pub matched: bool,
+    pub evaluated_at: DateTime<Utc>,
+    pub trace: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct JobDefinition {
+    pub id: String,
+    pub schema_version: i32,
+    pub r#type: String,
+    pub enabled: bool,
+    pub schedule: serde_json::Value,
+    pub timeout_ms: i64,
+    pub max_retries: i64,
+    pub retry_backoff_ms: i64,
+    pub dedupe_window_ms: Option<i64>,
+    pub payload_template: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct JobRunRecord {
+    pub id: String,
+    pub job_id: String,
+    pub status: String,
+    pub trigger: String,
+    pub attempt: i64,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub idempotency_key: String,
+    pub payload: Option<serde_json::Value>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DecisionPrompt {
+    pub id: String,
+    pub schema_version: i32,
+    pub r#type: String,
+    pub status: String,
+    pub priority: i32,
+    pub title: String,
+    pub body: String,
+    pub atom_ids: Vec<String>,
+    pub options: Vec<serde_json::Value>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub snoozed_until: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub resolved_option_id: Option<String>,
+    pub resolution_notes: Option<String>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NotificationMessage {
+    pub id: String,
+    pub channel: String,
+    pub recipient: String,
+    pub title: String,
+    pub body: String,
+    pub cta_url: Option<String>,
+    pub priority: i32,
+    pub dedupe_key: Option<String>,
+    pub scheduled_for: Option<DateTime<Utc>>,
+    pub related_atom_ids: Option<Vec<String>>,
+    pub related_prompt_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NotificationDeliveryRecord {
+    pub id: String,
+    pub message_id: String,
+    pub status: String,
+    pub attempted_at: DateTime<Utc>,
+    pub provider_message_id: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProjectionDefinition {
+    pub id: String,
+    pub schema_version: i32,
+    pub r#type: String,
+    pub source: String,
+    pub enabled: bool,
+    pub refresh_mode: String,
+    pub schedule_id: Option<String>,
+    pub output_path: Option<String>,
+    pub version_tag: String,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProjectionCheckpoint {
+    pub projection_id: String,
+    pub last_event_cursor: Option<String>,
+    pub last_rebuilt_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProjectionRebuildResponse {
+    pub accepted: bool,
+    pub job_run_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RegistryEntry {
+    pub id: String,
+    pub schema_version: i32,
+    pub kind: String,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub status: String,
+    pub parent_ids: Vec<String>,
+    pub attention_floor: Option<String>,
+    pub attention_ceiling: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_activity_at: Option<DateTime<Utc>>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RegistrySuggestionsResponse {
+    pub suggestions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SemanticSearchRequest {
+    pub query: String,
+    pub top_k: i64,
+    #[serde(default)]
+    pub filters: Option<NotepadFilter>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SemanticSearchHit {
+    pub atom_id: String,
+    pub chunk_id: String,
+    pub score: f64,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SemanticSearchResponse {
+    pub hits: Vec<SemanticSearchHit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SemanticChunk {
+    pub id: String,
+    pub atom_id: String,
+    pub chunk_index: i64,
+    pub text: String,
+    pub hash: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SemanticReindexResponse {
+    pub accepted: bool,
+    pub job_run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GovernancePoliciesResponse {
+    pub retention_policies: Vec<serde_json::Value>,
+    pub default_sensitivity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FeatureFlag {
+    pub key: String,
+    pub enabled: bool,
+    pub rollout_percent: Option<u32>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkspaceCapabilitySnapshot {
+    pub captured_at: DateTime<Utc>,
+    pub obsidian_cli_available: bool,
+    pub base_query_available: bool,
+    pub semantic_available: bool,
+    pub notification_channels: Vec<String>,
+    pub feature_flags: Vec<FeatureFlag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MigrationPlan {
+    pub id: String,
+    pub domain: String,
+    pub from_version: i32,
+    pub to_version: i32,
+    pub dry_run: bool,
+    pub steps: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MigrationRun {
+    pub id: String,
+    pub plan_id: String,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub logs: Vec<String>,
+    pub error_message: Option<String>,
 }

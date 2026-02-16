@@ -14,6 +14,9 @@ import { ProfilesScreen } from "./screens/ProfilesScreen";
 import { QueueScreen } from "./screens/QueueScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { CeoPrinciplesScreen } from "./screens/CeoPrinciplesScreen";
+import { CooPrinciplesScreen } from "./screens/CooPrinciplesScreen";
+import { CmoPrinciplesScreen } from "./screens/CmoPrinciplesScreen";
+import { CroPrinciplesScreen } from "./screens/CroPrinciplesScreen";
 import { TasksScreen } from "./screens/TasksScreen";
 
 export default function App(): JSX.Element {
@@ -46,6 +49,12 @@ export default function App(): JSX.Element {
         return <MetricAdminScreen />;
       case "ceo-principles":
         return <CeoPrinciplesScreen />;
+      case "coo-principles":
+        return <CooPrinciplesScreen />;
+      case "cmo-principles":
+        return <CmoPrinciplesScreen />;
+      case "cro-principles":
+        return <CroPrinciplesScreen />;
       default: {
         return <DashboardScreen screenId={state.selectedScreen} />;
       }

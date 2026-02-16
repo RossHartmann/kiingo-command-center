@@ -25,6 +25,7 @@ rand = "0.9"
 rusqlite = { version = "0.33", features = ["bundled", "chrono", "serde_json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 tauri = { version = "2.2", features = [] }
 tauri-plugin-shell = "2.0"
 thiserror = "2.0"
@@ -35,6 +36,7 @@ tracing-appender = "0.2"
 uuid = { version = "1.13", features = ["v4", "serde"] }
 keyring = "3.6"
 jsonschema = "0.18"
+wait-timeout = "0.2"
 
 [dev-dependencies]
 tempfile = "3.15"

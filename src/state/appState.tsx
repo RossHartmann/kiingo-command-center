@@ -113,7 +113,10 @@ export type Screen =
   | "queue"
   | "metric-admin"
   | "ceo-training"
-  | "ceo-principles";
+  | "ceo-principles"
+  | "coo-principles"
+  | "cmo-principles"
+  | "cro-principles";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 

@@ -25,7 +25,12 @@ use crate::models::{
     ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
     UnbindMetricResponse,
     StartRunPayload, StartRunResponse, StreamEnvelope, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord,
-    WorkspaceGrant, WorkspaceHealth,
+    WorkspaceGrant, WorkspaceHealth, GovernanceMeta, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult,
+    RuleMutationPayload, JobDefinition, JobMutationPayload, JobRunRecord, DecisionMutationPayload, DecisionPrompt,
+    NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint,
+    ProjectionDefinition, ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
+    RegistrySuggestionsResponse, SemanticChunk, SemanticReindexResponse, SemanticSearchRequest, SemanticSearchResponse,
+    GovernancePoliciesResponse, FeatureFlag, WorkspaceCapabilitySnapshot, MigrationPlan, MigrationRun,
 };
 use crate::policy::PolicyEngine;
 use crate::redaction::Redactor;
@@ -2132,9 +2137,14 @@ impl RunnerCore {
         workspace::task_status_set(&root, atom_id, request)
     }
 
-    pub fn task_complete(&self, atom_id: &str, expected_revision: i64) -> AppResult<AtomRecord> {
+    pub fn task_complete(
+        &self,
+        atom_id: &str,
+        expected_revision: i64,
+        idempotency_key: Option<String>,
+    ) -> AppResult<AtomRecord> {
         let root = self.resolve_workspace_command_center_root()?;
-        workspace::task_complete(&root, atom_id, expected_revision)
+        workspace::task_complete(&root, atom_id, expected_revision, idempotency_key)
     }
 
     pub fn task_reopen(&self, atom_id: &str, request: TaskReopenRequest) -> AppResult<AtomRecord> {
@@ -2147,9 +2157,14 @@ impl RunnerCore {
         workspace::atom_archive(&root, atom_id, request)
     }
 
-    pub fn atom_unarchive(&self, atom_id: &str, expected_revision: i64) -> AppResult<AtomRecord> {
+    pub fn atom_unarchive(
+        &self,
+        atom_id: &str,
+        expected_revision: i64,
+        idempotency_key: Option<String>,
+    ) -> AppResult<AtomRecord> {
         let root = self.resolve_workspace_command_center_root()?;
-        workspace::atom_unarchive(&root, atom_id, expected_revision)
+        workspace::atom_unarchive(&root, atom_id, expected_revision, idempotency_key)
     }
 
     pub fn notepads_list(&self) -> AppResult<Vec<NotepadViewDefinition>> {
@@ -2167,9 +2182,13 @@ impl RunnerCore {
         workspace::notepad_save(&root, request)
     }
 
-    pub fn notepad_delete(&self, notepad_id: &str) -> AppResult<BooleanResponse> {
+    pub fn notepad_delete(
+        &self,
+        notepad_id: &str,
+        idempotency_key: Option<String>,
+    ) -> AppResult<BooleanResponse> {
         let root = self.resolve_workspace_command_center_root()?;
-        workspace::notepad_delete(&root, notepad_id)
+        workspace::notepad_delete(&root, notepad_id, idempotency_key)
     }
 
     pub fn notepad_atoms_list(
@@ -2206,9 +2225,375 @@ impl RunnerCore {
         atom_id: &str,
         source: ClassificationSource,
         force_facet: Option<String>,
+        idempotency_key: Option<String>,
     ) -> AppResult<AtomRecord> {
         let root = self.resolve_workspace_command_center_root()?;
-        workspace::atom_classify(&root, atom_id, source, force_facet)
+        workspace::atom_classify(&root, atom_id, source, force_facet, idempotency_key)
+    }
+
+    pub fn rules_list(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+        enabled: Option<bool>,
+    ) -> AppResult<PageResponse<RuleDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::rules_list(&root, limit, cursor, enabled)
+    }
+
+    pub fn rule_get(&self, rule_id: &str) -> AppResult<Option<RuleDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::rule_get(&root, rule_id)
+    }
+
+    pub fn rule_save(&self, rule: RuleMutationPayload) -> AppResult<RuleDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::rule_save(&root, rule)
+    }
+
+    pub fn rule_update(
+        &self,
+        rule_id: &str,
+        patch: RuleMutationPayload,
+    ) -> AppResult<RuleDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::rule_update(&root, rule_id, patch)
+    }
+
+    pub fn rule_evaluate(
+        &self,
+        rule_id: &str,
+        input: RuleEvaluateRequest,
+    ) -> AppResult<RuleEvaluationResult> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::rule_evaluate(&root, rule_id, input)
+    }
+
+    pub fn jobs_list(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+        enabled: Option<bool>,
+    ) -> AppResult<PageResponse<JobDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::jobs_list(&root, limit, cursor, enabled)
+    }
+
+    pub fn job_get(&self, job_id: &str) -> AppResult<Option<JobDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::job_get(&root, job_id)
+    }
+
+    pub fn job_save(&self, job: JobMutationPayload) -> AppResult<JobDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::job_save(&root, job)
+    }
+
+    pub fn job_update(
+        &self,
+        job_id: &str,
+        patch: JobMutationPayload,
+    ) -> AppResult<JobDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::job_update(&root, job_id, patch)
+    }
+
+    pub fn job_run(
+        &self,
+        job_id: &str,
+        payload: Option<serde_json::Value>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<JobRunRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::job_run(&root, job_id, payload, idempotency_key)
+    }
+
+    pub fn job_runs_list(
+        &self,
+        job_id: Option<String>,
+        status: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<JobRunRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::job_runs_list(&root, job_id, status, limit, cursor)
+    }
+
+    pub fn job_run_get(&self, run_id: &str) -> AppResult<Option<JobRunRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::job_run_get(&root, run_id)
+    }
+
+    pub fn decisions_list(
+        &self,
+        status: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<DecisionPrompt>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::decisions_list(&root, status, limit, cursor)
+    }
+
+    pub fn decision_create(&self, prompt: DecisionMutationPayload) -> AppResult<DecisionPrompt> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::decision_create(&root, prompt)
+    }
+
+    pub fn decision_get(&self, decision_id: &str) -> AppResult<Option<DecisionPrompt>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::decision_get(&root, decision_id)
+    }
+
+    pub fn decision_resolve(
+        &self,
+        decision_id: &str,
+        option_id: String,
+        notes: Option<String>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<DecisionPrompt> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::decision_resolve(&root, decision_id, option_id, notes, idempotency_key)
+    }
+
+    pub fn decision_snooze(
+        &self,
+        decision_id: &str,
+        snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<DecisionPrompt> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::decision_snooze(&root, decision_id, snoozed_until, idempotency_key)
+    }
+
+    pub fn decision_dismiss(
+        &self,
+        decision_id: &str,
+        reason: Option<String>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<DecisionPrompt> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::decision_dismiss(&root, decision_id, reason, idempotency_key)
+    }
+
+    pub fn notification_channels_list(&self) -> AppResult<Vec<String>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notification_channels_list(&root)
+    }
+
+    pub fn notification_send(
+        &self,
+        message: NotificationMutationPayload,
+    ) -> AppResult<NotificationMessage> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notification_send(&root, message)
+    }
+
+    pub fn notification_deliveries_list(
+        &self,
+        status: Option<String>,
+        channel: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<NotificationDeliveryRecord>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::notification_deliveries_list(&root, status, channel, limit, cursor)
+    }
+
+    pub fn projections_list(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<ProjectionDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projections_list(&root, limit, cursor)
+    }
+
+    pub fn projection_get(&self, projection_id: &str) -> AppResult<Option<ProjectionDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projection_get(&root, projection_id)
+    }
+
+    pub fn projection_save(
+        &self,
+        projection: ProjectionMutationPayload,
+    ) -> AppResult<ProjectionDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projection_save(&root, projection)
+    }
+
+    pub fn projection_checkpoint_get(&self, projection_id: &str) -> AppResult<ProjectionCheckpoint> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projection_checkpoint_get(&root, projection_id)
+    }
+
+    pub fn projection_refresh(
+        &self,
+        projection_id: &str,
+        mode: Option<String>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<ProjectionCheckpoint> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projection_refresh(&root, projection_id, mode, idempotency_key)
+    }
+
+    pub fn projection_rebuild(
+        &self,
+        projection_ids: Option<Vec<String>>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<ProjectionRebuildResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projection_rebuild(&root, projection_ids, idempotency_key)
+    }
+
+    pub fn registry_entries_list(
+        &self,
+        kind: Option<String>,
+        status: Option<String>,
+        search: Option<String>,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> AppResult<PageResponse<RegistryEntry>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::registry_entries_list(&root, kind, status, search, limit, cursor)
+    }
+
+    pub fn registry_entry_get(&self, entry_id: &str) -> AppResult<Option<RegistryEntry>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::registry_entry_get(&root, entry_id)
+    }
+
+    pub fn registry_entry_save(
+        &self,
+        entry: RegistryMutationPayload,
+    ) -> AppResult<RegistryEntry> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::registry_entry_save(&root, entry)
+    }
+
+    pub fn registry_entry_update(
+        &self,
+        entry_id: &str,
+        patch: RegistryMutationPayload,
+    ) -> AppResult<RegistryEntry> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::registry_entry_update(&root, entry_id, patch)
+    }
+
+    pub fn registry_entry_delete(
+        &self,
+        entry_id: &str,
+        idempotency_key: Option<String>,
+    ) -> AppResult<BooleanResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::registry_entry_delete(&root, entry_id, idempotency_key)
+    }
+
+    pub fn registry_suggestions_list(
+        &self,
+        text: String,
+        kind: Option<String>,
+    ) -> AppResult<RegistrySuggestionsResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::registry_suggestions_list(&root, text, kind)
+    }
+
+    pub fn semantic_search(&self, request: SemanticSearchRequest) -> AppResult<SemanticSearchResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::semantic_search(&root, request)
+    }
+
+    pub fn semantic_reindex(
+        &self,
+        atom_ids: Option<Vec<String>>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<SemanticReindexResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::semantic_reindex(&root, atom_ids, idempotency_key)
+    }
+
+    pub fn semantic_chunk_get(&self, chunk_id: &str) -> AppResult<Option<SemanticChunk>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::semantic_chunk_get(&root, chunk_id)
+    }
+
+    pub fn governance_policies_get(&self) -> AppResult<GovernancePoliciesResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::governance_policies_get(&root)
+    }
+
+    pub fn atom_governance_update(
+        &self,
+        atom_id: &str,
+        expected_revision: i64,
+        governance: GovernanceMeta,
+        idempotency_key: Option<String>,
+    ) -> AppResult<AtomRecord> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::atom_governance_update(&root, atom_id, expected_revision, governance, idempotency_key)
+    }
+
+    pub fn feature_flags_list(&self) -> AppResult<Vec<FeatureFlag>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::feature_flags_list(&root)
+    }
+
+    pub fn feature_flag_update(
+        &self,
+        key: &str,
+        enabled: bool,
+        rollout_percent: Option<u32>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<FeatureFlag> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::feature_flag_update(&root, key, enabled, rollout_percent, idempotency_key)
+    }
+
+    pub fn capability_snapshot_get(&self) -> AppResult<WorkspaceCapabilitySnapshot> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::capability_snapshot_get(&root)
+    }
+
+    pub fn migration_plan_create(
+        &self,
+        domain: String,
+        from_version: i32,
+        to_version: i32,
+        dry_run: bool,
+        idempotency_key: Option<String>,
+    ) -> AppResult<MigrationPlan> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::migration_plan_create(
+            &root,
+            domain,
+            from_version,
+            to_version,
+            dry_run,
+            idempotency_key,
+        )
+    }
+
+    pub fn migration_run_start(
+        &self,
+        plan_id: &str,
+        idempotency_key: Option<String>,
+    ) -> AppResult<MigrationRun> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::migration_run_start(&root, plan_id, idempotency_key)
+    }
+
+    pub fn migration_run_get(&self, run_id: &str) -> AppResult<Option<MigrationRun>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::migration_run_get(&root, run_id)
+    }
+
+    pub fn migration_run_rollback(
+        &self,
+        run_id: &str,
+        reason: Option<String>,
+        idempotency_key: Option<String>,
+    ) -> AppResult<MigrationRun> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::migration_run_rollback(&root, run_id, reason, idempotency_key)
     }
 
     pub fn run_retention(&self) -> AppResult<()> {
@@ -2902,13 +3287,13 @@ impl RunnerCore {
     }
 
     fn resolve_workspace_command_center_root(&self) -> AppResult<PathBuf> {
-        let grants = self.db.list_workspace_grants()?;
-        let active = grants
-            .into_iter()
-            .find(|grant| grant.revoked_at.is_none())
-            .map(|grant| grant.path)
-            .ok_or_else(|| AppError::Policy("No workspace grant found. Configure one in Settings.".to_string()))?;
-        Ok(Path::new(&active).join("command-center"))
+        if let Some(obsidian_root) = workspace::detect_obsidian_command_center_root() {
+            tracing::info!(root = %obsidian_root.to_string_lossy(), "workspace root resolved from obsidian vault");
+            return Ok(obsidian_root);
+        }
+        Err(AppError::Policy(
+            "Obsidian vault path unavailable. Ensure the `obsidian` CLI is installed, a vault is open, and `obsidian vault info=path` returns a path.".to_string(),
+        ))
     }
 
     async fn apply_runtime_settings(&self, settings: &AppSettings) {

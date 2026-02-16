@@ -670,6 +670,7 @@ export interface CreateAtomRequest {
   facetData?: Partial<AtomFacets>;
   relations?: Partial<AtomRelations>;
   governance?: GovernanceMeta;
+  idempotencyKey?: string;
   body?: string;
 }
 
@@ -680,6 +681,7 @@ export interface BodyPatch {
 
 export interface UpdateAtomRequest {
   expectedRevision: number;
+  idempotencyKey?: string;
   rawText?: string;
   facetDataPatch?: Partial<AtomFacets>;
   relationsPatch?: Partial<AtomRelations>;
@@ -688,22 +690,26 @@ export interface UpdateAtomRequest {
 
 export interface SetTaskStatusRequest {
   expectedRevision: number;
+  idempotencyKey?: string;
   status: TaskStatus;
   reason?: string;
 }
 
 export interface TaskReopenRequest {
   expectedRevision: number;
+  idempotencyKey?: string;
   status?: "todo" | "doing" | "blocked";
 }
 
 export interface ArchiveAtomRequest {
   expectedRevision: number;
+  idempotencyKey?: string;
   reason?: string;
 }
 
 export interface SaveNotepadViewRequest {
   expectedRevision?: number;
+  idempotencyKey?: string;
   definition: Omit<NotepadViewDefinition, "createdAt" | "updatedAt" | "revision">;
 }
 
@@ -1014,4 +1020,59 @@ export interface MigrationRun {
   finishedAt?: IsoDateTime;
   logs: string[];
   errorMessage?: string;
+}
+
+export interface RuleEvaluationResult {
+  ruleId: EntityId;
+  matched: boolean;
+  evaluatedAt: IsoDateTime;
+  trace: { condition: RuleCondition; passed: boolean }[];
+}
+
+export interface RulesListRequest extends PageRequest {
+  enabled?: boolean;
+}
+
+export interface JobsListRequest extends PageRequest {
+  enabled?: boolean;
+}
+
+export interface JobRunsListRequest extends PageRequest {
+  jobId?: EntityId;
+  status?: JobRunStatus;
+}
+
+export interface DecisionsListRequest extends PageRequest {
+  status?: DecisionPromptStatus;
+}
+
+export interface NotificationDeliveriesListRequest extends PageRequest {
+  status?: NotificationStatus;
+  channel?: NotificationChannel;
+}
+
+export interface RegistryEntriesListRequest extends PageRequest {
+  kind?: RegistryEntryKind;
+  status?: RegistryEntryStatus;
+  search?: string;
+}
+
+export interface AtomGovernanceUpdateRequest {
+  expectedRevision: number;
+  governance: GovernanceMeta;
+  idempotencyKey?: string;
+}
+
+export interface FeatureFlagUpdateRequest {
+  enabled: boolean;
+  rolloutPercent?: number;
+  idempotencyKey?: string;
+}
+
+export interface MigrationPlanCreateRequest {
+  domain: MigrationDomain;
+  fromVersion: number;
+  toVersion: number;
+  dryRun: boolean;
+  idempotencyKey?: string;
 }

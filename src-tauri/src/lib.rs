@@ -21,6 +21,13 @@ use crate::models::{
     SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
     UnbindMetricResponse, UpdateAtomRequest, UpdateScreenMetricLayoutPayload, WorkspaceCapabilities,
     WorkspaceEventRecord, WorkspaceGrant, WorkspaceHealth,
+    GovernanceMeta, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload, JobDefinition,
+    JobMutationPayload, JobRunRecord, DecisionMutationPayload, DecisionPrompt, NotificationDeliveryRecord,
+    NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint, ProjectionDefinition,
+    ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
+    RegistrySuggestionsResponse, SemanticChunk, SemanticReindexResponse, SemanticSearchRequest,
+    SemanticSearchResponse, GovernancePoliciesResponse, FeatureFlag, WorkspaceCapabilitySnapshot, MigrationPlan,
+    MigrationRun,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -432,10 +439,11 @@ fn task_complete(
     state: tauri::State<'_, AppState>,
     atom_id: String,
     expected_revision: i64,
+    idempotency_key: Option<String>,
 ) -> Result<AtomRecord, String> {
     state
         .runner
-        .task_complete(&atom_id, expected_revision)
+        .task_complete(&atom_id, expected_revision, idempotency_key)
         .map_err(to_client_error)
 }
 
@@ -462,10 +470,11 @@ fn atom_unarchive(
     state: tauri::State<'_, AppState>,
     atom_id: String,
     expected_revision: i64,
+    idempotency_key: Option<String>,
 ) -> Result<AtomRecord, String> {
     state
         .runner
-        .atom_unarchive(&atom_id, expected_revision)
+        .atom_unarchive(&atom_id, expected_revision, idempotency_key)
         .map_err(to_client_error)
 }
 
@@ -491,8 +500,15 @@ fn notepad_save(
 }
 
 #[tauri::command]
-fn notepad_delete(state: tauri::State<'_, AppState>, notepad_id: String) -> Result<BooleanResponse, String> {
-    state.runner.notepad_delete(&notepad_id).map_err(to_client_error)
+fn notepad_delete(
+    state: tauri::State<'_, AppState>,
+    notepad_id: String,
+    idempotency_key: Option<String>,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .notepad_delete(&notepad_id, idempotency_key)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -543,10 +559,507 @@ fn atom_classify(
     atom_id: String,
     source: ClassificationSource,
     force_facet: Option<String>,
+    idempotency_key: Option<String>,
 ) -> Result<AtomRecord, String> {
     state
         .runner
-        .atom_classify(&atom_id, source, force_facet)
+        .atom_classify(&atom_id, source, force_facet, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn rules_list(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    enabled: Option<bool>,
+) -> Result<PageResponse<RuleDefinition>, String> {
+    state
+        .runner
+        .rules_list(limit, cursor, enabled)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn rule_get(state: tauri::State<'_, AppState>, rule_id: String) -> Result<Option<RuleDefinition>, String> {
+    state.runner.rule_get(&rule_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn rule_save(state: tauri::State<'_, AppState>, rule: RuleMutationPayload) -> Result<RuleDefinition, String> {
+    state.runner.rule_save(rule).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn rule_update(
+    state: tauri::State<'_, AppState>,
+    rule_id: String,
+    patch: RuleMutationPayload,
+) -> Result<RuleDefinition, String> {
+    state
+        .runner
+        .rule_update(&rule_id, patch)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn rule_evaluate(
+    state: tauri::State<'_, AppState>,
+    rule_id: String,
+    input: RuleEvaluateRequest,
+) -> Result<RuleEvaluationResult, String> {
+    state
+        .runner
+        .rule_evaluate(&rule_id, input)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn jobs_list(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    enabled: Option<bool>,
+) -> Result<PageResponse<JobDefinition>, String> {
+    state
+        .runner
+        .jobs_list(limit, cursor, enabled)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn job_get(state: tauri::State<'_, AppState>, job_id: String) -> Result<Option<JobDefinition>, String> {
+    state.runner.job_get(&job_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn job_save(state: tauri::State<'_, AppState>, job: JobMutationPayload) -> Result<JobDefinition, String> {
+    state.runner.job_save(job).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn job_update(
+    state: tauri::State<'_, AppState>,
+    job_id: String,
+    patch: JobMutationPayload,
+) -> Result<JobDefinition, String> {
+    state
+        .runner
+        .job_update(&job_id, patch)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn job_run(
+    state: tauri::State<'_, AppState>,
+    job_id: String,
+    payload: Option<serde_json::Value>,
+    idempotency_key: Option<String>,
+) -> Result<JobRunRecord, String> {
+    state
+        .runner
+        .job_run(&job_id, payload, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn job_runs_list(
+    state: tauri::State<'_, AppState>,
+    job_id: Option<String>,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<JobRunRecord>, String> {
+    state
+        .runner
+        .job_runs_list(job_id, status, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn job_run_get(
+    state: tauri::State<'_, AppState>,
+    run_id: String,
+) -> Result<Option<JobRunRecord>, String> {
+    state.runner.job_run_get(&run_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn decisions_list(
+    state: tauri::State<'_, AppState>,
+    status: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<DecisionPrompt>, String> {
+    state
+        .runner
+        .decisions_list(status, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn decision_create(
+    state: tauri::State<'_, AppState>,
+    prompt: DecisionMutationPayload,
+) -> Result<DecisionPrompt, String> {
+    state.runner.decision_create(prompt).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn decision_get(
+    state: tauri::State<'_, AppState>,
+    decision_id: String,
+) -> Result<Option<DecisionPrompt>, String> {
+    state.runner.decision_get(&decision_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn decision_resolve(
+    state: tauri::State<'_, AppState>,
+    decision_id: String,
+    option_id: String,
+    notes: Option<String>,
+    idempotency_key: Option<String>,
+) -> Result<DecisionPrompt, String> {
+    state
+        .runner
+        .decision_resolve(&decision_id, option_id, notes, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn decision_snooze(
+    state: tauri::State<'_, AppState>,
+    decision_id: String,
+    snoozed_until: Option<chrono::DateTime<chrono::Utc>>,
+    idempotency_key: Option<String>,
+) -> Result<DecisionPrompt, String> {
+    state
+        .runner
+        .decision_snooze(&decision_id, snoozed_until, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn decision_dismiss(
+    state: tauri::State<'_, AppState>,
+    decision_id: String,
+    reason: Option<String>,
+    idempotency_key: Option<String>,
+) -> Result<DecisionPrompt, String> {
+    state
+        .runner
+        .decision_dismiss(&decision_id, reason, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notification_channels_list(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    state
+        .runner
+        .notification_channels_list()
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notification_send(
+    state: tauri::State<'_, AppState>,
+    message: NotificationMutationPayload,
+) -> Result<NotificationMessage, String> {
+    state.runner.notification_send(message).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn notification_deliveries_list(
+    state: tauri::State<'_, AppState>,
+    status: Option<String>,
+    channel: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<NotificationDeliveryRecord>, String> {
+    state
+        .runner
+        .notification_deliveries_list(status, channel, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projections_list(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<ProjectionDefinition>, String> {
+    state
+        .runner
+        .projections_list(limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projection_get(
+    state: tauri::State<'_, AppState>,
+    projection_id: String,
+) -> Result<Option<ProjectionDefinition>, String> {
+    state
+        .runner
+        .projection_get(&projection_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projection_save(
+    state: tauri::State<'_, AppState>,
+    projection: ProjectionMutationPayload,
+) -> Result<ProjectionDefinition, String> {
+    state
+        .runner
+        .projection_save(projection)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projection_checkpoint_get(
+    state: tauri::State<'_, AppState>,
+    projection_id: String,
+) -> Result<ProjectionCheckpoint, String> {
+    state
+        .runner
+        .projection_checkpoint_get(&projection_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projection_refresh(
+    state: tauri::State<'_, AppState>,
+    projection_id: String,
+    mode: Option<String>,
+    idempotency_key: Option<String>,
+) -> Result<ProjectionCheckpoint, String> {
+    state
+        .runner
+        .projection_refresh(&projection_id, mode, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projection_rebuild(
+    state: tauri::State<'_, AppState>,
+    projection_ids: Option<Vec<String>>,
+    idempotency_key: Option<String>,
+) -> Result<ProjectionRebuildResponse, String> {
+    state
+        .runner
+        .projection_rebuild(projection_ids, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn registry_entries_list(
+    state: tauri::State<'_, AppState>,
+    kind: Option<String>,
+    status: Option<String>,
+    search: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<PageResponse<RegistryEntry>, String> {
+    state
+        .runner
+        .registry_entries_list(kind, status, search, limit, cursor)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn registry_entry_get(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<Option<RegistryEntry>, String> {
+    state
+        .runner
+        .registry_entry_get(&entry_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn registry_entry_save(
+    state: tauri::State<'_, AppState>,
+    entry: RegistryMutationPayload,
+) -> Result<RegistryEntry, String> {
+    state
+        .runner
+        .registry_entry_save(entry)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn registry_entry_update(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+    patch: RegistryMutationPayload,
+) -> Result<RegistryEntry, String> {
+    state
+        .runner
+        .registry_entry_update(&entry_id, patch)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn registry_entry_delete(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+    idempotency_key: Option<String>,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .registry_entry_delete(&entry_id, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn registry_suggestions_list(
+    state: tauri::State<'_, AppState>,
+    text: String,
+    kind: Option<String>,
+) -> Result<RegistrySuggestionsResponse, String> {
+    state
+        .runner
+        .registry_suggestions_list(text, kind)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn semantic_search(
+    state: tauri::State<'_, AppState>,
+    request: SemanticSearchRequest,
+) -> Result<SemanticSearchResponse, String> {
+    state
+        .runner
+        .semantic_search(request)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn semantic_reindex(
+    state: tauri::State<'_, AppState>,
+    atom_ids: Option<Vec<String>>,
+    idempotency_key: Option<String>,
+) -> Result<SemanticReindexResponse, String> {
+    state
+        .runner
+        .semantic_reindex(atom_ids, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn semantic_chunk_get(
+    state: tauri::State<'_, AppState>,
+    chunk_id: String,
+) -> Result<Option<SemanticChunk>, String> {
+    state
+        .runner
+        .semantic_chunk_get(&chunk_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn governance_policies_get(state: tauri::State<'_, AppState>) -> Result<GovernancePoliciesResponse, String> {
+    state
+        .runner
+        .governance_policies_get()
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn atom_governance_update(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+    expected_revision: i64,
+    governance: GovernanceMeta,
+    idempotency_key: Option<String>,
+) -> Result<AtomRecord, String> {
+    state
+        .runner
+        .atom_governance_update(&atom_id, expected_revision, governance, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn feature_flags_list(state: tauri::State<'_, AppState>) -> Result<Vec<FeatureFlag>, String> {
+    state
+        .runner
+        .feature_flags_list()
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn feature_flag_update(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    enabled: bool,
+    rollout_percent: Option<u32>,
+    idempotency_key: Option<String>,
+) -> Result<FeatureFlag, String> {
+    state
+        .runner
+        .feature_flag_update(&key, enabled, rollout_percent, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn capability_snapshot_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceCapabilitySnapshot, String> {
+    state
+        .runner
+        .capability_snapshot_get()
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn migration_plan_create(
+    state: tauri::State<'_, AppState>,
+    domain: String,
+    from_version: i32,
+    to_version: i32,
+    dry_run: bool,
+    idempotency_key: Option<String>,
+) -> Result<MigrationPlan, String> {
+    state
+        .runner
+        .migration_plan_create(domain, from_version, to_version, dry_run, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn migration_run_start(
+    state: tauri::State<'_, AppState>,
+    plan_id: String,
+    idempotency_key: Option<String>,
+) -> Result<MigrationRun, String> {
+    state
+        .runner
+        .migration_run_start(&plan_id, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn migration_run_get(
+    state: tauri::State<'_, AppState>,
+    run_id: String,
+) -> Result<Option<MigrationRun>, String> {
+    state
+        .runner
+        .migration_run_get(&run_id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn migration_run_rollback(
+    state: tauri::State<'_, AppState>,
+    run_id: String,
+    reason: Option<String>,
+    idempotency_key: Option<String>,
+) -> Result<MigrationRun, String> {
+    state
+        .runner
+        .migration_run_rollback(&run_id, reason, idempotency_key)
         .map_err(to_client_error)
 }
 
@@ -674,7 +1187,52 @@ pub fn run() {
             events_list,
             atom_events_list,
             classification_preview,
-            atom_classify
+            atom_classify,
+            rules_list,
+            rule_get,
+            rule_save,
+            rule_update,
+            rule_evaluate,
+            jobs_list,
+            job_get,
+            job_save,
+            job_update,
+            job_run,
+            job_runs_list,
+            job_run_get,
+            decisions_list,
+            decision_create,
+            decision_get,
+            decision_resolve,
+            decision_snooze,
+            decision_dismiss,
+            notification_channels_list,
+            notification_send,
+            notification_deliveries_list,
+            projections_list,
+            projection_get,
+            projection_save,
+            projection_checkpoint_get,
+            projection_refresh,
+            projection_rebuild,
+            registry_entries_list,
+            registry_entry_get,
+            registry_entry_save,
+            registry_entry_update,
+            registry_entry_delete,
+            registry_suggestions_list,
+            semantic_search,
+            semantic_reindex,
+            semantic_chunk_get,
+            governance_policies_get,
+            atom_governance_update,
+            feature_flags_list,
+            feature_flag_update,
+            capability_snapshot_get,
+            migration_plan_create,
+            migration_run_start,
+            migration_run_get,
+            migration_run_rollback
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
