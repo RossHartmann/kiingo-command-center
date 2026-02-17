@@ -37,12 +37,18 @@ const initialNotepadUiState: NotepadUiState = {
 function reducer(state: NotepadUiState, action: NotepadUiAction): NotepadUiState {
   switch (action.type) {
     case "set_active_notepad":
+      if (state.activeNotepadId === action.notepadId && state.interactionMode === "navigation") {
+        return state;
+      }
       return {
         ...state,
         activeNotepadId: action.notepadId,
         interactionMode: "navigation"
       };
     case "set_selected_placement":
+      if (state.selectedPlacementId === action.placementId) {
+        return state;
+      }
       return { ...state, selectedPlacementId: action.placementId };
     case "toggle_collapsed":
       return {
@@ -63,6 +69,9 @@ function reducer(state: NotepadUiState, action: NotepadUiAction): NotepadUiState
     case "set_collapsed":
       return { ...state, collapsedByPlacement: action.collapsedByPlacement };
     case "set_interaction_mode":
+      if (state.interactionMode === action.mode) {
+        return state;
+      }
       return { ...state, interactionMode: action.mode };
     case "set_draft":
       return {
@@ -78,8 +87,14 @@ function reducer(state: NotepadUiState, action: NotepadUiAction): NotepadUiState
       return { ...state, draftsByPlacement: next };
     }
     case "set_clipboard":
+      if (state.clipboard === action.clipboard) {
+        return state;
+      }
       return { ...state, clipboard: action.clipboard };
     case "set_quick_actions_open":
+      if (state.quickActionsOpen === action.open) {
+        return state;
+      }
       return { ...state, quickActionsOpen: action.open };
     default:
       return state;

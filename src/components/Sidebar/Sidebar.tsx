@@ -18,7 +18,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useAppActions, useAppState, type Screen } from "../../state/appState";
 import { ThemeSwitcher } from "../../ThemeSwitcher";
-import { NAVIGATION, applyNavOrder, findGroupForScreen, type NavGroup, type NavItem } from "./navigationConfig";
+import { NAVIGATION, applyNavOrder, findGroupForScreen, findSubGroupForScreen, type NavGroup, type NavItem } from "./navigationConfig";
 import type { NavOrderConfig } from "../../lib/types";
 
 const COLLAPSED_KEY = "sidebar-collapsed-groups";
@@ -44,16 +44,18 @@ function persistCollapsed(collapsed: Set<string>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Sortable wrapper for a nav item
+// Sortable wrapper for a leaf nav item
 // ---------------------------------------------------------------------------
 function SortableItem({
   item,
   isActive,
-  onNavigate
+  onNavigate,
+  nested
 }: {
   item: NavItem;
   isActive: boolean;
   onNavigate: (screen: Screen) => void;
+  nested?: boolean;
 }): JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id
@@ -70,8 +72,8 @@ function SortableItem({
       ref={setNodeRef}
       style={style}
       type="button"
-      className={`sidebar-item${isActive ? " active" : ""}`}
-      onClick={() => onNavigate(item.id)}
+      className={`sidebar-item${isActive ? " active" : ""}${nested ? " nested" : ""}`}
+      onClick={() => onNavigate(item.id as Screen)}
       {...attributes}
     >
       <span className="sidebar-drag-handle" {...listeners}>{"\u2261"}</span>
@@ -82,22 +84,111 @@ function SortableItem({
 }
 
 // ---------------------------------------------------------------------------
+// Sortable sub-group (an item with children)
+// ---------------------------------------------------------------------------
+function SortableSubGroup({
+  item,
+  activeScreen,
+  isSubCollapsed,
+  onToggleSubGroup,
+  onNavigate,
+  onChildReorder
+}: {
+  item: NavItem;
+  activeScreen: Screen;
+  isSubCollapsed: boolean;
+  onToggleSubGroup: (id: string) => void;
+  onNavigate: (screen: Screen) => void;
+  onChildReorder: (subGroupId: string, oldIndex: number, newIndex: number) => void;
+}): JSX.Element {
+  const children = item.children!;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id
+  });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : undefined
+  };
+
+  const hasActive = children.some((child) => child.id === activeScreen);
+  const childIds = useMemo(() => children.map((c) => c.id), [children]);
+
+  const childSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  function handleChildDragEnd(event: DragEndEvent): void {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = children.findIndex((c) => c.id === active.id);
+    const newIndex = children.findIndex((c) => c.id === over.id);
+    if (oldIndex !== -1 && newIndex !== -1) {
+      onChildReorder(item.id, oldIndex, newIndex);
+    }
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className="sidebar-subgroup" {...attributes}>
+      <button
+        type="button"
+        className={`sidebar-subgroup-header${hasActive ? " has-active" : ""}`}
+        onClick={() => onToggleSubGroup(item.id)}
+      >
+        <span className="sidebar-drag-handle" {...listeners}>{"\u2261"}</span>
+        <span className="sidebar-item-icon">{item.icon}</span>
+        <span className="sidebar-subgroup-label">{item.label}</span>
+        <span className={`sidebar-subgroup-chevron${isSubCollapsed ? "" : " open"}`}>{"\u203A"}</span>
+      </button>
+      {!isSubCollapsed && (
+        <DndContext
+          sensors={childSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleChildDragEnd}
+        >
+          <SortableContext items={childIds} strategy={verticalListSortingStrategy}>
+            <div className="sidebar-subgroup-items">
+              {children.map((child) => (
+                <SortableItem
+                  key={child.id}
+                  item={child}
+                  isActive={child.id === activeScreen}
+                  onNavigate={onNavigate}
+                  nested
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sortable wrapper for a nav group
 // ---------------------------------------------------------------------------
 function SortableGroup({
   group,
   isCollapsed,
+  collapsed,
   activeScreen,
   onToggle,
+  onToggleSubGroup,
   onNavigate,
-  onItemReorder
+  onItemReorder,
+  onChildReorder
 }: {
   group: NavGroup;
   isCollapsed: boolean;
+  collapsed: Set<string>;
   activeScreen: Screen;
   onToggle: (id: string) => void;
+  onToggleSubGroup: (id: string) => void;
   onNavigate: (screen: Screen) => void;
   onItemReorder: (groupId: string, oldIndex: number, newIndex: number) => void;
+  onChildReorder: (subGroupId: string, oldIndex: number, newIndex: number) => void;
 }): JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: group.id
@@ -109,7 +200,9 @@ function SortableGroup({
     opacity: isDragging ? 0.4 : undefined
   };
 
-  const hasActive = group.items.some((item) => item.id === activeScreen);
+  const hasActive = group.items.some((item) =>
+    item.id === activeScreen || (item.children && item.children.some((c) => c.id === activeScreen))
+  );
   const itemIds = useMemo(() => group.items.map((item) => item.id), [group.items]);
 
   const itemSensors = useSensors(
@@ -146,14 +239,26 @@ function SortableGroup({
         >
           <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
             <div className="sidebar-group-items">
-              {group.items.map((item) => (
-                <SortableItem
-                  key={item.id}
-                  item={item}
-                  isActive={item.id === activeScreen}
-                  onNavigate={onNavigate}
-                />
-              ))}
+              {group.items.map((item) =>
+                item.children ? (
+                  <SortableSubGroup
+                    key={item.id}
+                    item={item}
+                    activeScreen={activeScreen}
+                    isSubCollapsed={collapsed.has(item.id)}
+                    onToggleSubGroup={onToggleSubGroup}
+                    onNavigate={onNavigate}
+                    onChildReorder={onChildReorder}
+                  />
+                ) : (
+                  <SortableItem
+                    key={item.id}
+                    item={item}
+                    isActive={item.id === activeScreen}
+                    onNavigate={onNavigate}
+                  />
+                )
+              )}
             </div>
           </SortableContext>
         </DndContext>
@@ -195,18 +300,28 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps): JSX.Elemen
     [draggingGroupId, orderedNav]
   );
 
-  // Auto-expand the group containing the active screen
+  // Auto-expand the group (and sub-group) containing the active screen
   useEffect(() => {
     const activeGroup = findGroupForScreen(state.selectedScreen);
-    if (activeGroup && collapsed.has(activeGroup)) {
-      setCollapsed((prev) => {
-        const next = new Set(prev);
+    const activeSubGroup = findSubGroupForScreen(state.selectedScreen);
+    setCollapsed((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      if (activeGroup && next.has(activeGroup)) {
         next.delete(activeGroup);
+        changed = true;
+      }
+      if (activeSubGroup && next.has(activeSubGroup)) {
+        next.delete(activeSubGroup);
+        changed = true;
+      }
+      if (changed) {
         persistCollapsed(next);
         return next;
-      });
-    }
-  }, [state.selectedScreen]); // eslint-disable-line react-hooks/exhaustive-deps
+      }
+      return prev;
+    });
+  }, [state.selectedScreen]);
 
   const toggleGroup = useCallback((groupId: string) => {
     setCollapsed((prev) => {
@@ -232,6 +347,12 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps): JSX.Elemen
     const itemOrder: Record<string, string[]> = {};
     for (const group of groups) {
       itemOrder[group.id] = group.items.map((item) => item.id);
+      // Also persist child orders for sub-groups
+      for (const item of group.items) {
+        if (item.children) {
+          itemOrder[item.id] = item.children.map((c) => c.id);
+        }
+      }
     }
     const order: NavOrderConfig = { groupOrder, itemOrder };
     void actions.updateSettings({ navOrder: order });
@@ -266,6 +387,19 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps): JSX.Elemen
     saveNavOrder(groups);
   }
 
+  // --- Sub-group child reorder callback ---
+  function handleChildReorder(subGroupId: string, oldIndex: number, newIndex: number): void {
+    const groups = orderedNav.map((g) => ({
+      ...g,
+      items: g.items.map((item) =>
+        item.id === subGroupId && item.children
+          ? { ...item, children: arrayMove([...item.children], oldIndex, newIndex) }
+          : item
+      )
+    }));
+    saveNavOrder(groups);
+  }
+
   return (
     <>
       {mobileOpen && <div className="sidebar-overlay" onClick={onMobileClose} />}
@@ -288,10 +422,13 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps): JSX.Elemen
                   key={group.id}
                   group={group}
                   isCollapsed={collapsed.has(group.id)}
+                  collapsed={collapsed}
                   activeScreen={state.selectedScreen}
                   onToggle={toggleGroup}
+                  onToggleSubGroup={toggleGroup}
                   onNavigate={navigate}
                   onItemReorder={handleItemReorder}
+                  onChildReorder={handleChildReorder}
                 />
               ))}
             </SortableContext>

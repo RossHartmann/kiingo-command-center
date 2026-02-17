@@ -15,24 +15,28 @@ interface TasksSectionCollapseState {
 }
 
 function loadTasksBoolPreference(key: string, fallback: boolean): boolean {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || typeof window.localStorage?.getItem !== "function") {
     return fallback;
   }
-  const value = window.localStorage.getItem(key);
-  if (value === "true") return true;
-  if (value === "false") return false;
+  try {
+    const value = window.localStorage.getItem(key);
+    if (value === "true") return true;
+    if (value === "false") return false;
+  } catch {
+    return fallback;
+  }
   return fallback;
 }
 
 function loadTasksSectionCollapsePreference(): TasksSectionCollapseState {
-  if (typeof window === "undefined") {
-    return { active: false, waiting: true, done: true };
-  }
-  const value = window.localStorage.getItem(TASKS_SECTION_COLLAPSE_KEY);
-  if (!value) {
+  if (typeof window === "undefined" || typeof window.localStorage?.getItem !== "function") {
     return { active: false, waiting: true, done: true };
   }
   try {
+    const value = window.localStorage.getItem(TASKS_SECTION_COLLAPSE_KEY);
+    if (!value) {
+      return { active: false, waiting: true, done: true };
+    }
     const parsed = JSON.parse(value) as Partial<TasksSectionCollapseState>;
     return {
       active: parsed.active ?? false,
@@ -120,24 +124,36 @@ export function TasksScreen(): JSX.Element {
   };
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
       return;
     }
-    window.localStorage.setItem(TASKS_SHOW_PROJECTION_INFO_KEY, String(showProjectionInfo));
+    try {
+      window.localStorage.setItem(TASKS_SHOW_PROJECTION_INFO_KEY, String(showProjectionInfo));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
   }, [showProjectionInfo]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
       return;
     }
-    window.localStorage.setItem(TASKS_SECTION_COLLAPSE_KEY, JSON.stringify(collapsedSections));
+    try {
+      window.localStorage.setItem(TASKS_SECTION_COLLAPSE_KEY, JSON.stringify(collapsedSections));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
   }, [collapsedSections]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
       return;
     }
-    window.localStorage.setItem(TASKS_HINT_DISMISSED_KEY, String(hintDismissed));
+    try {
+      window.localStorage.setItem(TASKS_HINT_DISMISSED_KEY, String(hintDismissed));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
   }, [hintDismissed]);
 
   useEffect(() => {

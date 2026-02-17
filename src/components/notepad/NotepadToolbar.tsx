@@ -1,6 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { FeatureFlag, NotepadViewDefinition, WorkspaceCapabilities, WorkspaceHealth } from "../../lib/types";
 
+const NOTEPAD_TOOLBAR_PANEL_KEY = "notepad.toolbar.openPanel";
+const NOTEPAD_TOOLBAR_INFO_KEY = "notepad.toolbar.infoPanel";
+
 interface NotepadToolbarProps {
   notepads: NotepadViewDefinition[];
   activeNotepadId: string;
@@ -40,6 +43,36 @@ function featureFlagStatus(featureFlags: FeatureFlag[], key: string): string {
   return `${key}: ${flag.enabled ? "on" : "off"}`;
 }
 
+function loadPanelPreference(): "none" | "create" | "edit" | "info" {
+  if (typeof window === "undefined" || typeof window.localStorage?.getItem !== "function") {
+    return "none";
+  }
+  try {
+    const value = window.localStorage.getItem(NOTEPAD_TOOLBAR_PANEL_KEY);
+    if (value === "create" || value === "edit" || value === "info" || value === "none") {
+      return value;
+    }
+  } catch {
+    return "none";
+  }
+  return "none";
+}
+
+function loadInfoPreference(): "help" | "diagnostics" {
+  if (typeof window === "undefined" || typeof window.localStorage?.getItem !== "function") {
+    return "help";
+  }
+  try {
+    const value = window.localStorage.getItem(NOTEPAD_TOOLBAR_INFO_KEY);
+    if (value === "diagnostics") {
+      return "diagnostics";
+    }
+  } catch {
+    return "help";
+  }
+  return "help";
+}
+
 export function NotepadToolbar({
   notepads,
   activeNotepadId,
@@ -75,7 +108,10 @@ export function NotepadToolbar({
     if (b.id === "now") return 1;
     return a.name.localeCompare(b.name);
   });
-  const [openPanel, setOpenPanel] = useState<"none" | "create" | "edit" | "info">("none");
+  const [openPanel, setOpenPanel] = useState<"none" | "create" | "edit" | "info">(() => loadPanelPreference());
+  const [infoPanel, setInfoPanel] = useState<"help" | "diagnostics">(() => loadInfoPreference());
+  const [showCreateDetails, setShowCreateDetails] = useState(false);
+  const [showEditDetails, setShowEditDetails] = useState(false);
 
   useEffect(() => {
     if (!activeNotepad && openPanel === "edit") {
@@ -83,8 +119,37 @@ export function NotepadToolbar({
     }
   }, [activeNotepad, openPanel]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_TOOLBAR_PANEL_KEY, openPanel);
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [openPanel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_TOOLBAR_INFO_KEY, infoPanel);
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [infoPanel]);
+
   function togglePanel(panel: "create" | "edit" | "info"): void {
-    setOpenPanel((current) => (current === panel ? "none" : panel));
+    const next = openPanel === panel ? "none" : panel;
+    setOpenPanel(next);
+    if (next !== "create") {
+      setShowCreateDetails(false);
+    }
+    if (next !== "edit") {
+      setShowEditDetails(false);
+    }
   }
 
   return (
@@ -158,33 +223,54 @@ export function NotepadToolbar({
 
         {openPanel === "info" && (
           <div className="notepad-disclosure-panel">
-            <div className="notepad-toolbar-row">
-              <small className={`health-pill ${capabilities?.obsidianCliAvailable ? "ok" : "warn"}`}>
-                CLI: {capabilities?.obsidianCliAvailable ? "available" : "unavailable"}
-              </small>
-              <small className={`health-pill ${health?.adapterHealthy ? "ok" : "warn"}`}>
-                Adapter: {health?.adapterHealthy ? "healthy" : "degraded"}
-              </small>
-              <small className={`health-pill ${health?.vaultAccessible ? "ok" : "warn"}`}>
-                Vault: {health?.vaultAccessible ? "accessible" : "unavailable"}
-              </small>
-              <small className="settings-hint">{featureFlagStatus(featureFlags, "workspace.notepad_ui_v2")}</small>
+            <div className="notepad-info-toggle-row" role="group" aria-label="Project info sections">
+              <button
+                type="button"
+                className={infoPanel === "help" ? "primary" : ""}
+                onClick={() => setInfoPanel("help")}
+                aria-expanded={infoPanel === "help"}
+              >
+                Help
+              </button>
+              <button
+                type="button"
+                className={infoPanel === "diagnostics" ? "primary" : ""}
+                onClick={() => setInfoPanel("diagnostics")}
+                aria-expanded={infoPanel === "diagnostics"}
+              >
+                Diagnostics
+              </button>
             </div>
-            <details className="notepad-shortcuts">
-              <summary>Shortcuts</summary>
-              <ul>
-                <li>`Enter`: new sibling row</li>
-                <li>`Shift+Enter`: newline in row</li>
-                <li>`Backspace` on empty row: delete row</li>
-                <li>`ArrowUp`/`ArrowDown`: move between rows at line boundaries</li>
-                <li>`ArrowLeft`/`ArrowRight` (tree): collapse/expand</li>
-                <li>`Tab` / `Shift+Tab`: indent / outdent</li>
-                <li>`Cmd/Ctrl+Shift+Arrow` (or `Cmd/Ctrl+Arrow`): reorder</li>
-                <li>`Cmd/Ctrl+C`, `X`, `V`: copy/cut/paste row</li>
-                <li>`Cmd/Ctrl+.`: focus project move actions</li>
-                <li>`Esc`: exit edit mode</li>
-              </ul>
-            </details>
+            {infoPanel === "help" ? (
+              <details className="notepad-shortcuts" open>
+                <summary>Shortcuts</summary>
+                <ul>
+                  <li>`Enter`: new sibling row</li>
+                  <li>`Shift+Enter`: newline in row</li>
+                  <li>`Backspace` on empty row: delete row</li>
+                  <li>`ArrowUp`/`ArrowDown`: move between rows at line boundaries</li>
+                  <li>`ArrowLeft`/`ArrowRight` (tree): collapse/expand</li>
+                  <li>`Tab` / `Shift+Tab`: indent / outdent</li>
+                  <li>`Cmd/Ctrl+Shift+Arrow` (or `Cmd/Ctrl+Arrow`): reorder</li>
+                  <li>`Cmd/Ctrl+C`, `X`, `V`: copy/cut/paste row</li>
+                  <li>`Cmd/Ctrl+.`: focus project move actions</li>
+                  <li>`Esc`: exit edit mode</li>
+                </ul>
+              </details>
+            ) : (
+              <div className="notepad-toolbar-row">
+                <small className={`health-pill ${capabilities?.obsidianCliAvailable ? "ok" : "warn"}`}>
+                  CLI: {capabilities?.obsidianCliAvailable ? "available" : "unavailable"}
+                </small>
+                <small className={`health-pill ${health?.adapterHealthy ? "ok" : "warn"}`}>
+                  Adapter: {health?.adapterHealthy ? "healthy" : "degraded"}
+                </small>
+                <small className={`health-pill ${health?.vaultAccessible ? "ok" : "warn"}`}>
+                  Vault: {health?.vaultAccessible ? "accessible" : "unavailable"}
+                </small>
+                <small className="settings-hint">{featureFlagStatus(featureFlags, "workspace.notepad_ui_v2")}</small>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -201,24 +287,31 @@ export function NotepadToolbar({
                 placeholder="Launch prep"
               />
             </label>
-            <label>
-              Categories (comma separated)
-              <input
-                type="text"
-                value={createCategories}
-                onChange={(event) => onChangeCreateCategories(event.target.value)}
-                placeholder="marketing, launch"
-              />
-            </label>
-            <label>
-              Description (optional)
-              <input
-                type="text"
-                value={createDescription}
-                onChange={(event) => onChangeCreateDescription(event.target.value)}
-                placeholder="Saved view + capture defaults"
-              />
-            </label>
+            {showCreateDetails && (
+              <>
+                <label>
+                  Categories (comma separated)
+                  <input
+                    type="text"
+                    value={createCategories}
+                    onChange={(event) => onChangeCreateCategories(event.target.value)}
+                    placeholder="marketing, launch"
+                  />
+                </label>
+                <label>
+                  Description (optional)
+                  <input
+                    type="text"
+                    value={createDescription}
+                    onChange={(event) => onChangeCreateDescription(event.target.value)}
+                    placeholder="Saved view + capture defaults"
+                  />
+                </label>
+              </>
+            )}
+            <button type="button" onClick={() => setShowCreateDetails((current) => !current)}>
+              {showCreateDetails ? "Hide Details" : "Add Details"}
+            </button>
             <button type="submit" className="primary" disabled={creatingNotepad || !isFeatureGateOpen}>
               {creatingNotepad ? "Creating..." : "Create Project"}
             </button>
@@ -238,24 +331,31 @@ export function NotepadToolbar({
                 placeholder="Project name"
               />
             </label>
-            <label>
-              Edit categories
-              <input
-                type="text"
-                value={editCategories}
-                onChange={(event) => onChangeEditCategories(event.target.value)}
-                placeholder="category-a, category-b"
-              />
-            </label>
-            <label>
-              Edit description
-              <input
-                type="text"
-                value={editDescription}
-                onChange={(event) => onChangeEditDescription(event.target.value)}
-                placeholder="Description"
-              />
-            </label>
+            {showEditDetails && (
+              <>
+                <label>
+                  Edit categories
+                  <input
+                    type="text"
+                    value={editCategories}
+                    onChange={(event) => onChangeEditCategories(event.target.value)}
+                    placeholder="category-a, category-b"
+                  />
+                </label>
+                <label>
+                  Edit description
+                  <input
+                    type="text"
+                    value={editDescription}
+                    onChange={(event) => onChangeEditDescription(event.target.value)}
+                    placeholder="Description"
+                  />
+                </label>
+              </>
+            )}
+            <button type="button" onClick={() => setShowEditDetails((current) => !current)}>
+              {showEditDetails ? "Hide Details" : "Add Details"}
+            </button>
             <button type="submit" disabled={editingNotepad || !isFeatureGateOpen}>
               {editingNotepad ? "Saving..." : "Save Active Project"}
             </button>

@@ -122,7 +122,9 @@ export type Screen =
   | "cfo-principles"
   | "cpo-principles"
   | "cco-principles"
-  | "chro-principles";
+  | "chro-principles"
+  | "discovery-calls"
+  | "follow-up-calls";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 

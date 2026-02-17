@@ -221,10 +221,59 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
   font-weight: 600;
 }
 
+.sidebar-item.nested {
+  padding-left: 2.4rem;
+}
+
 .sidebar-item-icon {
   font-size: 0.9rem;
   width: 1.1rem;
   text-align: center;
+}
+
+/* Sub-group (collapsible item with children) */
+
+.sidebar-subgroup {
+  margin: 0;
+}
+
+.sidebar-subgroup-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.38rem 1rem 0.38rem 1.6rem;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color 100ms;
+}
+
+.sidebar-subgroup-header:hover { color: var(--ink); }
+.sidebar-subgroup-header.has-active { color: var(--accent-strong); }
+
+.sidebar-subgroup-header:hover .sidebar-drag-handle {
+  opacity: 0.35;
+}
+
+.sidebar-subgroup-label { flex: 1; text-align: left; }
+
+.sidebar-subgroup-chevron {
+  font-size: 0.85rem;
+  transition: transform 150ms ease;
+  transform: rotate(0deg);
+}
+
+.sidebar-subgroup-chevron.open {
+  transform: rotate(90deg);
+}
+
+.sidebar-subgroup-items {
+  padding: 0.05rem 0 0.2rem;
 }
 
 .sidebar-footer {
@@ -2165,6 +2214,13 @@ body.metric-dragging {
   min-width: 0;
 }
 
+.tasks-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
 .tasks-column h3 {
   margin: 0;
   font-size: 0.82rem;
@@ -2211,6 +2267,34 @@ body.metric-dragging {
   color: var(--ink-muted);
 }
 
+.tasks-status-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--bg);
+}
+
+.tasks-status-todo {
+  border-color: rgba(15, 125, 102, 0.28);
+}
+
+.tasks-status-doing {
+  border-color: rgba(255, 181, 71, 0.45);
+}
+
+.tasks-status-blocked {
+  border-color: rgba(217, 83, 79, 0.45);
+}
+
+.tasks-status-done {
+  border-color: rgba(82, 93, 112, 0.45);
+}
+
 .tasks-card-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2223,12 +2307,38 @@ body.metric-dragging {
 
 .tasks-card-more {
   min-width: 4.2rem;
+  opacity: 0;
+  transition: opacity 130ms ease;
+}
+
+.tasks-card:hover .tasks-card-more,
+.tasks-card:focus-within .tasks-card-more,
+.tasks-card-more.primary,
+.tasks-card-more:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .tasks-card-more {
+    opacity: 1;
+  }
 }
 
 .tasks-card-disclosure {
   grid-column: 1 / -1;
   border-top: 1px dashed var(--line);
   padding-top: 0.45rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.tasks-card-meta {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tasks-projection-hint {
+  width: 100%;
 }
 
 .tasks-projection-bar {
@@ -2307,6 +2417,12 @@ body.metric-dragging {
   gap: 0.5rem;
   border-top: 1px dashed var(--line);
   padding-top: 0.5rem;
+}
+
+.notepad-info-toggle-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
 .notepad-shortcuts {
@@ -2399,9 +2515,12 @@ body.metric-dragging {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(255, 245, 216, 0.62), rgba(255, 250, 240, 0.96)),
-    var(--panel);
+  background: var(--panel);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 92%, var(--bg) 8%),
+    color-mix(in srgb, var(--bg) 86%, var(--panel) 14%)
+  );
 }
 
 .notepad-tree-inner {
@@ -2427,7 +2546,13 @@ body.metric-dragging {
 
 .notepad-row.selected {
   border-color: var(--accent);
-  background: rgba(15, 125, 102, 0.06);
+  background: rgba(15, 125, 102, 0.08);
+}
+
+@supports (background: color-mix(in srgb, red 10%, transparent)) {
+  .notepad-row.selected {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
 }
 
 .notepad-toggle {
@@ -2451,7 +2576,8 @@ body.metric-dragging {
   resize: none;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: rgba(255, 249, 234, 0.94);
+  background: var(--bg);
+  color: var(--ink);
   padding: 0.38rem 0.45rem;
   font-size: 0.82rem;
   line-height: 1.1;
@@ -2498,7 +2624,19 @@ body.metric-dragging {
   gap: 0.6rem;
 }
 
+.notepad-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.notepad-inspector.collapsed {
+  align-content: start;
+}
+
 .notepad-inspector h3 {
+  margin: 0;
   font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2534,7 +2672,12 @@ body.metric-dragging {
   margin-top: 0.3rem;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(255, 252, 244, 0.98), rgba(255, 246, 228, 0.98));
+  background: var(--panel);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 92%, var(--bg) 8%),
+    color-mix(in srgb, var(--bg) 84%, var(--panel) 16%)
+  );
   gap: 0.5rem;
 }
 

@@ -1,4 +1,5 @@
-import type { KeyboardEvent } from "react";
+import { useRef } from "react";
+import type { FocusEvent, KeyboardEvent, MouseEvent } from "react";
 import { InlineBlockEditor } from "./InlineBlockEditor";
 import type { FlatRow } from "./types";
 
@@ -12,7 +13,7 @@ interface NotepadRowProps {
   onToggleCollapsed: (placementId: string) => void;
   onEditorFocus: (placementId: string) => void;
   onEditorChange: (placementId: string, nextText: string) => void;
-  onEditorBlur: (placementId: string) => void;
+  onEditorBlur: (placementId: string, event: FocusEvent<HTMLTextAreaElement>) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
 }
 
@@ -29,13 +30,36 @@ export function NotepadRow({
   onEditorBlur,
   onEditorKeyDown
 }: NotepadRowProps): JSX.Element {
+  const suppressRowClickRef = useRef(false);
+
+  const handleMouseDownCapture = (event: MouseEvent<HTMLElement>): void => {
+    suppressRowClickRef.current = event.target instanceof HTMLTextAreaElement;
+  };
+
+  const handleRowClick = (event: MouseEvent<HTMLElement>): void => {
+    if (suppressRowClickRef.current) {
+      suppressRowClickRef.current = false;
+      return;
+    }
+    if (event.target instanceof HTMLTextAreaElement) {
+      // Editor focus already handles row selection; avoid duplicate dispatches on text interactions.
+      return;
+    }
+    onSelect(row.placement.id);
+    // Keep keyboard navigation active after clicking the row shell.
+    const tree = event.currentTarget.closest(".notepad-tree");
+    if (tree instanceof HTMLElement) {
+      tree.focus();
+    }
+  };
+
   return (
     <article
       className={`notepad-row ${selected ? "selected" : ""}`}
       style={{ paddingLeft: `${0.6 + row.depth * 1.1}rem` }}
-      onClick={() => onSelect(row.placement.id)}
-      onFocus={() => onSelect(row.placement.id)}
-      tabIndex={0}
+      onMouseDownCapture={handleMouseDownCapture}
+      onClick={handleRowClick}
+      tabIndex={-1}
       role="treeitem"
       aria-selected={selected}
       aria-level={row.depth + 1}

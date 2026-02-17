@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { NotepadRow } from "./NotepadRow";
 import type { FlatRow } from "./types";
 
@@ -12,7 +12,7 @@ interface NotepadTreeProps {
   onToggleCollapsed: (placementId: string) => void;
   onEditorFocus: (placementId: string) => void;
   onEditorChange: (placementId: string, nextText: string) => void;
-  onEditorBlur: (placementId: string) => void;
+  onEditorBlur: (placementId: string, event: FocusEvent<HTMLTextAreaElement>) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
   onContainerKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }

@@ -2,9 +2,11 @@ import type { Screen } from "../../state/appState";
 import type { NavOrderConfig } from "../../lib/types";
 
 export interface NavItem {
-  id: Screen;
+  /** Screen ID for leaf items, or a unique string key for sub-group parents */
+  id: string;
   label: string;
   icon: string;
+  children?: NavItem[];
 }
 
 export interface NavGroup {
@@ -71,7 +73,14 @@ export const NAVIGATION: NavGroup[] = [
     label: "Departments",
     icon: "\u2630",
     items: [
-      { id: "dept-sales", label: "Sales", icon: "\u2197" },
+      {
+        id: "sub:sales", label: "Sales", icon: "\u2197",
+        children: [
+          { id: "dept-sales", label: "Sales Dashboard", icon: "\u2197" },
+          { id: "discovery-calls", label: "Discovery Calls", icon: "\u260E" },
+          { id: "follow-up-calls", label: "Follow-up Calls", icon: "\u21BB" }
+        ]
+      },
       { id: "dept-marketing", label: "Marketing", icon: "\u2709" },
       { id: "dept-engineering", label: "Engineering", icon: "\u2318" },
       { id: "dept-operations", label: "Operations", icon: "\u2699" }
@@ -84,14 +93,19 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { id: "team-scorecard", label: "Scorecard", icon: "\u2610" },
       { id: "team-rocks", label: "Rocks", icon: "\u25B2" },
-      { id: "coo-principles", label: "COO Principles", icon: "\u2699" },
-      { id: "cmo-principles", label: "CMO Principles", icon: "\u2709" },
-      { id: "cro-principles", label: "CRO Principles", icon: "\u2197" },
-      { id: "cto-principles", label: "CTO Principles", icon: "\u2318" },
-      { id: "cfo-principles", label: "CFO Principles", icon: "\u25C9" },
-      { id: "cpo-principles", label: "CPO Principles", icon: "\u25A3" },
-      { id: "cco-principles", label: "CCO Principles", icon: "\u2665" },
-      { id: "chro-principles", label: "CHRO Principles", icon: "\u2603" }
+      {
+        id: "sub:principles", label: "Principles", icon: "\u2696",
+        children: [
+          { id: "coo-principles", label: "COO Principles", icon: "\u2699" },
+          { id: "cmo-principles", label: "CMO Principles", icon: "\u2709" },
+          { id: "cro-principles", label: "CRO Principles", icon: "\u2197" },
+          { id: "cto-principles", label: "CTO Principles", icon: "\u2318" },
+          { id: "cfo-principles", label: "CFO Principles", icon: "\u25C9" },
+          { id: "cpo-principles", label: "CPO Principles", icon: "\u25A3" },
+          { id: "cco-principles", label: "CCO Principles", icon: "\u2665" },
+          { id: "chro-principles", label: "CHRO Principles", icon: "\u2603" }
+        ]
+      }
     ]
   },
   {
@@ -166,7 +180,9 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   pipeline: { title: "Pipeline", description: "Sales opportunities, conversion rates, and deal velocity", group: "business" },
   "leads-gtm": { title: "Leads & GTM", description: "Volume by channel: Vistage, events, partnerships, digital", group: "business" },
 
-  "dept-sales": { title: "Sales", description: "Quota attainment, deal velocity, and pipeline health", group: "departments" },
+  "dept-sales": { title: "Sales Dashboard", description: "Quota attainment, deal velocity, and pipeline health", group: "departments" },
+  "discovery-calls": { title: "Discovery Calls", description: "Track and analyze sales discovery call pipeline and outcomes", group: "departments" },
+  "follow-up-calls": { title: "Follow-up Calls", description: "Track and analyze sales follow-up call activity and conversion", group: "departments" },
   "dept-marketing": { title: "Marketing", description: "Brand reach, proof amplification, and campaign ROI", group: "departments" },
   "dept-engineering": { title: "Engineering", description: "Velocity, reliability, and delivery cadence", group: "departments" },
   "dept-operations": { title: "Operations", description: "Bootcamp delivery, program ops, and capacity", group: "departments" },
@@ -200,13 +216,54 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   "metric-admin": { title: "Metrics", description: "Define, bind, and manage dashboard metrics", group: "system" }
 };
 
+function itemContainsScreen(item: NavItem, screen: Screen): boolean {
+  if (item.id === screen) return true;
+  if (item.children) return item.children.some((child) => itemContainsScreen(child, screen));
+  return false;
+}
+
 export function findGroupForScreen(screen: Screen): string | undefined {
   for (const group of NAVIGATION) {
-    if (group.items.some((item) => item.id === screen)) {
+    if (group.items.some((item) => itemContainsScreen(item, screen))) {
       return group.id;
     }
   }
   return undefined;
+}
+
+/** Find the sub-group item ID that contains the given screen, if any */
+export function findSubGroupForScreen(screen: Screen): string | undefined {
+  for (const group of NAVIGATION) {
+    for (const item of group.items) {
+      if (item.children && item.children.some((child) => child.id === screen)) {
+        return item.id;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Reorder children within sub-group items using itemOrder keyed by the sub-group's id */
+function reorderChildren(group: NavGroup, order: NavOrderConfig): NavGroup {
+  const items = group.items.map((item) => {
+    if (!item.children) return item;
+    const childOrder = order.itemOrder[item.id];
+    if (!childOrder || childOrder.length === 0) return item;
+    const childMap = new Map(item.children.map((c) => [c.id, c]));
+    const ordered: NavItem[] = [];
+    for (const id of childOrder) {
+      const child = childMap.get(id);
+      if (child) {
+        ordered.push(child);
+        childMap.delete(id);
+      }
+    }
+    for (const child of childMap.values()) {
+      ordered.push(child);
+    }
+    return { ...item, children: ordered };
+  });
+  return { ...group, items };
 }
 
 export function applyNavOrder(order: NavOrderConfig | undefined): NavGroup[] {
@@ -219,28 +276,28 @@ export function applyNavOrder(order: NavOrderConfig | undefined): NavGroup[] {
     groupMap.set(group.id, group);
   }
 
-  // Reorder items within each group
+  // Reorder items within each group (and children within sub-groups)
   const reorderedGroups = new Map<string, NavGroup>();
   for (const [groupId, group] of groupMap) {
     const itemOrder = order.itemOrder[groupId];
     if (!itemOrder || itemOrder.length === 0) {
-      reorderedGroups.set(groupId, group);
+      reorderedGroups.set(groupId, reorderChildren(group, order));
       continue;
     }
     const itemMap = new Map(group.items.map((item) => [item.id, item]));
     const ordered: NavItem[] = [];
     for (const id of itemOrder) {
-      const item = itemMap.get(id as Screen);
+      const item = itemMap.get(id);
       if (item) {
         ordered.push(item);
-        itemMap.delete(id as Screen);
+        itemMap.delete(id);
       }
     }
     // Append any items not in the stored order (new items added after order was saved)
     for (const item of itemMap.values()) {
       ordered.push(item);
     }
-    reorderedGroups.set(groupId, { ...group, items: ordered });
+    reorderedGroups.set(groupId, reorderChildren({ ...group, items: ordered }, order));
   }
 
   // Reorder groups

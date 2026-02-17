@@ -34,17 +34,33 @@ interface ProjectResult {
 type SearchResult = PageResult | MetricResult | ProjectResult;
 
 const ALL_PAGES: PageResult[] = NAVIGATION.flatMap((group) =>
-  group.items.map((item) => ({
-    kind: "page" as const,
-    screen: item.id,
-    label: item.label,
-    group: group.label,
-    icon: item.icon,
-    description: SCREEN_META[item.id]?.description ?? ""
-  }))
+  group.items.flatMap((item) => {
+    if (item.children) {
+      return item.children.map((child) => ({
+        kind: "page" as const,
+        screen: child.id as Screen,
+        label: child.label,
+        group: group.label,
+        icon: child.icon,
+        description: SCREEN_META[child.id as Screen]?.description ?? ""
+      }));
+    }
+    return [{
+      kind: "page" as const,
+      screen: item.id as Screen,
+      label: item.label,
+      group: group.label,
+      icon: item.icon,
+      description: SCREEN_META[item.id as Screen]?.description ?? ""
+    }];
+  })
 );
 
-const DASHBOARD_SCREEN_IDS: Screen[] = NAVIGATION.flatMap((group) => group.items.map((item) => item.id));
+const DASHBOARD_SCREEN_IDS: Screen[] = NAVIGATION.flatMap((group) =>
+  group.items.flatMap((item) =>
+    item.children ? item.children.map((c) => c.id as Screen) : [item.id as Screen]
+  )
+);
 
 interface MetricBinding {
   metricId: string;
@@ -166,12 +182,32 @@ export function OmniSearch() {
       if (metric.archivedAt) continue;
       const name = metric.name.toLowerCase();
       const slug = metric.slug.toLowerCase();
-      let score = 0;
-      if (name === q) score = 95;
-      else if (name.startsWith(q)) score = 75;
-      else if (name.split(/\s+/).some((word) => word.startsWith(q))) score = 55;
-      else if (name.includes(q)) score = 35;
-      else if (slug.includes(q)) score = 20;
+      const aliases: string[] = Array.isArray(metric.metadataJson?.aliases)
+        ? (metric.metadataJson.aliases as string[]).map((a) => a.toLowerCase())
+        : [];
+
+      // Score name
+      let nameScore = 0;
+      if (name === q) nameScore = 95;
+      else if (name.startsWith(q)) nameScore = 75;
+      else if (name.split(/\s+/).some((word) => word.startsWith(q))) nameScore = 55;
+      else if (name.includes(q)) nameScore = 35;
+
+      // Score aliases independently (best alias wins)
+      let aliasScore = 0;
+      for (const alias of aliases) {
+        let s = 0;
+        if (alias === q) s = 90;
+        else if (alias.startsWith(q)) s = 70;
+        else if (alias.split(/\s+/).some((word) => word.startsWith(q))) s = 50;
+        else if (alias.includes(q)) s = 30;
+        if (s > aliasScore) aliasScore = s;
+      }
+
+      // Score slug
+      const slugScore = slug.includes(q) ? 20 : 0;
+
+      const score = Math.max(nameScore, aliasScore, slugScore);
       if (score > 0) {
         const binding = metricBindings.find((value) => value.metricId === metric.id);
         const screenId = binding?.screenId ?? null;

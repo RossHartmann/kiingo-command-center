@@ -24,6 +24,10 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
     ? definition.metadataJson.dependencies.filter((value): value is string => typeof value === "string")
     : [];
   const [dependencies, setDependencies] = useState<string[]>(initialDependencies);
+  const initialAliases = Array.isArray(definition?.metadataJson?.aliases)
+    ? definition.metadataJson.aliases.filter((value): value is string => typeof value === "string")
+    : [];
+  const [aliasesText, setAliasesText] = useState(initialAliases.join(", "));
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
@@ -58,7 +62,8 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
         proactive,
         metadataJson: {
           ...(definition?.metadataJson ?? {}),
-          dependencies
+          dependencies,
+          aliases: aliasesText.split(",").map((s) => s.trim()).filter(Boolean)
         }
       };
       await actions.saveMetricDefinition(payload);
@@ -87,7 +92,8 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
         proactive: false,
         metadataJson: {
           ...(definition?.metadataJson ?? {}),
-          dependencies
+          dependencies,
+          aliases: aliasesText.split(",").map((s) => s.trim()).filter(Boolean)
         }
       });
       await actions.refreshMetric(saved.id);
@@ -123,6 +129,16 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
           placeholder="e.g. monthly-revenue"
+        />
+      </label>
+
+      <label>
+        Aliases (comma-separated, for search)
+        <input
+          type="text"
+          value={aliasesText}
+          onChange={(e) => setAliasesText(e.target.value)}
+          placeholder="e.g. disco calls, discovery"
         />
       </label>
 

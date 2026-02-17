@@ -49,4 +49,17 @@ describe("notepadUiReducer", () => {
     state = notepadUiReducer(state, { type: "set_active_notepad", notepadId: "focus" });
     expect(state.interactionMode).toBe("navigation");
   });
+
+  it("returns same state for no-op selection/mode updates", () => {
+    let state = initialNotepadUiState;
+    const sameSelection = notepadUiReducer(state, { type: "set_selected_placement", placementId: undefined });
+    expect(sameSelection).toBe(state);
+
+    state = notepadUiReducer(state, { type: "set_selected_placement", placementId: "p-1" });
+    const unchangedSelection = notepadUiReducer(state, { type: "set_selected_placement", placementId: "p-1" });
+    expect(unchangedSelection).toBe(state);
+
+    const sameMode = notepadUiReducer(state, { type: "set_interaction_mode", mode: state.interactionMode });
+    expect(sameMode).toBe(state);
+  });
 });

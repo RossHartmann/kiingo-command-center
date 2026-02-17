@@ -51,6 +51,25 @@ import { useNotepadUiState } from "../state/notepadState";
 
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
 const ACTIVE_ROW_STATUSES: TaskStatus[] = ["todo", "doing", "blocked"];
+const NOTEPAD_INSPECTOR_OPEN_KEY = "notepad.disclosure.inspectorOpen";
+const NOTEPAD_MOVE_COPY_OPEN_KEY = "notepad.disclosure.moveCopyOpen";
+const NOTEPAD_BLOCKING_OPEN_KEY = "notepad.disclosure.blockingOpen";
+const NOTEPAD_ADVANCED_OPEN_KEY = "notepad.disclosure.advancedOpen";
+const NOTEPAD_HINT_DISMISSED_KEY = "notepad.disclosure.hintDismissed";
+
+function loadNotepadBoolPreference(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined" || typeof window.localStorage?.getItem !== "function") {
+    return fallback;
+  }
+  try {
+    const value = window.localStorage.getItem(key);
+    if (value === "true") return true;
+    if (value === "false") return false;
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
 
 function idempotencyKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -186,14 +205,30 @@ export function NotepadScreen(): JSX.Element {
 
   const [quickTargetNotepadId, setQuickTargetNotepadId] = useState("");
   const [pendingProjectId, setPendingProjectId] = useState<string>();
-  const [showMoveCopyPanel, setShowMoveCopyPanel] = useState(false);
-  const [showBlockingPanel, setShowBlockingPanel] = useState(false);
-  const [showAdvancedPanel, setShowAdvancedPanel] = useState(false);
+  const [showMoveCopyPanel, setShowMoveCopyPanel] = useState<boolean>(() =>
+    loadNotepadBoolPreference(NOTEPAD_MOVE_COPY_OPEN_KEY, false)
+  );
+  const [showBlockingPanel, setShowBlockingPanel] = useState<boolean>(() =>
+    loadNotepadBoolPreference(NOTEPAD_BLOCKING_OPEN_KEY, false)
+  );
+  const [showAdvancedPanel, setShowAdvancedPanel] = useState<boolean>(() =>
+    loadNotepadBoolPreference(NOTEPAD_ADVANCED_OPEN_KEY, false)
+  );
+  const [inspectorOpen, setInspectorOpen] = useState<boolean>(() =>
+    loadNotepadBoolPreference(NOTEPAD_INSPECTOR_OPEN_KEY, false)
+  );
+  const [hintDismissed, setHintDismissed] = useState<boolean>(() =>
+    loadNotepadBoolPreference(NOTEPAD_HINT_DISMISSED_KEY, false)
+  );
 
   const saveTimersRef = useRef<Map<string, number>>(new Map());
   const pendingEditorFocusPlacementIdRef = useRef<string | undefined>(undefined);
   const selectedPlacementRef = useRef<string | undefined>(undefined);
   const quickTargetSelectRef = useRef<HTMLSelectElement | null>(null);
+  const pointerEditorInteractionRef = useRef<{ active: boolean; placementId?: string }>({
+    active: false,
+    placementId: undefined
+  });
 
   const activeNotepad = useMemo(
     () => notepads.find((notepad) => notepad.id === uiState.activeNotepadId),
@@ -235,6 +270,11 @@ export function NotepadScreen(): JSX.Element {
   }, [treeData.flatRows]);
 
   const isGateOpen = useMemo(() => !gateError, [gateError]);
+  const dismissHint = useCallback(() => {
+    if (!hintDismissed) {
+      setHintDismissed(true);
+    }
+  }, [hintDismissed]);
 
   useEffect(() => {
     if (!activeNotepad) {
@@ -260,10 +300,81 @@ export function NotepadScreen(): JSX.Element {
   }, [notepads, quickTargetNotepadId, uiState.activeNotepadId]);
 
   useEffect(() => {
-    setShowMoveCopyPanel(false);
-    setShowBlockingPanel(false);
-    setShowAdvancedPanel(false);
-  }, [uiState.selectedPlacementId]);
+    const onMouseDownCapture = (event: MouseEvent): void => {
+      const target = event.target;
+      if (!(target instanceof HTMLTextAreaElement) || !target.classList.contains("notepad-editor")) {
+        pointerEditorInteractionRef.current = { active: false, placementId: undefined };
+        return;
+      }
+      pointerEditorInteractionRef.current = { active: true, placementId: target.dataset.placementId };
+    };
+    const onMouseUpCapture = (): void => {
+      window.setTimeout(() => {
+        pointerEditorInteractionRef.current = { active: false, placementId: undefined };
+      }, 0);
+    };
+    document.addEventListener("mousedown", onMouseDownCapture, true);
+    document.addEventListener("mouseup", onMouseUpCapture, true);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDownCapture, true);
+      document.removeEventListener("mouseup", onMouseUpCapture, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_INSPECTOR_OPEN_KEY, String(inspectorOpen));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [inspectorOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_MOVE_COPY_OPEN_KEY, String(showMoveCopyPanel));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [showMoveCopyPanel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_BLOCKING_OPEN_KEY, String(showBlockingPanel));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [showBlockingPanel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_ADVANCED_OPEN_KEY, String(showAdvancedPanel));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [showAdvancedPanel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(NOTEPAD_HINT_DISMISSED_KEY, String(hintDismissed));
+    } catch {
+      // Ignore persistence failures in constrained environments.
+    }
+  }, [hintDismissed]);
 
   useEffect(() => {
     const onOpenProject = (event: Event): void => {
@@ -1495,11 +1606,13 @@ export function NotepadScreen(): JSX.Element {
     if (!selectedRow) {
       return;
     }
+    dismissHint();
+    setInspectorOpen(true);
     setShowMoveCopyPanel(true);
     window.requestAnimationFrame(() => {
       quickTargetSelectRef.current?.focus();
     });
-  }, [selectedRow]);
+  }, [dismissHint, selectedRow]);
 
   const moveEditorSelection = useCallback(
     (row: FlatRow, direction: "up" | "down"): void => {
@@ -1534,6 +1647,9 @@ export function NotepadScreen(): JSX.Element {
         selectionStart,
         selectionEnd
       });
+      if (action.type !== "none") {
+        dismissHint();
+      }
 
       switch (action.type) {
         case "none":
@@ -1602,6 +1718,7 @@ export function NotepadScreen(): JSX.Element {
       copyOrCutSelected,
       createRow,
       deleteRow,
+      dismissHint,
       indentSelected,
       moveEditorSelection,
       openQuickActions,
@@ -1620,6 +1737,7 @@ export function NotepadScreen(): JSX.Element {
       }
       if (event.key === "Enter" && treeData.flatRows.length === 0) {
         event.preventDefault();
+        dismissHint();
         void createRow("sibling", { focusEditor: true });
         return;
       }
@@ -1631,6 +1749,9 @@ export function NotepadScreen(): JSX.Element {
         shiftKey: event.shiftKey,
         hasSelectedRow: !!uiState.selectedPlacementId
       });
+      if (action.type !== "none") {
+        dismissHint();
+      }
 
       switch (action.type) {
         case "none":
@@ -1689,6 +1810,7 @@ export function NotepadScreen(): JSX.Element {
     [
       copyOrCutSelected,
       createRow,
+      dismissHint,
       focusEditorForPlacement,
       navigateHorizontalSelection,
       navigateSelection,
@@ -1763,15 +1885,24 @@ export function NotepadScreen(): JSX.Element {
           {treeData.flatRows.length === 0 && (
             <p className="settings-hint">No rows yet. Focus the outline and press Enter to add the first row.</p>
           )}
+          {!hintDismissed && (
+            <small className="settings-hint">
+              Keyboard-first tip: use Enter to create, Tab to indent, and Backspace on empty rows to remove.
+            </small>
+          )}
           <NotepadTree
             rows={treeData.flatRows}
             selectedPlacementId={uiState.selectedPlacementId}
             getRowText={(row) => rowText(row, uiState.draftsByPlacement[row.placement.id])}
             isTaskRow={isTaskRow}
             parseOverlayMode={(row) => parseOverlayMode(row.overlay)}
-            onSelectRow={(placementId) => uiDispatch({ type: "set_selected_placement", placementId })}
+            onSelectRow={(placementId) => {
+              dismissHint();
+              uiDispatch({ type: "set_selected_placement", placementId });
+            }}
             onToggleCollapsed={toggleRowCollapsed}
             onEditorFocus={(placementId) => {
+              dismissHint();
               uiDispatch({ type: "set_selected_placement", placementId });
               uiDispatch({ type: "set_interaction_mode", mode: "edit" });
             }}
@@ -1782,7 +1913,35 @@ export function NotepadScreen(): JSX.Element {
               }
               scheduleDraftSave(row, nextText);
             }}
-            onEditorBlur={(placementId) => {
+            onEditorBlur={(placementId, event) => {
+              const pointerStartedInEditor =
+                pointerEditorInteractionRef.current.active &&
+                pointerEditorInteractionRef.current.placementId === placementId;
+              const related = event.relatedTarget;
+              const blurredToTree = !!related?.closest(".notepad-tree");
+
+              if (pointerStartedInEditor && (blurredToTree || !related)) {
+                const start = event.currentTarget.selectionStart ?? 0;
+                const end = event.currentTarget.selectionEnd ?? start;
+                window.requestAnimationFrame(() => {
+                  const activeElement = document.activeElement as HTMLElement | null;
+                  const activeInTree = !!activeElement?.closest(".notepad-tree");
+                  if (activeElement && activeElement !== document.body && !activeInTree) {
+                    return;
+                  }
+                  const editor = document.querySelector<HTMLTextAreaElement>(
+                    `textarea.notepad-editor[data-placement-id="${placementId}"]`
+                  );
+                  if (!editor) {
+                    return;
+                  }
+                  editor.focus({ preventScroll: true });
+                  editor.setSelectionRange(start, end);
+                  uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+                });
+                return;
+              }
+
               void flushDraft(placementId);
               uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
             }}
@@ -1791,10 +1950,28 @@ export function NotepadScreen(): JSX.Element {
           />
         </div>
 
-        <aside className="card notepad-inspector">
-          <h3>Row Details</h3>
+        <aside className={`card notepad-inspector${inspectorOpen ? " open" : " collapsed"}`}>
+          <div className="notepad-inspector-header">
+            <h3>Row Details</h3>
+            <button
+              type="button"
+              className={inspectorOpen ? "primary" : ""}
+              onClick={() => {
+                dismissHint();
+                setInspectorOpen((current) => !current);
+              }}
+              aria-expanded={inspectorOpen}
+            >
+              {inspectorOpen ? "Hide" : "Show"}
+            </button>
+          </div>
           {!selectedRow && <p className="settings-hint">Select a row to inspect and edit metadata.</p>}
-          {selectedRow && (
+          {selectedRow && !inspectorOpen && (
+            <p className="settings-hint">
+              Selected: <strong>{rowTitle(selectedRow)}</strong>
+            </p>
+          )}
+          {selectedRow && inspectorOpen && (
             <div className="notepad-inspector-grid">
               <p>
                 <strong>{rowTitle(selectedRow)}</strong>
@@ -1839,7 +2016,10 @@ export function NotepadScreen(): JSX.Element {
                 <button
                   type="button"
                   className={showMoveCopyPanel ? "primary" : ""}
-                  onClick={() => setShowMoveCopyPanel((current) => !current)}
+                  onClick={() => {
+                    dismissHint();
+                    setShowMoveCopyPanel((current) => !current);
+                  }}
                   aria-expanded={showMoveCopyPanel}
                 >
                   Move/Copy
@@ -1847,7 +2027,10 @@ export function NotepadScreen(): JSX.Element {
                 <button
                   type="button"
                   className={showBlockingPanel ? "primary" : ""}
-                  onClick={() => setShowBlockingPanel((current) => !current)}
+                  onClick={() => {
+                    dismissHint();
+                    setShowBlockingPanel((current) => !current);
+                  }}
                   aria-expanded={showBlockingPanel}
                   disabled={!selectedRow.atom}
                 >
@@ -1856,7 +2039,10 @@ export function NotepadScreen(): JSX.Element {
                 <button
                   type="button"
                   className={showAdvancedPanel ? "primary" : ""}
-                  onClick={() => setShowAdvancedPanel((current) => !current)}
+                  onClick={() => {
+                    dismissHint();
+                    setShowAdvancedPanel((current) => !current);
+                  }}
                   aria-expanded={showAdvancedPanel}
                 >
                   Advanced
