@@ -292,18 +292,87 @@ function reducer(state: State, action: Action): State {
       // Runtime execution failures are surfaced by snapshot state after completion.
       {
         const { [action.metricId]: _, ...restErrors } = state.metricRefreshErrors;
+        const createdAt = new Date().toISOString();
+        let didPatchViews = false;
+        const patchedViews: Record<string, ScreenMetricView[]> = {};
+        for (const [screenId, views] of Object.entries(state.screenMetricViews)) {
+          let screenChanged = false;
+          const nextViews = views.map((view) => {
+            if (view.definition.id !== action.metricId) return view;
+            const existingInflight = view.inflightSnapshot;
+            const nextInflight =
+              existingInflight && existingInflight.id === action.snapshotId
+                ? existingInflight
+                : {
+                  id: action.snapshotId,
+                  metricId: action.metricId,
+                  runId: existingInflight?.runId,
+                  valuesJson: existingInflight?.valuesJson ?? {},
+                  renderedHtml: existingInflight?.renderedHtml ?? "",
+                  status: "pending" as const,
+                  createdAt: existingInflight?.createdAt ?? createdAt,
+                };
+            if (view.refreshInProgress && view.inflightSnapshot?.id === nextInflight.id) {
+              return view;
+            }
+            screenChanged = true;
+            return {
+              ...view,
+              refreshInProgress: true,
+              inflightSnapshot: nextInflight,
+            };
+          });
+          if (screenChanged) {
+            patchedViews[screenId] = nextViews;
+            didPatchViews = true;
+          }
+        }
         return {
           ...state,
           metricRefreshes: {
             ...state.metricRefreshes,
             [action.metricId]: action.snapshotId
           },
-          metricRefreshErrors: restErrors
+          metricRefreshErrors: restErrors,
+          screenMetricViews: didPatchViews
+            ? {
+              ...state.screenMetricViews,
+              ...patchedViews,
+            }
+            : state.screenMetricViews
         };
       }
     case "clear_metric_refresh": {
       const { [action.metricId]: _, ...rest } = state.metricRefreshes;
-      return { ...state, metricRefreshes: rest };
+      let didPatchViews = false;
+      const patchedViews: Record<string, ScreenMetricView[]> = {};
+      for (const [screenId, views] of Object.entries(state.screenMetricViews)) {
+        let screenChanged = false;
+        const nextViews = views.map((view) => {
+          if (view.definition.id !== action.metricId) return view;
+          if (!view.refreshInProgress && !view.inflightSnapshot) return view;
+          screenChanged = true;
+          return {
+            ...view,
+            refreshInProgress: false,
+            inflightSnapshot: undefined,
+          };
+        });
+        if (screenChanged) {
+          patchedViews[screenId] = nextViews;
+          didPatchViews = true;
+        }
+      }
+      return {
+        ...state,
+        metricRefreshes: rest,
+        screenMetricViews: didPatchViews
+          ? {
+            ...state.screenMetricViews,
+            ...patchedViews,
+          }
+          : state.screenMetricViews,
+      };
     }
     case "set_metric_refresh_error":
       return {
@@ -1064,4 +1133,8 @@ export function useAppActions(): Actions {
     throw new Error("useAppActions must be used within AppStateProvider");
   }
   return ctx;
+}
+
+export function useOptionalAppActions(): Actions | null {
+  return useContext(ActionContext);
 }

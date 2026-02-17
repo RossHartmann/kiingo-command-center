@@ -1278,6 +1278,41 @@ impl Database {
         Ok(())
     }
 
+    pub fn mark_metrics_invalidated_by_dependency(
+        &self,
+        source_metric_id: &str,
+        metric_ids: &[String],
+    ) -> AppResult<usize> {
+        if metric_ids.is_empty() {
+            return Ok(0);
+        }
+        let now = Utc::now().to_rfc3339();
+        let mut conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let tx = conn.transaction()?;
+        let mut affected = 0usize;
+        for metric_id in metric_ids {
+            affected += tx.execute(
+                "INSERT INTO metric_dependency_invalidations (metric_id, source_metric_id, invalidated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(metric_id) DO UPDATE SET
+                   source_metric_id = excluded.source_metric_id,
+                   invalidated_at = excluded.invalidated_at",
+                params![metric_id, source_metric_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(affected)
+    }
+
+    pub fn clear_metric_dependency_invalidation(&self, metric_id: &str) -> AppResult<bool> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let changed = conn.execute(
+            "DELETE FROM metric_dependency_invalidations WHERE metric_id = ?1",
+            [metric_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn fail_metric_snapshot(&self, id: &str, error_message: &str) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
@@ -1343,19 +1378,20 @@ impl Database {
     pub fn get_metric_diagnostics(&self, metric_id: &str) -> AppResult<MetricDiagnostics> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
 
-        // Aggregation stats from all snapshots
+        // Aggregation stats from executed refresh runs only.
+        // Seeded snapshots use run_id = NULL and should not be treated as timing baselines.
         let (total_runs, completed_runs, failed_runs, avg_dur, min_dur, max_dur): (i64, i64, i64, Option<f64>, Option<f64>, Option<f64>) = conn.query_row(
             "SELECT
                 COUNT(1),
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
                 AVG(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
                     THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END),
                 MIN(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
                     THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END),
                 MAX(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
                     THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END)
-             FROM metric_snapshots WHERE metric_id = ?1",
+             FROM metric_snapshots WHERE metric_id = ?1 AND run_id IS NOT NULL",
             [metric_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )?;
@@ -1364,7 +1400,7 @@ impl Database {
         let last_completed: Option<(f64, String)> = conn.query_row(
             "SELECT (julianday(completed_at) - julianday(created_at)) * 86400.0, completed_at
              FROM metric_snapshots
-             WHERE metric_id = ?1 AND status = 'completed' AND completed_at IS NOT NULL
+             WHERE metric_id = ?1 AND run_id IS NOT NULL AND status = 'completed' AND completed_at IS NOT NULL
              ORDER BY completed_at DESC LIMIT 1",
             [metric_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -1429,23 +1465,6 @@ impl Database {
             last_completed_at,
             next_refresh_at,
         })
-    }
-
-    pub fn has_pending_snapshot(&self, metric_id: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
-        // Expire snapshots stuck in pending/running for over 5 minutes (process likely died)
-        conn.execute(
-            "UPDATE metric_snapshots SET status = 'failed', error_message = 'Timed out (stuck pending >5min)', completed_at = datetime('now')
-             WHERE metric_id = ?1 AND status IN ('pending', 'running')
-             AND created_at < datetime('now', '-5 minutes')",
-            [metric_id],
-        )?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(1) FROM metric_snapshots WHERE metric_id = ?1 AND status IN ('pending', 'running')",
-            [metric_id],
-            |row| row.get(0),
-        )?;
-        Ok(count > 0)
     }
 
     pub fn find_snapshot_by_run_id(&self, run_id: &str) -> AppResult<Option<MetricSnapshot>> {
@@ -1570,14 +1589,21 @@ impl Database {
                     .optional()?
             };
 
-            // Check if there's a pending/running snapshot (refresh in flight)
-            let refresh_in_progress: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) > 0 FROM metric_snapshots WHERE metric_id = ?1 AND status IN ('pending', 'running')",
-                    [&metric_id_str],
-                    |row| row.get(0),
-                )
-                .unwrap_or(false);
+            // Fetch the newest in-flight snapshot (pending/running) so the UI can
+            // anchor elapsed refresh timers to the active run's real start time.
+            let inflight_snapshot: Option<MetricSnapshot> = {
+                let mut snap_stmt = conn.prepare(
+                    "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
+                     FROM metric_snapshots
+                     WHERE metric_id = ?1 AND status IN ('pending', 'running')
+                     ORDER BY created_at DESC
+                     LIMIT 1",
+                )?;
+                snap_stmt
+                    .query_row([&metric_id_str], parse_metric_snapshot_row)
+                    .optional()?
+            };
+            let refresh_in_progress = inflight_snapshot.is_some();
 
             let is_stale = match &latest_snapshot {
                 None => true,
@@ -1595,6 +1621,7 @@ impl Database {
                 binding,
                 definition,
                 latest_snapshot,
+                inflight_snapshot,
                 is_stale,
                 refresh_in_progress,
             });
@@ -1651,6 +1678,18 @@ impl Database {
                    SELECT MAX(ms3.completed_at) FROM metric_snapshots ms3
                    WHERE ms3.metric_id = md.id AND ms3.status = 'completed'
                  ) < datetime('now', '-' || md.ttl_seconds || ' seconds')
+                 OR EXISTS (
+                   SELECT 1 FROM metric_dependency_invalidations mdi
+                   WHERE mdi.metric_id = md.id
+                     AND julianday(mdi.invalidated_at) > COALESCE(
+                       (
+                         SELECT MAX(julianday(ms4.completed_at))
+                         FROM metric_snapshots ms4
+                         WHERE ms4.metric_id = md.id AND ms4.status = 'completed'
+                       ),
+                       -1
+                     )
+                 )
                )",
         )?;
         let rows = stmt.query_map([screen_id], parse_metric_definition_row)?;
@@ -1664,26 +1703,38 @@ impl Database {
     pub fn find_proactive_stale_metrics(&self) -> AppResult<Vec<MetricDefinition>> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, slug, instructions, template_html, ttl_seconds,
-                    provider, model, profile_id, cwd, enabled, proactive,
-                    metadata_json, created_at, updated_at, archived_at
-             FROM metric_definitions
-             WHERE proactive = 1
-               AND enabled = 1
-               AND archived_at IS NULL
+            "SELECT md.id, md.name, md.slug, md.instructions, md.template_html, md.ttl_seconds,
+                    md.provider, md.model, md.profile_id, md.cwd, md.enabled, md.proactive,
+                    md.metadata_json, md.created_at, md.updated_at, md.archived_at
+             FROM metric_definitions md
+             WHERE md.proactive = 1
+               AND md.enabled = 1
+               AND md.archived_at IS NULL
                AND NOT EXISTS (
                  SELECT 1 FROM metric_snapshots ms
-                 WHERE ms.metric_id = metric_definitions.id AND ms.status IN ('pending', 'running')
+                 WHERE ms.metric_id = md.id AND ms.status IN ('pending', 'running')
                )
                AND (
                  NOT EXISTS (
                    SELECT 1 FROM metric_snapshots ms2
-                   WHERE ms2.metric_id = metric_definitions.id AND ms2.status = 'completed'
+                   WHERE ms2.metric_id = md.id AND ms2.status = 'completed'
                  )
                  OR (
                    SELECT MAX(ms3.completed_at) FROM metric_snapshots ms3
-                   WHERE ms3.metric_id = metric_definitions.id AND ms3.status = 'completed'
-                 ) < datetime('now', '-' || ttl_seconds || ' seconds')
+                   WHERE ms3.metric_id = md.id AND ms3.status = 'completed'
+                 ) < datetime('now', '-' || md.ttl_seconds || ' seconds')
+                 OR EXISTS (
+                   SELECT 1 FROM metric_dependency_invalidations mdi
+                   WHERE mdi.metric_id = md.id
+                     AND julianday(mdi.invalidated_at) > COALESCE(
+                       (
+                         SELECT MAX(julianday(ms4.completed_at))
+                         FROM metric_snapshots ms4
+                         WHERE ms4.metric_id = md.id AND ms4.status = 'completed'
+                       ),
+                       -1
+                     )
+                 )
                )",
         )?;
         let rows = stmt.query_map([], parse_metric_definition_row)?;
@@ -2529,6 +2580,12 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
                completed_at TEXT,
                FOREIGN KEY(metric_id) REFERENCES metric_definitions(id) ON DELETE CASCADE
              );
+             CREATE TABLE IF NOT EXISTS metric_dependency_invalidations (
+               metric_id TEXT PRIMARY KEY,
+               source_metric_id TEXT NOT NULL,
+               invalidated_at TEXT NOT NULL,
+               FOREIGN KEY(metric_id) REFERENCES metric_definitions(id) ON DELETE CASCADE
+             );
              CREATE TABLE IF NOT EXISTS screen_metrics (
                id TEXT PRIMARY KEY,
                screen_id TEXT NOT NULL,
@@ -2543,6 +2600,8 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
              CREATE INDEX IF NOT EXISTS idx_metric_snapshots_metric_created ON metric_snapshots(metric_id, created_at DESC);
              CREATE INDEX IF NOT EXISTS idx_metric_snapshots_run ON metric_snapshots(run_id);
              CREATE INDEX IF NOT EXISTS idx_metric_snapshots_status ON metric_snapshots(status);
+             CREATE INDEX IF NOT EXISTS idx_metric_dependency_invalidations_source
+               ON metric_dependency_invalidations(source_metric_id, invalidated_at DESC);
              CREATE INDEX IF NOT EXISTS idx_screen_metrics_screen ON screen_metrics(screen_id, position);
              CREATE INDEX IF NOT EXISTS idx_screen_metrics_metric ON screen_metrics(metric_id);",
         )?;
@@ -3104,7 +3163,10 @@ fn default_workspace_candidate() -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::Database;
-    use crate::models::{ListConversationsFilters, ListRunsFilters, Provider, RunMode, SaveProfilePayload};
+    use crate::models::{
+        BindMetricToScreenPayload, ListConversationsFilters, ListRunsFilters, Provider, RunMode,
+        SaveMetricDefinitionPayload, SaveProfilePayload,
+    };
 
     #[test]
     fn database_can_insert_and_read_run() {
@@ -3300,5 +3362,106 @@ mod tests {
 
         db.validate_conversation_link_consistency()
             .expect("validate invariants");
+    }
+
+    #[test]
+    fn dependency_invalidation_marks_metric_stale_until_recomputed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db = Database::new(&db_path).expect("db");
+
+        let source = db
+            .save_metric_definition(SaveMetricDefinitionPayload {
+                id: None,
+                name: "Source".to_string(),
+                slug: "source-metric".to_string(),
+                instructions: "source".to_string(),
+                template_html: None,
+                ttl_seconds: Some(3_600),
+                provider: Some(Provider::Claude),
+                model: None,
+                profile_id: None,
+                cwd: None,
+                enabled: Some(true),
+                proactive: Some(false),
+                metadata_json: Some(serde_json::json!({})),
+            })
+            .expect("save source metric");
+
+        let dependent = db
+            .save_metric_definition(SaveMetricDefinitionPayload {
+                id: None,
+                name: "Dependent".to_string(),
+                slug: "dependent-metric".to_string(),
+                instructions: "dependent".to_string(),
+                template_html: None,
+                ttl_seconds: Some(3_600),
+                provider: Some(Provider::Claude),
+                model: None,
+                profile_id: None,
+                cwd: None,
+                enabled: Some(true),
+                proactive: Some(false),
+                metadata_json: Some(serde_json::json!({
+                    "dependencies": [source.slug]
+                })),
+            })
+            .expect("save dependent metric");
+
+        db.bind_metric_to_screen(&BindMetricToScreenPayload {
+            screen_id: "dashboard".to_string(),
+            metric_id: dependent.id.clone(),
+            position: Some(0),
+            layout_hint: Some("card".to_string()),
+            grid_x: Some(0),
+            grid_y: Some(0),
+            grid_w: Some(4),
+            grid_h: Some(6),
+        })
+        .expect("bind metric");
+
+        let first_snapshot = db
+            .insert_metric_snapshot(&dependent.id)
+            .expect("insert first snapshot");
+        db.complete_metric_snapshot(
+            &first_snapshot.id,
+            &serde_json::json!({ "value": 1 }),
+            "<div>ok</div>",
+        )
+        .expect("complete first snapshot");
+
+        let stale_before = db
+            .find_stale_metrics_for_screen("dashboard")
+            .expect("stale before");
+        assert!(!stale_before.iter().any(|metric| metric.id == dependent.id));
+
+        let invalidated = db
+            .mark_metrics_invalidated_by_dependency(&source.id, &[dependent.id.clone()])
+            .expect("invalidate dependent");
+        assert_eq!(invalidated, 1);
+
+        let stale_after_invalidate = db
+            .find_stale_metrics_for_screen("dashboard")
+            .expect("stale after invalidate");
+        assert!(stale_after_invalidate.iter().any(|metric| metric.id == dependent.id));
+
+        let second_snapshot = db
+            .insert_metric_snapshot(&dependent.id)
+            .expect("insert second snapshot");
+        db.complete_metric_snapshot(
+            &second_snapshot.id,
+            &serde_json::json!({ "value": 2 }),
+            "<div>ok2</div>",
+        )
+        .expect("complete second snapshot");
+        db.clear_metric_dependency_invalidation(&dependent.id)
+            .expect("clear invalidation");
+
+        let stale_after_recompute = db
+            .find_stale_metrics_for_screen("dashboard")
+            .expect("stale after recompute");
+        assert!(!stale_after_recompute
+            .iter()
+            .any(|metric| metric.id == dependent.id));
     }
 }

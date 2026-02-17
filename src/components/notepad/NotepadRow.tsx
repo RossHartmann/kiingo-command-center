@@ -31,6 +31,8 @@ export function NotepadRow({
   onEditorKeyDown
 }: NotepadRowProps): JSX.Element {
   const suppressRowClickRef = useRef(false);
+  const attentionLayer = row.atom?.facetData.task?.attentionLayer ?? row.atom?.facetData.attention?.layer;
+  const heatScore = row.atom?.facetData.attention?.heatScore;
 
   const handleMouseDownCapture = (event: MouseEvent<HTMLElement>): void => {
     suppressRowClickRef.current = event.target instanceof HTMLTextAreaElement;
@@ -85,6 +87,8 @@ export function NotepadRow({
       />
 
       {isTask && <span className="notepad-pill">{row.atom?.facetData.task?.status ?? row.block.taskStatus ?? "todo"}</span>}
+      {attentionLayer && <span className="notepad-pill attention">{attentionLayer.toUpperCase()}</span>}
+      {typeof heatScore === "number" && <span className="notepad-pill attention-heat">{heatScore.toFixed(1)}</span>}
       {overlayMode && (
         <span className={`notepad-pill overlay-${overlayMode}`}>
           {overlayMode === "person" && "waiting"}

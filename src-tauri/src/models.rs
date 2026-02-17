@@ -677,6 +677,7 @@ pub struct ScreenMetricView {
     pub binding: ScreenMetricBinding,
     pub definition: MetricDefinition,
     pub latest_snapshot: Option<MetricSnapshot>,
+    pub inflight_snapshot: Option<MetricSnapshot>,
     pub is_stale: bool,
     pub refresh_in_progress: bool,
 }

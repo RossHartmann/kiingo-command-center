@@ -29,6 +29,48 @@ Current implementation references:
 4. `/Users/rosshartmann/Projects/kiingo-command-center/src/lib/tauriClient.ts`
 5. `/Users/rosshartmann/Projects/kiingo-command-center/src/state/appState.tsx`
 
+## 2.1 Implementation Alignment (Spec -> Code Reuse Map)
+
+| Spec capability | Existing code to reuse first | Reuse-first rule |
+| --- | --- | --- |
+| Attention layer and heat data | `TaskFacet.attentionLayer`, `AttentionFacet` in `/src/lib/types.ts` | Extend existing facets only if required. Do not create parallel "attention state" interfaces in UI files. |
+| Decision queue lifecycle | `DecisionPrompt`, `DecisionPromptType`, `DecisionPromptStatus`, `DecisionOption` in `/src/lib/types.ts`; `decisionsList`, `decisionCreate`, `decisionResolve`, `decisionSnooze`, `decisionDismiss` in `/src/lib/tauriClient.ts` | Use existing decision APIs as the single mutation/read path. Do not add a second decision store in screen state. |
+| Focus/work signal capture | `WorkSessionRecord` and `workSessionStart/note/end/cancel` in `/src/lib/tauriClient.ts` | Reuse work sessions as the strongest signal source. Do not invent separate focus-session persistence. |
+| Attention compute entrypoint | `systemApplyAttentionUpdate` in `/src/lib/tauriClient.ts` | Enhance this command; do not create a new competing attention-update endpoint. |
+| Decision generation entrypoint | `systemGenerateDecisionCards` in `/src/lib/tauriClient.ts` | Add trigger coverage and dedupe here; do not generate cards ad hoc in UI components. |
+| Scheduler jobs | `JobType` already includes `sweep.decay`, `sweep.boundary`, `triage.enqueue`, `followup.enqueue` in `/src/lib/types.ts` and job APIs in `/src/lib/tauriClient.ts` | Reuse existing job model and APIs; no new scheduler model. |
+| Attention projections | `ProjectionType` already includes `tasks.waiting`, `focus.queue`, `today.a_list`, `history.daily` in `/src/lib/types.ts`; projection APIs in `/src/lib/tauriClient.ts` | Build on existing projection contracts; avoid custom per-screen recomputation where projection exists. |
+| Feature-flag rollout | `workspace.decay_engine`, `workspace.decision_queue`, `workspace.focus_sessions_v2`, `workspace.projections` in `/src/lib/types.ts` and `/src/lib/tauriClient.ts` | Gate new behavior with existing flag keys; do not introduce duplicate flags with overlapping meaning. |
+| Notepad/Tasks UX shells | Existing progressive disclosure patterns in `/src/screens/NotepadScreen.tsx`, `/src/components/notepad/NotepadToolbar.tsx`, `/src/screens/TasksScreen.tsx` | Extend existing cards/disclosures rather than introducing parallel "advanced" panes. |
+| Canonical workspace atom cache | `loadWorkspaceAtoms` and related actions in `/src/state/appState.tsx` | Keep one source of truth for atoms; avoid independent per-screen atom caches for new attention logic. |
+
+## 2.2 Current Integration Gaps (Code-grounded)
+
+1. Decision and work-session APIs exist but are not yet consumed by `TasksScreen` or `NotepadScreen`; integration needs to happen in those existing screens.
+2. `systemApplyAttentionUpdate` currently uses a priority/status heuristic and does not yet apply heat, dwell, cap pressure, or blocked exclusion.
+3. `systemGenerateDecisionCards` currently covers overdue hard due tasks only and lacks overflow/boundary/follow-up trigger coverage.
+4. Projection contracts exist for `tasks.waiting` and `focus.queue`, but Tasks/Notepad still mostly compute display groupings directly from atom lists.
+5. Job types for decay/boundary/triage/follow-up exist, but the decision/attention loop is not yet wired end-to-end through job runs.
+
+## 2.3 No-Duplicate Guardrails (Must Hold During Implementation)
+
+1. Do not add alternate domain types for attention/decisions/work sessions in screen-local files; extend `/src/lib/types.ts` contracts.
+2. Do not create alternate API wrappers for decision or work-session actions; use `/src/lib/tauriClient.ts` functions directly.
+3. Do not implement permanent bucket assignment logic in React components; keep assignment and cap enforcement in `systemApplyAttentionUpdate`.
+4. Do not implement permanent decision generation logic in React components; keep triggering/dedupe in `systemGenerateDecisionCards`.
+5. Do not add a second cache of workspace atoms/decisions in global state; if shared selectors are needed, derive from existing `appState` and API reads.
+6. If a new UI capability is needed on both Tasks and Notepad, create one reusable component (for example `DecisionQueuePanel`) instead of duplicating JSX in each screen.
+7. Any new feature flag must map to a single behavior boundary; if existing flags already cover the boundary, reuse them.
+8. Every new plan item must point to one existing file/function to extend before adding new files.
+
+## 2.4 Reuse-first Delivery Sequence (Pre-implementation)
+
+1. Audit and enumerate reusable contracts in `/src/lib/types.ts` before adding any new type.
+2. Extend engine entrypoints in `/src/lib/tauriClient.ts` (`systemApplyAttentionUpdate`, `systemGenerateDecisionCards`) before touching UI.
+3. Wire existing decision/work-session APIs into `/src/screens/TasksScreen.tsx` and `/src/screens/NotepadScreen.tsx`.
+4. Only after reuse seams are exhausted, add new shared UI components under `/src/components/`.
+5. Run a duplication check (`rg`) for any new concept names before finalizing each phase.
+
 ## 3. What "Attention Sinks" Means in This Product
 
 "Attention sinks" are the persistent, low-friction surfaces where the system captures and guides cognitive load:
@@ -344,35 +386,43 @@ Mitigation: integration tests against both paths and contract parity checks.
 
 ## 17. Comprehensive Execution Checklist
 
+## 17.0 Grounding and dedupe preflight
+
+1. Build a traceability grid for each planned feature: spec requirement -> existing file/function -> extension approach.
+2. Confirm no duplicate type names for attention/decision/session concepts outside `/src/lib/types.ts`.
+3. Confirm no duplicate API wrappers for decisions/work sessions outside `/src/lib/tauriClient.ts`.
+4. Confirm each new UI element is either added to existing screens/components or extracted once as a shared component.
+5. Add a PR checklist item requiring a `rg`-based duplicate-name scan before merge.
+
 ## 17.1 Phase A - Engine foundation
 
-1. Implement effective heat calculation.
-2. Implement dwell and drift transitions.
-3. Implement blocked/waiting exclusion from normal buckets.
-4. Implement cap checks and overflow states.
-5. Add deterministic decision dedupe keys.
+1. Extend `systemApplyAttentionUpdate` with effective heat calculation (no new attention endpoint).
+2. Implement dwell and drift transitions within existing attention fields (`AttentionFacet`/`TaskFacet.attentionLayer`).
+3. Implement blocked/waiting exclusion from normal buckets, reusing existing condition/task state.
+4. Implement cap checks and overflow states with decision-id outputs from the existing attention update response.
+5. Add deterministic decision dedupe keys on existing decision records.
 
 ## 17.2 Phase B - Decision workflows
 
-1. Implement P0 decision trigger set.
-2. Implement decision option handlers for all P0 actions.
-3. Add queue ordering by severity and urgency.
-4. Add snooze/dismiss/reopen logic consistency checks.
+1. Extend `systemGenerateDecisionCards` for the full P0 trigger set (no UI-side card generation logic).
+2. Implement decision option handlers via existing `decisionResolve`/`decisionSnooze`/`decisionDismiss` pathways.
+3. Add queue ordering by severity and urgency in one shared selector/component.
+4. Add snooze/dismiss/reopen consistency checks against existing decision statuses.
 
 ## 17.3 Phase C - UI integration
 
-1. Add shared Decision Queue component.
-2. Integrate queue into Tasks page.
-3. Add attention rails to Notepad page.
-4. Add "why surfaced" inline details.
-5. Add quick actions (`Make Hot`, `Let Drift`, `Snooze`).
+1. Add one shared Decision Queue component and consume it in existing screen shells.
+2. Integrate queue into `/src/screens/TasksScreen.tsx` (reusing current progressive disclosure pattern).
+3. Add attention rails to `/src/screens/NotepadScreen.tsx` (no parallel notepad surface).
+4. Add "why surfaced" inline details by extending existing row/card metadata areas.
+5. Add quick actions (`Make Hot`, `Let Drift`, `Snooze`) mapped to existing API commands.
 
 ## 17.4 Phase D - Focus mode
 
-1. Implement focus entry points from L3/decision cards.
-2. Add suggestion queue assembly.
-3. Add session notes and summary UX.
-4. Wire work signals back into heat updates.
+1. Implement focus entry points from L3/decision cards using existing Tasks/Notepad navigation surfaces first.
+2. Add suggestion queue assembly from `focus.queue` projection and atom data.
+3. Add session notes and summary UX on top of existing work-session APIs.
+4. Wire work signals back into `systemApplyAttentionUpdate`.
 
 ## 17.5 Phase E - Observability and hardening
 
@@ -396,4 +446,3 @@ Mitigation: integration tests against both paths and contract parity checks.
 4. Focus sessions influence attention as strongest signal.
 5. Capture flow remains uninterrupted and keyboard-first.
 6. Metrics show reduced stale clutter and improved execution behavior.
-

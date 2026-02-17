@@ -12,6 +12,7 @@ import {
   conditionSetPerson,
   conditionSetTask,
   conditionsList,
+  decisionsList,
   featureFlagsList,
   notepadAtomsList,
   notepadBlockCreate,
@@ -21,7 +22,10 @@ import {
   placementSave,
   placementsList,
   placementsReorder,
+  systemApplyAttentionUpdate,
+  systemGenerateDecisionCards,
   taskStatusSet,
+  workSessionsList,
   workspaceCapabilitiesGet,
   workspaceHealthGet
 } from "../lib/tauriClient";
@@ -29,11 +33,13 @@ import type {
   AtomRecord,
   BlockRecord,
   ConditionRecord,
+  DecisionPrompt,
   FeatureFlag,
   NotepadFilter,
   NotepadViewDefinition,
   PlacementRecord,
   TaskStatus,
+  WorkSessionRecord,
   WorkspaceCapabilities,
   WorkspaceHealth
 } from "../lib/types";
@@ -47,6 +53,7 @@ import { buildTreeData, findSiblingSwapTarget, insertPlacementAfter, parseOverla
 import type { FlatRow } from "../components/notepad/types";
 import { ROOT_KEY } from "../components/notepad/types";
 import { OMNI_OPEN_PROJECT } from "../components/OmniSearch";
+import { useOptionalAppActions } from "../state/appState";
 import { useNotepadUiState } from "../state/notepadState";
 
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
@@ -171,6 +178,11 @@ function notepadUiFlagEnabled(featureFlags: FeatureFlag[]): boolean {
   return flag ? flag.enabled : true;
 }
 
+function workspaceFlagEnabled(featureFlags: FeatureFlag[], key: FeatureFlag["key"], fallback = true): boolean {
+  const flag = featureFlags.find((value) => value.key === key);
+  return flag ? flag.enabled : fallback;
+}
+
 function placeCaretAtEnd(element: HTMLTextAreaElement): void {
   const length = element.value.length;
   element.setSelectionRange(length, length);
@@ -178,12 +190,16 @@ function placeCaretAtEnd(element: HTMLTextAreaElement): void {
 
 export function NotepadScreen(): JSX.Element {
   const [uiState, uiDispatch] = useNotepadUiState();
+  const appActions = useOptionalAppActions();
 
   const [notepads, setNotepads] = useState<NotepadViewDefinition[]>([]);
   const [placements, setPlacements] = useState<PlacementRecord[]>([]);
   const [blocksById, setBlocksById] = useState<Record<string, BlockRecord>>({});
   const [atomsById, setAtomsById] = useState<Record<string, AtomRecord>>({});
   const [conditionsByAtomId, setConditionsByAtomId] = useState<Record<string, ConditionRecord[]>>({});
+  const [decisionQueue, setDecisionQueue] = useState<DecisionPrompt[]>([]);
+  const [runningSession, setRunningSession] = useState<WorkSessionRecord | null>(null);
+  const [attentionBusy, setAttentionBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -268,6 +284,35 @@ export function NotepadScreen(): JSX.Element {
     }
     return latest;
   }, [treeData.flatRows]);
+  const attentionCounts = useMemo(() => {
+    const counts: Record<"l3" | "ram" | "short" | "long", number> = { l3: 0, ram: 0, short: 0, long: 0 };
+    for (const row of treeData.flatRows) {
+      const layer = row.atom?.facetData.task?.attentionLayer ?? row.atom?.facetData.attention?.layer;
+      if (layer === "l3" || layer === "ram" || layer === "short" || layer === "long") {
+        counts[layer] += 1;
+      }
+    }
+    return counts;
+  }, [treeData.flatRows]);
+  const driftingSoonCount = useMemo(() => {
+    const now = Date.now();
+    let count = 0;
+    for (const row of treeData.flatRows) {
+      const decayAt = row.atom?.facetData.attention?.decayEligibleAt;
+      if (!decayAt) continue;
+      const dt = new Date(decayAt);
+      if (Number.isNaN(dt.valueOf())) continue;
+      const hours = (dt.valueOf() - now) / (1000 * 60 * 60);
+      if (hours <= 6) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [treeData.flatRows]);
+  const selectedAttentionWhy = selectedRow?.atom?.facetData.attention?.explanation;
+  const decisionQueueEnabled = workspaceFlagEnabled(featureFlags, "workspace.decision_queue", true);
+  const decayEngineEnabled = workspaceFlagEnabled(featureFlags, "workspace.decay_engine", true);
+  const focusSessionsEnabled = workspaceFlagEnabled(featureFlags, "workspace.focus_sessions_v2", true);
 
   const isGateOpen = useMemo(() => !gateError, [gateError]);
   const dismissHint = useCallback(() => {
@@ -501,9 +546,14 @@ export function NotepadScreen(): JSX.Element {
 
   const loadNotepadData = useCallback(
     async (notepadId: string): Promise<void> => {
-      const [atomItems, activeConditions] = await Promise.all([
+      const queueEnabled = workspaceFlagEnabled(featureFlags, "workspace.decision_queue", true);
+      const focusEnabled = workspaceFlagEnabled(featureFlags, "workspace.focus_sessions_v2", true);
+      const [atomItems, activeConditions, pendingDecisionPage, snoozedDecisionPage, runningSessionsPage] = await Promise.all([
         listAllPages((cursor) => notepadAtomsList(notepadId, 250, cursor)),
-        listAllPages((cursor) => conditionsList({ status: "active", limit: 250, cursor }))
+        listAllPages((cursor) => conditionsList({ status: "active", limit: 250, cursor })),
+        queueEnabled ? decisionsList({ status: "pending", limit: 250 }) : Promise.resolve({ items: [], totalApprox: 0 }),
+        queueEnabled ? decisionsList({ status: "snoozed", limit: 250 }) : Promise.resolve({ items: [], totalApprox: 0 }),
+        focusEnabled ? workSessionsList({ status: "running", limit: 1 }) : Promise.resolve({ items: [], totalApprox: 0 })
       ]);
 
       const [placementItems, blockItems] = await Promise.all([
@@ -550,6 +600,15 @@ export function NotepadScreen(): JSX.Element {
       setBlocksById(nextBlocksById);
       setAtomsById(nextAtomsById);
       setConditionsByAtomId(nextConditionsByAtomId);
+      setDecisionQueue(
+        queueEnabled
+          ? [...pendingDecisionPage.items, ...snoozedDecisionPage.items].sort((a, b) => {
+              if (a.priority !== b.priority) return a.priority - b.priority;
+              return b.updatedAt.localeCompare(a.updatedAt);
+            })
+          : []
+      );
+      setRunningSession(focusEnabled ? runningSessionsPage.items[0] ?? null : null);
       const preferredSelectionId = selectedPlacementRef.current;
       const nextSelectionId =
         preferredSelectionId && sortedPlacements.some((placement) => placement.id === preferredSelectionId)
@@ -561,7 +620,7 @@ export function NotepadScreen(): JSX.Element {
         placementId: nextSelectionId
       });
     },
-    [materializeMissingPlacements, uiDispatch]
+    [featureFlags, materializeMissingPlacements, uiDispatch]
   );
 
   const reloadActiveNotepad = useCallback(async (): Promise<void> => {
@@ -1270,6 +1329,65 @@ export function NotepadScreen(): JSX.Element {
     [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]
   );
 
+  const syncAttentionEngine = useCallback(async (): Promise<void> => {
+    if (!isGateOpen || attentionBusy || !decayEngineEnabled) {
+      return;
+    }
+    setAttentionBusy(true);
+    setError(undefined);
+    try {
+      await systemApplyAttentionUpdate();
+      if (decisionQueueEnabled) {
+        await systemGenerateDecisionCards();
+      }
+      if (uiState.activeNotepadId) {
+        await loadNotepadData(uiState.activeNotepadId);
+      }
+    } catch (nextError) {
+      setError(asErrorMessage(nextError));
+    } finally {
+      setAttentionBusy(false);
+    }
+  }, [attentionBusy, decayEngineEnabled, decisionQueueEnabled, isGateOpen, loadNotepadData, uiState.activeNotepadId]);
+
+  const makeSelectedHot = useCallback(async (): Promise<void> => {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    const rowAtom = row?.atom;
+    if (!row || !rowAtom || !isGateOpen) {
+      return;
+    }
+    await runMutation(async () => {
+      const latestAtom = (await atomGet(rowAtom.id)) ?? rowAtom;
+      const existingTask = latestAtom.facetData.task ?? {
+        title: latestAtom.rawText.trim() || "Untitled",
+        status: "todo" as const,
+        priority: 3 as const
+      };
+      await atomUpdate(latestAtom.id, {
+        expectedRevision: latestAtom.revision,
+        facetDataPatch: {
+          task: {
+            ...existingTask,
+            attentionLayer: "l3",
+            priority: Math.min(existingTask.priority ?? 3, 2) as 1 | 2 | 3 | 4 | 5
+          },
+          attention: {
+            layer: "l3",
+            heatScore: Math.max(10, latestAtom.facetData.attention?.heatScore ?? 0),
+            dwellStartedAt: new Date().toISOString(),
+            explanation: "Pinned hot from notepad row action."
+          }
+        }
+      });
+      if (decayEngineEnabled) {
+        await systemApplyAttentionUpdate();
+      }
+      if (decisionQueueEnabled) {
+        await systemGenerateDecisionCards();
+      }
+    });
+  }, [decayEngineEnabled, decisionQueueEnabled, isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
+
   const snoozeSelectedUntilTomorrow = useCallback(async (): Promise<void> => {
     const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
     if (!row?.atom || !isGateOpen) {
@@ -1882,6 +2000,38 @@ export function NotepadScreen(): JSX.Element {
             </div>
           </header>
 
+          <div className="notepad-attention-rail">
+            <small className="notepad-meta-pill">L3 {attentionCounts.l3}</small>
+            <small className="notepad-meta-pill">RAM {attentionCounts.ram}</small>
+            <small className="notepad-meta-pill">Short {attentionCounts.short}</small>
+            <small className="notepad-meta-pill">Long {attentionCounts.long}</small>
+            <button
+              type="button"
+              className={`notepad-meta-pill notepad-meta-action${driftingSoonCount > 0 ? " warning" : ""}`}
+              onClick={() => appActions?.selectScreen("tasks")}
+              disabled={!decayEngineEnabled}
+            >
+              Drifting soon {driftingSoonCount}
+            </button>
+            <button
+              type="button"
+              className={`notepad-meta-pill notepad-meta-action${decisionQueue.length > 0 ? " warning" : ""}`}
+              onClick={() => appActions?.selectScreen("tasks")}
+              disabled={!decisionQueueEnabled}
+            >
+              Decisions {decisionQueueEnabled ? decisionQueue.length : "off"}
+            </button>
+            <button
+              type="button"
+              className="notepad-meta-pill notepad-meta-action"
+              onClick={() => void syncAttentionEngine()}
+              disabled={attentionBusy || !decayEngineEnabled}
+            >
+              {!decayEngineEnabled ? "Attention off" : attentionBusy ? "Syncing..." : "Sync attention"}
+            </button>
+            {focusSessionsEnabled && runningSession && <small className="notepad-meta-pill">Focus running</small>}
+          </div>
+
           {treeData.flatRows.length === 0 && (
             <p className="settings-hint">No rows yet. Focus the outline and press Enter to add the first row.</p>
           )}
@@ -2009,6 +2159,21 @@ export function NotepadScreen(): JSX.Element {
                   <small className="settings-hint">
                     Current priority: {priorityLabel(selectedRow.atom.facetData.task?.priority ?? 3)}
                   </small>
+                  <div className="notepad-inspector-actions">
+                    <button type="button" onClick={() => void makeSelectedHot()} disabled={!isGateOpen || !decayEngineEnabled}>
+                      Make Hot (L3)
+                    </button>
+                    <button type="button" onClick={() => appActions?.selectScreen("tasks")} disabled={!decisionQueueEnabled}>
+                      Open Decision Queue
+                    </button>
+                  </div>
+                  <small className="settings-hint">
+                    Attention: {(selectedRow.atom.facetData.task?.attentionLayer ?? selectedRow.atom.facetData.attention?.layer ?? "long").toUpperCase()}
+                    {typeof selectedRow.atom.facetData.attention?.heatScore === "number"
+                      ? ` · Heat ${selectedRow.atom.facetData.attention.heatScore.toFixed(1)}`
+                      : ""}
+                  </small>
+                  {selectedAttentionWhy && <small className="settings-hint">Why surfaced: {selectedAttentionWhy}</small>}
                 </>
               )}
 

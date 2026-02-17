@@ -43,55 +43,34 @@ initial_values = json.dumps({
     "byMonth": {"2025-11": 0, "2025-12": 0, "2026-01": 8, "2026-02": 36},
 })
 
-instructions = r"""Retrieve follow-up call events from Michael's (michael@kiingo.com) calendar and compute the trailing 30-day follow-up call count measured weekly.
+instructions = r"""Compute trailing 30-day follow-up call metrics using dependency input from `weekly-followup-calls`. Do not call calendar APIs in this metric.
 
-## Data Source
-Microsoft Calendar via Kiingo MCP calendar.listEvents().
+## Dependency Input
+You will receive one dependency input:
+1. **weekly-followup-calls** with values like:
+   - `weeklyData`: array of `{ weekOf, count }`
+   - `currentWeek`, `priorWeek`, `total`, `avgPerWeek`, `trend`
+   - optionally richer fields such as `dailyData` (`{ date, count }`) or `followupCalls` (ISO timestamps)
 
-**IMPORTANT — Response Shape**: calendar.listEvents() returns { events: CalendarEventSummary[], totalCount: number }. Access the array via .events, NOT .value.
-
-    const result = await calendar.listEvents({ ... });
-    const events = result.events;
-
-## Classification Rules
-
-**Follow-up call patterns (MUST match)**: Events with subjects containing:
-- "follow-up", "follow up", "check-in" (with external party), "onboarding", "account review", "next steps", "next-step", "implementation", "training" (client-facing), "QBR", "quarterly review", "status call", "progress call"
-- Events named like "Kiingo AI and [Company Name]" that are NOT discovery/intro calls
-- Meetings with client/partner company names indicating ongoing engagement
-
-**Exclude**:
-- Internal meetings: Tactical Session, 1:1 between Kiingo team, sync, standup, retrospective, planning, pipeline sync, social hour, show-and-tell, L10
-- Personal events: PTO, Busy, blocked time
-- Cancelled events (isCancelled = true)
-- All-day events (isAllDay = true)
-- Initial discovery/intro calls with brand-new prospects
-
-**Do NOT filter by attendee count or email domains.**
-
-## Retrieval Steps
-1. Compute date range: go back far enough to have trailing 30-day coverage for each week over the past 16 weeks (so ~20 weeks back from today).
-2. Pull Michael's calendar events:
-
-    const result = await calendar.listEvents({
-      mailboxEmailAddress: 'michael@kiingo.com',
-      startDateTime: '<20 weeks ago ISO>',
-      endDateTime: '<today ISO>',
-      useCalendarView: true,
-      maxResults: 500
-    });
-    const events = result.events;
-
-3. Apply classification rules to identify follow-up calls.
-4. For each week (starting from the first full Sunday after earliest event):
-   - Count follow-up calls whose date falls in the 30-day window ending on that week's date.
-5. Also compute: current trailing 30 count (from today), by-month breakdown, peak/trough/average.
+## Computation Steps
+1. Locate dependency input where `slug == "weekly-followup-calls"` and read its `values`.
+2. Build a trailing-30 weekly series:
+   - Preferred: if `followupCalls` or `dailyData` are present, compute exact 30-day windows for each week ending date in chronological order.
+   - Fallback: if only `weeklyData` exists, estimate each trailing 30 value as:
+     current week + prior 3 full weeks + (2/7 * week-4), rounded to nearest integer.
+3. Compute summary metrics from that trailing series:
+   - `trailing30`: most recent trailing value
+   - `peak`, `peakWeek`: max trailing value and week
+   - `trough`, `troughWeek`: min trailing value and week
+   - `avgTrailing`: average trailing value
+4. Compute total/monthly context:
+   - `total`: use dependency `total` if present, else sum of weekly follow-up counts
+   - `byMonth`: if daily timestamps exist, aggregate by month exactly; otherwise derive a best-effort monthly rollup from weekly buckets.
 
 ## Narrative Context
 - Follow-up calls are a leading indicator of account engagement and pipeline progression.
-- They represent the nurturing phase after discovery — a sustained drop signals relationship gaps.
-- Holiday dips (mid-Dec through early Jan) are expected.
-- Track trend direction over absolute targets.
+- This metric is calendar-derived through `weekly-followup-calls`, anchored to Michael's ongoing account engagement activity.
+- A sustained trailing decline signals relationship or execution gaps.
 
 ## Values to Return
 - `trailing30`: current trailing 30-day count
@@ -99,7 +78,7 @@ Microsoft Calendar via Kiingo MCP calendar.listEvents().
 - `peakWeek`: ISO date of peak week
 - `trough`: lowest weekly trailing 30 value
 - `troughWeek`: ISO date of trough week
-- `total`: total follow-up calls all-time in the window
+- `total`: total follow-up calls in dependency lookback
 - `avgTrailing`: average trailing 30 across all weeks
 - `weeklyData`: array of { weekOf, trailing30 } for the chart
 - `byMonth`: object of month -> count"""
@@ -136,7 +115,7 @@ template_jsx = r"""(() => {
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <MetricNote>Each point = trailing 30-day follow-up calls · Source: Microsoft Calendar via Kiingo MCP</MetricNote>
+      <MetricNote>Each point = trailing 30-day follow-up calls · Source: Weekly Follow-Up Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
 })()"""
@@ -178,7 +157,7 @@ initial_html = f"""(() => {{
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <MetricNote>Each point = trailing 30-day follow-up calls · Source: Microsoft Calendar via Kiingo MCP</MetricNote>
+      <MetricNote>Each point = trailing 30-day follow-up calls · Source: Weekly Follow-Up Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
 }})()"""
@@ -202,8 +181,18 @@ def main():
         cursor.execute(
             """INSERT INTO metric_definitions
                (id, name, slug, instructions, template_html, ttl_seconds, provider, enabled, proactive, metadata_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'claude', 1, 0, '{}', ?, ?)""",
-            (metric_id, NAME, SLUG, instructions, template_jsx, 3600, NOW, NOW)
+               VALUES (?, ?, ?, ?, ?, ?, 'claude', 1, 0, ?, ?, ?)""",
+            (
+                metric_id,
+                NAME,
+                SLUG,
+                instructions,
+                template_jsx,
+                3600,
+                json.dumps({"dependencies": ["weekly-followup-calls"]}),
+                NOW,
+                NOW,
+            ),
         )
         cursor.execute(
             """INSERT INTO metric_snapshots

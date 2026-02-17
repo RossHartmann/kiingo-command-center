@@ -420,6 +420,7 @@ export interface ScreenMetricView {
   binding: ScreenMetricBinding;
   definition: MetricDefinition;
   latestSnapshot?: MetricSnapshot;
+  inflightSnapshot?: MetricSnapshot;
   isStale: boolean;
   refreshInProgress: boolean;
 }
@@ -505,6 +506,9 @@ export interface AttentionFacet {
   heatScore?: number;
   dwellStartedAt?: IsoDateTime;
   hiddenReason?: string;
+  lastSignalAt?: IsoDateTime;
+  lastSignalKind?: "capture" | "edit" | "focus_start" | "focus_note" | "focus_end" | "status_change" | "decision";
+  explanation?: string;
 }
 
 export interface CommitmentFacet {
@@ -964,7 +968,16 @@ export type DecisionPromptType =
   | "stale_hard_commitment"
   | "blocked_followup"
   | "thread_staleness"
-  | "confession";
+  | "confession"
+  | "l3_overflow"
+  | "ram_overflow"
+  | "boundary_drift_review"
+  | "overdue_hard_due"
+  | "hard_commitment_review"
+  | "hard_commitment_overflow"
+  | "recurrence_missed"
+  | "north_star_stale"
+  | "confession_suggestion";
 
 export type DecisionPromptStatus = "pending" | "snoozed" | "resolved" | "expired" | "dismissed";
 
@@ -994,6 +1007,10 @@ export interface DecisionPrompt {
   body: string;
   atomIds: EntityId[];
   options: DecisionOption[];
+  dedupeKey?: string;
+  triggerCode?: string;
+  triggerReason?: string;
+  triggerMeta?: Record<string, unknown>;
   dueAt?: IsoDateTime;
   snoozedUntil?: IsoDateTime;
   createdAt: IsoDateTime;
@@ -1031,6 +1048,7 @@ export interface WorkSessionRecord {
   id: EntityId;
   status: WorkSessionStatus;
   focusBlockIds: EntityId[];
+  initialTaskStatusByAtomId?: Record<EntityId, TaskStatus>;
   startedAt?: IsoDateTime;
   endedAt?: IsoDateTime;
   canceledAt?: IsoDateTime;
@@ -1220,6 +1238,7 @@ export interface ProjectionCheckpoint {
   lastRebuiltAt?: IsoDateTime;
   status: "healthy" | "lagging" | "failed";
   errorMessage?: string;
+  preview?: Record<string, unknown>;
 }
 
 export type RegistryEntryKind = "thread" | "category" | "north_star";

@@ -74,6 +74,10 @@ const MAX_RUNNER_LINE_LENGTH: usize = 100_000;
 const MAX_STREAM_BUFFER_BYTES: usize = 2_000_000;
 const DEFAULT_CODEX_MODEL: &str = "gpt-5.3-codex";
 const DEFAULT_CLAUDE_MODEL: &str = "sonnet";
+const METRIC_RUN_TIMEOUT_SECONDS_DEFAULT: u64 = 300;
+const METRIC_RUN_TIMEOUT_SECONDS_MIN: u64 = 180;
+const METRIC_RUN_TIMEOUT_SECONDS_MAX: u64 = 1800;
+const METRIC_RUN_MAX_RETRIES_DEFAULT: u32 = 1;
 
 #[derive(Default)]
 struct OutputBuffer {
@@ -2918,38 +2922,78 @@ impl RunnerCore {
     pub async fn refresh_metric(&self, metric_id: &str) -> AppResult<MetricRefreshResponse> {
         tracing::info!(metric_id = %metric_id, "metric refresh requested");
 
-        let plan = self.build_metric_refresh_plan(metric_id)?;
-        let target_metric_id = metric_id.to_string();
-        let mut completed_snapshots: HashMap<String, MetricSnapshot> = HashMap::new();
-
-        for metric in &plan {
-            if !metric.enabled || metric.archived_at.is_some() {
-                tracing::warn!(metric_id = %metric.id, "metric refresh blocked: disabled or archived");
-                return Err(AppError::Policy(format!(
-                    "Metric '{}' is disabled or archived",
-                    metric.slug
-                )));
-            }
-
-            let dependency_inputs = self.build_dependency_inputs_for_metric(metric, &completed_snapshots)?;
-            if metric.id == target_metric_id {
-                if self.db.has_pending_snapshot(&metric.id)? {
-                    tracing::warn!(metric_id = %metric.id, "metric refresh blocked: already in progress");
-                    return Err(AppError::Policy("Refresh already in progress for this metric".to_string()));
-                }
-                return self.start_metric_refresh_run(metric, &dependency_inputs).await;
-            }
-
-            let completed = self
-                .ensure_metric_refreshed_and_completed(metric, &dependency_inputs)
-                .await?;
-            completed_snapshots.insert(metric.id.clone(), completed);
+        if let Some(existing) = self.get_existing_inflight_metric_refresh(metric_id)? {
+            tracing::info!(
+                metric_id = %metric_id,
+                snapshot_id = %existing.snapshot_id,
+                run_id = ?existing.run_id,
+                "metric refresh deduplicated against in-flight snapshot"
+            );
+            return Ok(existing);
         }
 
-        Err(AppError::Internal(format!(
-            "Unable to build refresh plan for metric {}",
-            metric_id
-        )))
+        let plan = self.build_metric_refresh_plan(metric_id)?;
+        let target_metric = plan
+            .last()
+            .cloned()
+            .ok_or_else(|| AppError::Internal(format!("Unable to build refresh plan for metric {}", metric_id)))?;
+        if !target_metric.enabled || target_metric.archived_at.is_some() {
+            tracing::warn!(metric_id = %target_metric.id, "metric refresh blocked: disabled or archived");
+            return Err(AppError::Policy(format!(
+                "Metric '{}' is disabled or archived",
+                target_metric.slug
+            )));
+        }
+
+        let target_metric_id = target_metric.id.clone();
+        let target_snapshot = self.db.insert_metric_snapshot(&target_metric_id)?;
+        tracing::info!(
+            metric_id = %target_metric_id,
+            snapshot_id = %target_snapshot.id,
+            "metric refresh placeholder snapshot created"
+        );
+        // Manual refresh should only execute the selected metric.
+        // Dependency metrics are read-only inputs sourced from their latest completed snapshots.
+        let completed_snapshots: HashMap<String, MetricSnapshot> = HashMap::new();
+        let dependency_inputs = self.build_dependency_inputs_for_metric(&target_metric, &completed_snapshots)?;
+        let result = self
+            .start_metric_refresh_run(&target_metric, &dependency_inputs, Some(&target_snapshot.id))
+            .await;
+
+        if let Err(error) = &result {
+            if let Some(snapshot) = self.db.get_snapshot(&target_snapshot.id)? {
+                if matches!(
+                    snapshot.status,
+                    MetricSnapshotStatus::Pending | MetricSnapshotStatus::Running
+                ) {
+                    self.db.fail_metric_snapshot(&target_snapshot.id, &error.to_string())?;
+                    let _ = self.emit_app_event("metric.snapshot_failed", json!({
+                        "metricId": target_metric_id,
+                        "snapshotId": target_snapshot.id,
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+
+        result
+    }
+
+    fn get_existing_inflight_metric_refresh(&self, metric_id: &str) -> AppResult<Option<MetricRefreshResponse>> {
+        let Some(snapshot_id) = self.db.get_latest_inflight_snapshot_id(metric_id)? else {
+            return Ok(None);
+        };
+
+        let snapshot = self
+            .db
+            .get_snapshot(&snapshot_id)?
+            .ok_or_else(|| AppError::NotFound(format!("metric snapshot not found: {}", snapshot_id)))?;
+
+        Ok(Some(MetricRefreshResponse {
+            metric_id: metric_id.to_string(),
+            snapshot_id,
+            run_id: snapshot.run_id,
+        }))
     }
 
     fn build_metric_refresh_plan(&self, metric_id: &str) -> AppResult<Vec<MetricDefinition>> {
@@ -3073,69 +3117,91 @@ impl RunnerCore {
         Ok(inputs)
     }
 
-    async fn ensure_metric_refreshed_and_completed(
-        &self,
-        metric: &MetricDefinition,
-        dependency_inputs: &[serde_json::Value],
-    ) -> AppResult<MetricSnapshot> {
-        let snapshot_id = if let Some(existing) = self.db.get_latest_inflight_snapshot_id(&metric.id)? {
-            existing
-        } else {
-            let response = self.start_metric_refresh_run(metric, dependency_inputs).await?;
-            response.snapshot_id
-        };
-
-        self.wait_for_snapshot_terminal(&metric.id, &snapshot_id, 180)
-            .await
+    fn invalidate_dependent_metrics_after_refresh(&self, source_metric_id: &str) -> AppResult<Vec<String>> {
+        let metrics = self.db.list_metric_definitions(false)?;
+        let dependent_ids = dependent_metric_ids(&metrics, source_metric_id);
+        if dependent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let affected = self
+            .db
+            .mark_metrics_invalidated_by_dependency(source_metric_id, &dependent_ids)?;
+        tracing::info!(
+            source_metric_id = %source_metric_id,
+            dependent_count = dependent_ids.len(),
+            invalidation_rows = affected,
+            "invalidated downstream metrics after source refresh"
+        );
+        Ok(dependent_ids)
     }
 
-    async fn wait_for_snapshot_terminal(
-        &self,
-        metric_id: &str,
-        snapshot_id: &str,
-        timeout_seconds: u64,
-    ) -> AppResult<MetricSnapshot> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
-        loop {
-            let snapshot = self.db.get_snapshot(snapshot_id)?.ok_or_else(|| {
-                AppError::NotFound(format!("Metric snapshot not found while waiting: {}", snapshot_id))
-            })?;
+    fn metric_run_timeout_seconds(&self, metric_id: &str) -> AppResult<u64> {
+        let diagnostics = self.db.get_metric_diagnostics(metric_id)?;
+        let baseline_seconds = diagnostics
+            .last_run_duration_secs
+            .or(diagnostics.avg_run_duration_secs)
+            .or(diagnostics.max_run_duration_secs)
+            .unwrap_or(0.0);
 
-            match snapshot.status {
-                MetricSnapshotStatus::Completed => return Ok(snapshot),
-                MetricSnapshotStatus::Failed => {
-                    return Err(AppError::Policy(format!(
-                        "Dependency metric '{}' failed: {}",
-                        metric_id,
-                        snapshot
-                            .error_message
-                            .as_deref()
-                            .unwrap_or("refresh failed")
-                    )));
-                }
-                MetricSnapshotStatus::Pending | MetricSnapshotStatus::Running => {}
-            }
+        let dynamic_seconds = if baseline_seconds > 0.0 {
+            (baseline_seconds * 2.0).ceil() as u64
+        } else {
+            0
+        };
 
-            if tokio::time::Instant::now() >= deadline {
-                return Err(AppError::Policy(format!(
-                    "Timed out waiting for dependency metric '{}'",
-                    metric_id
-                )));
-            }
-            tokio::time::sleep(Duration::from_millis(350)).await;
-        }
+        Ok(dynamic_seconds
+            .max(METRIC_RUN_TIMEOUT_SECONDS_DEFAULT)
+            .clamp(METRIC_RUN_TIMEOUT_SECONDS_MIN, METRIC_RUN_TIMEOUT_SECONDS_MAX))
     }
 
     async fn start_metric_refresh_run(
         &self,
         definition: &MetricDefinition,
         dependency_inputs: &[serde_json::Value],
+        snapshot_id: Option<&str>,
     ) -> AppResult<MetricRefreshResponse> {
-        let snapshot = self.db.insert_metric_snapshot(&definition.id)?;
-        tracing::info!(metric_id = %definition.id, snapshot_id = %snapshot.id, "metric snapshot created, queuing run");
+        let snapshot = if let Some(existing_snapshot_id) = snapshot_id {
+            let existing = self
+                .db
+                .get_snapshot(existing_snapshot_id)?
+                .ok_or_else(|| AppError::NotFound(format!("metric snapshot not found: {}", existing_snapshot_id)))?;
+            if existing.metric_id != definition.id {
+                return Err(AppError::Internal(format!(
+                    "Snapshot {} belongs to metric {}, expected {}",
+                    existing_snapshot_id, existing.metric_id, definition.id
+                )));
+            }
+            if matches!(
+                existing.status,
+                MetricSnapshotStatus::Running | MetricSnapshotStatus::Pending
+            ) && existing.run_id.is_some()
+            {
+                tracing::info!(
+                    metric_id = %definition.id,
+                    snapshot_id = %existing.id,
+                    run_id = ?existing.run_id,
+                    "metric refresh deduplicated while queueing run"
+                );
+                return Ok(MetricRefreshResponse {
+                    metric_id: definition.id.clone(),
+                    snapshot_id: existing.id,
+                    run_id: existing.run_id,
+                });
+            }
+            existing
+        } else {
+            let created = self.db.insert_metric_snapshot(&definition.id)?;
+            tracing::info!(
+                metric_id = %definition.id,
+                snapshot_id = %created.id,
+                "metric snapshot created, queuing run"
+            );
+            created
+        };
 
         let system_prompt = build_metric_system_prompt();
         let user_prompt = build_metric_user_prompt(definition, dependency_inputs)?;
+        let timeout_seconds = self.metric_run_timeout_seconds(&definition.id)?;
 
         let grants = self.db.list_workspace_grants()?;
         let active_cwd = definition
@@ -3154,9 +3220,9 @@ impl RunnerCore {
             optional_flags: std::collections::BTreeMap::new(),
             profile_id: definition.profile_id.clone(),
             queue_priority: Some(-10),
-            timeout_seconds: Some(120),
+            timeout_seconds: Some(timeout_seconds),
             scheduled_at: None,
-            max_retries: Some(1),
+            max_retries: Some(METRIC_RUN_MAX_RETRIES_DEFAULT),
             retry_backoff_ms: None,
             harness: Some(crate::models::HarnessRequestOptions {
                 system_prompt: Some(system_prompt),
@@ -3263,6 +3329,24 @@ impl RunnerCore {
                     "metric output parsed successfully"
                 );
                 let _ = self.db.complete_metric_snapshot(&snapshot.id, &values, &html);
+                let _ = self.db.clear_metric_dependency_invalidation(&metric_id);
+                match self.invalidate_dependent_metrics_after_refresh(&metric_id) {
+                    Ok(dependent_ids) => {
+                        if !dependent_ids.is_empty() {
+                            let _ = self.emit_app_event("metric.dependents_invalidated", json!({
+                                "sourceMetricId": metric_id,
+                                "dependentMetricIds": dependent_ids,
+                            }));
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            source_metric_id = %metric_id,
+                            error = %error,
+                            "failed to invalidate downstream metrics"
+                        );
+                    }
+                }
                 let _ = self.emit_app_event("metric.snapshot_completed", json!({
                     "metricId": metric_id,
                     "snapshotId": snapshot.id
@@ -4197,6 +4281,54 @@ fn dependency_refs_from_metadata(metric: &MetricDefinition) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn dependent_metric_ids(metrics: &[MetricDefinition], source_metric_id: &str) -> Vec<String> {
+    let mut ref_to_metric_id: HashMap<String, String> = HashMap::new();
+    for metric in metrics {
+        ref_to_metric_id.insert(metric.id.clone(), metric.id.clone());
+        ref_to_metric_id.insert(metric.slug.clone(), metric.id.clone());
+    }
+
+    let mut dependents_by_dependency: HashMap<String, Vec<String>> = HashMap::new();
+    for metric in metrics {
+        let mut seen_dependency_ids = HashSet::new();
+        for dependency_ref in dependency_refs_from_metadata(metric) {
+            if let Some(dependency_id) = ref_to_metric_id.get(&dependency_ref) {
+                if seen_dependency_ids.insert(dependency_id.clone()) {
+                    dependents_by_dependency
+                        .entry(dependency_id.clone())
+                        .or_default()
+                        .push(metric.id.clone());
+                }
+            }
+        }
+    }
+
+    let mut queue = VecDeque::from([source_metric_id.to_string()]);
+    let mut visited_sources = HashSet::new();
+    let mut seen_dependents = HashSet::new();
+    let mut results = Vec::new();
+
+    while let Some(source_id) = queue.pop_front() {
+        if !visited_sources.insert(source_id.clone()) {
+            continue;
+        }
+        let Some(children) = dependents_by_dependency.get(&source_id) else {
+            continue;
+        };
+        for child_id in children {
+            if child_id == source_metric_id {
+                continue;
+            }
+            if seen_dependents.insert(child_id.clone()) {
+                results.push(child_id.clone());
+            }
+            queue.push_back(child_id.clone());
+        }
+    }
+
+    results
+}
+
 fn build_metric_system_prompt() -> String {
     concat!(
         "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. ",
@@ -4378,7 +4510,8 @@ fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        dependency_refs_from_metadata, detect_diagnostic_line, is_known_bad_codex_model, is_resume_invalid_failure, payload_has_resume_request,
+        dependency_refs_from_metadata, dependent_metric_ids, detect_diagnostic_line, is_known_bad_codex_model,
+        is_resume_invalid_failure, payload_has_resume_request,
         RunExecutionPath, RunnerCore,
         DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL,
     };
@@ -4429,6 +4562,27 @@ mod tests {
         }
     }
 
+    fn metric_with_identity(id: &str, slug: &str, dependencies: &[&str]) -> MetricDefinition {
+        MetricDefinition {
+            id: id.to_string(),
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            instructions: "test".to_string(),
+            template_html: String::new(),
+            ttl_seconds: 300,
+            provider: Provider::Claude,
+            model: None,
+            profile_id: None,
+            cwd: None,
+            enabled: true,
+            proactive: false,
+            metadata_json: serde_json::json!({ "dependencies": dependencies }),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            archived_at: None,
+        }
+    }
+
     #[test]
     fn dependency_refs_extracts_clean_string_entries() {
         let metric = metric_with_metadata(serde_json::json!({
@@ -4443,6 +4597,39 @@ mod tests {
         let metric = metric_with_metadata(serde_json::json!({"foo": "bar"}));
         let deps = dependency_refs_from_metadata(&metric);
         assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn dependent_metric_ids_resolves_slug_and_id_transitively() {
+        let source = metric_with_identity("metric-a", "source-a", &[]);
+        let child_by_slug = metric_with_identity("metric-b", "child-b", &["source-a"]);
+        let child_by_id = metric_with_identity("metric-c", "child-c", &["metric-b"]);
+        let unrelated = metric_with_identity("metric-d", "other-d", &["missing"]);
+        let multi_ref = metric_with_identity("metric-e", "child-e", &["source-a", "metric-b"]);
+        let metrics = vec![source, child_by_slug, child_by_id, unrelated, multi_ref];
+
+        let mut dependent_ids = dependent_metric_ids(&metrics, "metric-a");
+        dependent_ids.sort();
+        assert_eq!(
+            dependent_ids,
+            vec![
+                "metric-b".to_string(),
+                "metric-c".to_string(),
+                "metric-e".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dependent_metric_ids_avoids_returning_source_in_cycles() {
+        let source = metric_with_identity("metric-a", "source-a", &["metric-c"]);
+        let b = metric_with_identity("metric-b", "metric-b", &["metric-a"]);
+        let c = metric_with_identity("metric-c", "metric-c", &["metric-b"]);
+        let metrics = vec![source, b, c];
+
+        let mut dependent_ids = dependent_metric_ids(&metrics, "metric-a");
+        dependent_ids.sort();
+        assert_eq!(dependent_ids, vec!["metric-b".to_string(), "metric-c".to_string()]);
     }
 
     #[tokio::test]

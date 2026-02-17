@@ -51,6 +51,7 @@ import type {
   JobDefinition,
   JobRunRecord,
   DecisionPrompt,
+  DecisionOption,
   NotificationChannel,
   NotificationMessage,
   NotificationDeliveryRecord,
@@ -339,6 +340,211 @@ function nextRecurrenceRun(template: RecurrenceTemplate, fromIso: string): strin
     default:
       return new Date(from.getTime() + interval * 24 * 60 * 60 * 1000).toISOString();
   }
+}
+
+const ATTENTION_LAYER_RANK: Record<AttentionLayer, number> = {
+  l3: 0,
+  ram: 1,
+  short: 2,
+  long: 3,
+  archive: 4
+};
+
+const ATTENTION_CAPS: Record<"l3" | "ram", number> = {
+  l3: 3,
+  ram: 20
+};
+
+interface AttentionComputation {
+  atom: AtomRecord;
+  score: number;
+  proposedLayer: AttentionLayer;
+  boundedLayer: AttentionLayer;
+  blocked: boolean;
+  reason: string;
+  duePressure: number;
+  signalDelta: number;
+  commitmentPressure: number;
+}
+
+function parseIsoDate(iso?: string): Date | undefined {
+  if (!iso) return undefined;
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.valueOf()) ? undefined : parsed;
+}
+
+function hoursBetween(fromIso: string | undefined, toDate: Date): number {
+  const from = parseIsoDate(fromIso);
+  if (!from) return Number.POSITIVE_INFINITY;
+  return Math.max(0, (toDate.valueOf() - from.valueOf()) / (1000 * 60 * 60));
+}
+
+function daysUntil(targetIso: string | undefined, now: Date): number | undefined {
+  const target = parseIsoDate(targetIso);
+  if (!target) return undefined;
+  return (target.valueOf() - now.valueOf()) / (1000 * 60 * 60 * 24);
+}
+
+function confidenceFromPriority(priority: number | undefined): number {
+  switch (priority ?? 3) {
+    case 1:
+      return 4.2;
+    case 2:
+      return 3.2;
+    case 3:
+      return 2.2;
+    case 4:
+      return 1.6;
+    default:
+      return 1.2;
+  }
+}
+
+function scoreToLayer(score: number): AttentionLayer {
+  if (score >= 9.6) return "l3";
+  if (score >= 6.4) return "ram";
+  if (score >= 3.8) return "short";
+  if (score >= 1.8) return "long";
+  return "archive";
+}
+
+function hasActiveCondition(atomIdValue: string): boolean {
+  return mockStore.conditions.some((condition) => condition.atomId === atomIdValue && condition.status === "active");
+}
+
+function latestWorkSignalHours(atomIdValue: string, now: Date): number | undefined {
+  const blockId = blockIdForAtom(atomIdValue);
+  let latestIso: string | undefined;
+  for (const session of mockStore.workSessions) {
+    if (!session.focusBlockIds.includes(blockId)) {
+      continue;
+    }
+    const signalIso = session.updatedAt ?? session.endedAt ?? session.startedAt ?? session.createdAt;
+    if (!latestIso || signalIso > latestIso) {
+      latestIso = signalIso;
+    }
+  }
+  if (!latestIso) return undefined;
+  return hoursBetween(latestIso, now);
+}
+
+function buildDecisionDedupeKey(type: string, atomIds: string[], scope?: string): string {
+  const sorted = [...atomIds].sort();
+  return [type, scope ?? "global", ...sorted].join(":");
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function decisionOptionAtomIds(option: DecisionOption, fallbackAtomIds: string[]): string[] {
+  const payloadAtomIds = asStringArray(option.payload?.atomIds);
+  if (payloadAtomIds.length > 0) {
+    return payloadAtomIds;
+  }
+  if (typeof option.payload?.atomId === "string") {
+    return [option.payload.atomId];
+  }
+  return fallbackAtomIds;
+}
+
+function atomAttentionScore(atom: AtomRecord): number {
+  return atom.facetData.attention?.heatScore ?? confidenceFromPriority(atom.facetData.task?.priority);
+}
+
+function rankAtomsByAttentionPressure(atoms: AtomRecord[]): AtomRecord[] {
+  return [...atoms].sort((a, b) => {
+    const layerRank = ATTENTION_LAYER_RANK[a.facetData.task?.attentionLayer ?? a.facetData.attention?.layer ?? "long"]
+      - ATTENTION_LAYER_RANK[b.facetData.task?.attentionLayer ?? b.facetData.attention?.layer ?? "long"];
+    if (layerRank !== 0) return layerRank;
+    const scoreDelta = atomAttentionScore(b) - atomAttentionScore(a);
+    if (Math.abs(scoreDelta) > 0.001) return scoreDelta;
+    const priorityDelta = (a.facetData.task?.priority ?? 3) - (b.facetData.task?.priority ?? 3);
+    if (priorityDelta !== 0) return priorityDelta;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+}
+
+function isFeatureFlagEnabled(key: FeatureFlag["key"], fallback = true): boolean {
+  ensureFeatureFlags();
+  const flag = mockStore.featureFlags.find((entry) => entry.key === key);
+  if (!flag) return fallback;
+  return flag.enabled;
+}
+
+async function upsertDecisionPrompt(
+  prompt: Partial<DecisionPrompt> & {
+    type: DecisionPrompt["type"];
+    title: string;
+    body: string;
+    atomIds: string[];
+    options: DecisionPrompt["options"];
+    dedupeKey: string;
+    triggerCode?: string;
+    triggerReason?: string;
+    triggerMeta?: Record<string, unknown>;
+    priority?: 1 | 2 | 3 | 4 | 5;
+    dueAt?: string;
+  }
+): Promise<DecisionPrompt> {
+  const now = nowIso();
+  const cooldownCutoff = new Date(Date.parse(now) - 6 * 60 * 60 * 1000).toISOString();
+  const cooled = mockStore.decisions.find(
+    (decision) =>
+      decision.dedupeKey === prompt.dedupeKey &&
+      (decision.status === "dismissed" || decision.status === "resolved") &&
+      decision.updatedAt >= cooldownCutoff
+  );
+  if (cooled) {
+    return cooled;
+  }
+  const snoozed = mockStore.decisions.find(
+    (decision) =>
+      decision.dedupeKey === prompt.dedupeKey &&
+      decision.status === "snoozed" &&
+      !!decision.snoozedUntil &&
+      decision.snoozedUntil > now
+  );
+  if (snoozed) {
+    return snoozed;
+  }
+  const existing = mockStore.decisions.find(
+    (decision) =>
+      decision.dedupeKey === prompt.dedupeKey &&
+      (decision.status === "pending" ||
+        (decision.status === "snoozed" && (!decision.snoozedUntil || decision.snoozedUntil <= now)))
+  );
+  if (existing) {
+    return decisionCreate({
+      ...existing,
+      title: prompt.title,
+      body: prompt.body,
+      atomIds: prompt.atomIds,
+      options: prompt.options,
+      priority: prompt.priority ?? existing.priority,
+      dueAt: prompt.dueAt ?? existing.dueAt,
+      dedupeKey: prompt.dedupeKey,
+      triggerCode: prompt.triggerCode ?? existing.triggerCode,
+      triggerReason: prompt.triggerReason ?? existing.triggerReason,
+      triggerMeta: prompt.triggerMeta ?? existing.triggerMeta,
+      status: existing.status === "snoozed" && existing.snoozedUntil && existing.snoozedUntil > now ? "snoozed" : "pending",
+      expectedRevision: existing.revision
+    });
+  }
+  return decisionCreate({
+    type: prompt.type,
+    title: prompt.title,
+    body: prompt.body,
+    atomIds: prompt.atomIds,
+    options: prompt.options,
+    priority: prompt.priority ?? 3,
+    dueAt: prompt.dueAt,
+    dedupeKey: prompt.dedupeKey,
+    triggerCode: prompt.triggerCode,
+    triggerReason: prompt.triggerReason,
+    triggerMeta: prompt.triggerMeta
+  });
 }
 
 function ensureNowNotepad(): void {
@@ -1164,12 +1370,15 @@ export async function getScreenMetrics(screenId: string): Promise<ScreenMetricVi
     const definition = mockStore.metricDefinitions.find((d) => d.id === binding.metricId);
     if (!definition) return null;
     const latestSnapshot = mockStore.metricSnapshots
-      .filter((s) => s.metricId === binding.metricId)
+      .filter((s) => s.metricId === binding.metricId && (s.status === "completed" || s.status === "failed"))
+      .sort((a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf())[0] ?? undefined;
+    const inflightSnapshot = mockStore.metricSnapshots
+      .filter((s) => s.metricId === binding.metricId && (s.status === "pending" || s.status === "running"))
       .sort((a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf())[0] ?? undefined;
     const isStale = !latestSnapshot || latestSnapshot.status === "failed" || !latestSnapshot.completedAt ||
       (new Date().valueOf() - new Date(latestSnapshot.completedAt).valueOf()) / 1000 >= definition.ttlSeconds;
-    const refreshInProgress = latestSnapshot?.status === "pending" || latestSnapshot?.status === "running";
-    return { binding, definition, latestSnapshot, isStale, refreshInProgress } as ScreenMetricView;
+    const refreshInProgress = Boolean(inflightSnapshot);
+    return { binding, definition, latestSnapshot, inflightSnapshot, isStale, refreshInProgress } as ScreenMetricView;
   }).filter(Boolean) as ScreenMetricView[];
 }
 
@@ -2385,6 +2594,15 @@ function ensureFeatureFlags(): void {
     return;
   }
   const now = nowIso();
+  const defaultEnabled = new Set<FeatureFlag["key"]>([
+    "workspace.notepad_ui_v2",
+    "workspace.scheduler",
+    "workspace.decay_engine",
+    "workspace.decision_queue",
+    "workspace.focus_sessions_v2",
+    "workspace.projections",
+    "workspace.recurrence"
+  ]);
   const keys: FeatureFlag["key"][] = [
     "workspace.blocks_v2",
     "workspace.placements_v2",
@@ -2405,9 +2623,40 @@ function ensureFeatureFlags(): void {
   ];
   mockStore.featureFlags = keys.map((key) => ({
     key,
-    enabled: key === "workspace.notepad_ui_v2",
+    enabled: defaultEnabled.has(key),
     updatedAt: now
   }));
+}
+
+function ensureDefaultWorkspaceJobs(): void {
+  const now = nowIso();
+  const defaults: Array<Pick<JobDefinition, "id" | "type" | "enabled" | "schedule" | "timeoutMs" | "maxRetries" | "retryBackoffMs">> = [
+    { id: "job.workspace.sweep.decay", type: "sweep.decay", enabled: true, schedule: { kind: "interval", everyMinutes: 60 }, timeoutMs: 30_000, maxRetries: 0, retryBackoffMs: 1_000 },
+    { id: "job.workspace.sweep.boundary", type: "sweep.boundary", enabled: true, schedule: { kind: "interval", everyMinutes: 60 }, timeoutMs: 30_000, maxRetries: 0, retryBackoffMs: 1_000 },
+    { id: "job.workspace.triage.enqueue", type: "triage.enqueue", enabled: true, schedule: { kind: "interval", everyMinutes: 45 }, timeoutMs: 30_000, maxRetries: 0, retryBackoffMs: 1_000 },
+    { id: "job.workspace.followup.enqueue", type: "followup.enqueue", enabled: true, schedule: { kind: "interval", everyMinutes: 180 }, timeoutMs: 30_000, maxRetries: 0, retryBackoffMs: 1_000 },
+    { id: "job.workspace.projection.refresh", type: "projection.refresh", enabled: true, schedule: { kind: "interval", everyMinutes: 30 }, timeoutMs: 30_000, maxRetries: 0, retryBackoffMs: 1_000 }
+  ];
+
+  for (const next of defaults) {
+    const existing = mockStore.workspaceJobs.find((job) => job.id === next.id || job.type === next.type);
+    if (existing) {
+      continue;
+    }
+    mockStore.workspaceJobs.unshift({
+      id: next.id,
+      schemaVersion: 1,
+      type: next.type,
+      enabled: next.enabled,
+      schedule: next.schedule,
+      timeoutMs: next.timeoutMs,
+      maxRetries: next.maxRetries,
+      retryBackoffMs: next.retryBackoffMs,
+      createdAt: now,
+      updatedAt: now,
+      revision: 1
+    });
+  }
 }
 
 function paginateWithRequest<T>(items: T[], request: { limit?: number; cursor?: string }): PageResponse<T> {
@@ -2548,6 +2797,7 @@ export async function jobsList(request: JobsListRequest = {}): Promise<PageRespo
   if (IS_TAURI) {
     return tauriInvoke("jobs_list", { ...request });
   }
+  ensureDefaultWorkspaceJobs();
   let items = [...mockStore.workspaceJobs];
   if (request.enabled !== undefined) {
     items = items.filter((job) => job.enabled === request.enabled);
@@ -2560,6 +2810,7 @@ export async function jobGet(jobId: string): Promise<JobDefinition | null> {
   if (IS_TAURI) {
     return tauriInvoke("job_get", { jobId });
   }
+  ensureDefaultWorkspaceJobs();
   return mockStore.workspaceJobs.find((job) => job.id === jobId) ?? null;
 }
 
@@ -2617,6 +2868,77 @@ export async function jobUpdate(
   return jobSave({ ...existing, ...request, id: jobId });
 }
 
+async function runProjectionRefreshJobs(payload?: Record<string, unknown>): Promise<"executed" | "skipped"> {
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return "skipped";
+  }
+  ensureDefaultProjections();
+  const projectionIds = asStringArray(payload?.projectionIds);
+  if (projectionIds.length > 0) {
+    for (const projectionId of projectionIds) {
+      await projectionRefresh(projectionId, "incremental");
+    }
+    return "executed";
+  }
+  if (typeof payload?.projectionId === "string") {
+    await projectionRefresh(payload.projectionId, "incremental");
+    return "executed";
+  }
+  const defaults = [...mockStore.projections]
+    .filter((projection) => projection.enabled)
+    .map((projection) => projection.id);
+  for (const projectionId of defaults) {
+    await projectionRefresh(projectionId, "incremental");
+  }
+  return defaults.length > 0 ? "executed" : "skipped";
+}
+
+async function executeJob(job: JobDefinition, payload?: Record<string, unknown>): Promise<"executed" | "skipped"> {
+  if (!isFeatureFlagEnabled("workspace.scheduler", true)) {
+    return "skipped";
+  }
+  switch (job.type) {
+    case "sweep.decay":
+    case "sweep.boundary":
+      if (!isFeatureFlagEnabled("workspace.decay_engine", true)) {
+        return "skipped";
+      }
+      await systemApplyAttentionUpdate({ now: typeof payload?.now === "string" ? payload.now : undefined });
+      if (isFeatureFlagEnabled("workspace.decision_queue", true)) {
+        await systemGenerateDecisionCards({ now: typeof payload?.now === "string" ? payload.now : undefined });
+      }
+      return "executed";
+    case "triage.enqueue":
+    case "followup.enqueue":
+      if (!isFeatureFlagEnabled("workspace.decision_queue", true)) {
+        return "skipped";
+      }
+      await systemGenerateDecisionCards({ now: typeof payload?.now === "string" ? payload.now : undefined });
+      return "executed";
+    case "recurrence.spawn":
+      if (!isFeatureFlagEnabled("workspace.recurrence", true) && !isFeatureFlagEnabled("workspace.recurrence_v2", true)) {
+        return "skipped";
+      }
+      await recurrenceSpawn({
+        now: typeof payload?.now === "string" ? payload.now : undefined,
+        templateIds: asStringArray(payload?.templateIds)
+      });
+      return "executed";
+    case "projection.refresh":
+      return runProjectionRefreshJobs(payload);
+    case "semantic.reindex":
+      if (!isFeatureFlagEnabled("workspace.semantic_index", true)) {
+        return "skipped";
+      }
+      await semanticReindex(asStringArray(payload?.atomIds));
+      return "executed";
+    case "sweep.classification":
+      return "skipped";
+    default:
+      return "skipped";
+  }
+}
+
 export async function jobRun(
   jobId: string,
   payload?: Record<string, unknown>,
@@ -2640,18 +2962,33 @@ export async function jobRun(
   const run: JobRunRecord = {
     id: uid("jobrun"),
     jobId,
-    status: "succeeded",
+    status: "running",
     trigger: "manual",
     attempt: 1,
     startedAt: now,
-    finishedAt: now,
     idempotencyKey: mutationKey,
     payload
   };
   mockStore.jobRuns.unshift(run);
   recordWorkspaceEvent("job.run.started", { jobRunId: run.id, jobId });
-  recordWorkspaceEvent("job.run.completed", { jobRunId: run.id, jobId });
-  persistMockStore();
+  try {
+    const outcome = await executeJob(job, payload);
+    run.status = outcome === "skipped" ? "skipped" : "succeeded";
+    run.finishedAt = nowIso();
+    recordWorkspaceEvent("job.run.completed", { jobRunId: run.id, jobId, status: run.status });
+  } catch (error) {
+    run.status = "failed";
+    run.finishedAt = nowIso();
+    run.errorCode = "JOB_EXECUTION_FAILED";
+    run.errorMessage = error instanceof Error ? error.message : String(error);
+    recordWorkspaceEvent("job.run.failed", {
+      jobRunId: run.id,
+      jobId,
+      errorMessage: run.errorMessage
+    });
+  } finally {
+    persistMockStore();
+  }
   return run;
 }
 
@@ -2714,6 +3051,10 @@ export async function decisionCreate(
     body: prompt.body ?? "",
     atomIds: prompt.atomIds ?? [],
     options: prompt.options ?? [],
+    dedupeKey: prompt.dedupeKey,
+    triggerCode: prompt.triggerCode,
+    triggerReason: prompt.triggerReason,
+    triggerMeta: prompt.triggerMeta,
     dueAt: prompt.dueAt,
     snoozedUntil: prompt.snoozedUntil,
     createdAt: existing?.createdAt ?? now,
@@ -2740,6 +3081,144 @@ export async function decisionGet(decisionId: string): Promise<DecisionPrompt | 
   return mockStore.decisions.find((decision) => decision.id === decisionId) ?? null;
 }
 
+function atomsByIds(atomIds: string[]): AtomRecord[] {
+  if (atomIds.length === 0) {
+    return [];
+  }
+  const ids = new Set(atomIds);
+  return mockStore.atoms.filter((atom) => ids.has(atom.id));
+}
+
+function markAttentionSignal(atom: AtomRecord, now: string, kind: NonNullable<AtomRecord["facetData"]["attention"]>["lastSignalKind"]): void {
+  atom.facetData.attention = {
+    layer: atom.facetData.task?.attentionLayer ?? atom.facetData.attention?.layer ?? "long",
+    ...atom.facetData.attention,
+    lastSignalAt: now,
+    lastSignalKind: kind
+  };
+}
+
+function atomsForFocusBlocks(focusBlockIds: string[]): AtomRecord[] {
+  const atoms: AtomRecord[] = [];
+  const seen = new Set<string>();
+  for (const blockId of focusBlockIds) {
+    const directAtom = mockStore.atoms.find((atom) => atom.id === blockId);
+    if (directAtom && !seen.has(directAtom.id)) {
+      seen.add(directAtom.id);
+      atoms.push(directAtom);
+      continue;
+    }
+    const block = mockBlocksSnapshot().find((entry) => entry.id === blockId);
+    if (!block?.atomId || seen.has(block.atomId)) {
+      continue;
+    }
+    const atom = mockStore.atoms.find((entry) => entry.id === block.atomId);
+    if (!atom) {
+      continue;
+    }
+    seen.add(atom.id);
+    atoms.push(atom);
+  }
+  return atoms;
+}
+
+function restoreFocusedTaskStatuses(session: WorkSessionRecord, now: string): void {
+  for (const atom of atomsForFocusBlocks(session.focusBlockIds)) {
+    const task = ensureTaskFacet(atom);
+    const originalStatus = session.initialTaskStatusByAtomId?.[atom.id];
+    // Restore only if the task is still in the transient focus state.
+    if (originalStatus && task.status === "doing") {
+      task.status = originalStatus;
+    }
+    markAttentionSignal(atom, now, "focus_end");
+    atom.updatedAt = now;
+    atom.revision += 1;
+  }
+}
+
+async function applyDecisionOptionToAtom(atom: AtomRecord, option: DecisionOption): Promise<void> {
+  const now = nowIso();
+  const task = ensureTaskFacet(atom);
+  switch (option.actionKind) {
+    case "task.do_now":
+      task.status = "doing";
+      task.attentionLayer = "l3";
+      markAttentionSignal(atom, now, "decision");
+      break;
+    case "task.snooze": {
+      const untilAt = typeof option.payload?.untilAt === "string"
+        ? option.payload.untilAt
+        : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      task.snoozedUntil = untilAt;
+      if (!task.softDueAt || task.softDueAt < untilAt) {
+        task.softDueAt = untilAt;
+      }
+      task.status = task.status === "blocked" ? "blocked" : "todo";
+      markAttentionSignal(atom, now, "decision");
+      break;
+    }
+    case "task.reschedule": {
+      const dueAt = typeof option.payload?.dueAt === "string"
+        ? option.payload.dueAt
+        : new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+      if (task.commitmentLevel === "hard") {
+        task.hardDueAt = dueAt;
+      } else {
+        task.softDueAt = dueAt;
+      }
+      task.status = "todo";
+      markAttentionSignal(atom, now, "decision");
+      break;
+    }
+    case "task.recommit":
+      task.commitmentLevel = "hard";
+      task.attentionLayer = task.attentionLayer === "archive" ? "ram" : task.attentionLayer ?? "ram";
+      markAttentionSignal(atom, now, "decision");
+      break;
+    case "task.cancel_commitment":
+      task.commitmentLevel = "soft";
+      markAttentionSignal(atom, now, "decision");
+      break;
+    case "task.unblock": {
+      const activeConditions = mockStore.conditions.filter(
+        (condition) => condition.atomId === atom.id && condition.status === "active"
+      );
+      for (const condition of activeConditions) {
+        await conditionResolve(condition.id, { expectedRevision: condition.revision });
+      }
+      task.status = task.status === "blocked" ? "todo" : task.status;
+      markAttentionSignal(atom, now, "decision");
+      break;
+    }
+    case "task.archive":
+    case "task.drop":
+      await atomArchive(atom.id, {
+        expectedRevision: atom.revision,
+        reason: "decision_resolution"
+      });
+      return;
+    case "confession.create_blocker":
+      markAttentionSignal(atom, now, "decision");
+      break;
+    default:
+      break;
+  }
+  atom.updatedAt = now;
+  atom.revision += 1;
+}
+
+async function applyDecisionResolution(decision: DecisionPrompt, optionId: string): Promise<void> {
+  const option = decision.options.find((candidate) => candidate.id === optionId);
+  if (!option) {
+    return;
+  }
+  const targetIds = decisionOptionAtomIds(option, decision.atomIds);
+  const targets = atomsByIds(targetIds);
+  for (const atom of targets) {
+    await applyDecisionOptionToAtom(atom, option);
+  }
+}
+
 export async function decisionResolve(
   decisionId: string,
   optionId: string,
@@ -2754,6 +3233,7 @@ export async function decisionResolve(
   if (!existing) {
     throw new Error(`Decision not found: ${decisionId}`);
   }
+  await applyDecisionResolution(existing, optionId);
   const next = await decisionCreate({
     ...existing,
     status: "resolved",
@@ -2837,6 +3317,7 @@ export async function workSessionStart(request: WorkSessionStartRequest): Promis
     id: uid("ws"),
     status: "running",
     focusBlockIds: payload.focusBlockIds ?? [],
+    initialTaskStatusByAtomId: {},
     startedAt: now,
     notes: payload.note ? [payload.note] : [],
     createdAt: now,
@@ -2844,6 +3325,21 @@ export async function workSessionStart(request: WorkSessionStartRequest): Promis
     revision: 1
   };
   mockStore.workSessions.unshift(next);
+  const focusedAtoms = atomsForFocusBlocks(next.focusBlockIds);
+  for (const atom of focusedAtoms) {
+    const task = ensureTaskFacet(atom);
+    next.initialTaskStatusByAtomId![atom.id] = task.status;
+    if (task.status === "todo") {
+      task.status = "doing";
+    }
+    if (!task.attentionLayer || ATTENTION_LAYER_RANK[task.attentionLayer] > ATTENTION_LAYER_RANK.l3) {
+      task.attentionLayer = "l3";
+    }
+    markAttentionSignal(atom, now, "focus_start");
+    atom.updatedAt = now;
+    atom.revision += 1;
+  }
+  recordWorkspaceEvent("work.session.started", { sessionId: next.id, focusBlockIds: next.focusBlockIds });
   persistMockStore();
   return next;
 }
@@ -2867,8 +3363,15 @@ export async function workSessionNote(
     throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${session.revision}`);
   }
   session.notes = [...session.notes, payload.note];
-  session.updatedAt = nowIso();
+  const now = nowIso();
+  session.updatedAt = now;
   session.revision += 1;
+  for (const atom of atomsForFocusBlocks(session.focusBlockIds)) {
+    markAttentionSignal(atom, now, "focus_note");
+    atom.updatedAt = now;
+    atom.revision += 1;
+  }
+  recordWorkspaceEvent("work.session.noted", { sessionId, noteLength: payload.note.length });
   persistMockStore();
   return session;
 }
@@ -2891,11 +3394,14 @@ export async function workSessionEnd(
   if (session.revision !== payload.expectedRevision) {
     throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${session.revision}`);
   }
+  const now = nowIso();
   session.status = "ended";
-  session.endedAt = nowIso();
+  session.endedAt = now;
   session.summaryNote = payload.summaryNote;
-  session.updatedAt = nowIso();
+  session.updatedAt = now;
   session.revision += 1;
+  restoreFocusedTaskStatuses(session, now);
+  recordWorkspaceEvent("work.session.ended", { sessionId, summary: payload.summaryNote });
   persistMockStore();
   return session;
 }
@@ -2918,11 +3424,14 @@ export async function workSessionCancel(
   if (session.revision !== payload.expectedRevision) {
     throw new Error(`CONFLICT: expected revision ${payload.expectedRevision} but found ${session.revision}`);
   }
+  const now = nowIso();
   session.status = "canceled";
-  session.canceledAt = nowIso();
+  session.canceledAt = now;
   session.summaryNote = payload.reason;
-  session.updatedAt = nowIso();
+  session.updatedAt = now;
   session.revision += 1;
+  restoreFocusedTaskStatuses(session, now);
+  recordWorkspaceEvent("work.session.canceled", { sessionId, reason: payload.reason });
   persistMockStore();
   return session;
 }
@@ -3092,25 +3601,288 @@ export async function systemApplyAttentionUpdate(
   if (IS_TAURI) {
     return tauriInvoke("system_apply_attention_update", { request: payload });
   }
+  if (!isFeatureFlagEnabled("workspace.decay_engine", true)) {
+    return { accepted: false, updatedAtomIds: [], decisionIds: [] };
+  }
   const now = payload.now ? new Date(payload.now) : new Date();
+  const nowValue = now.toISOString();
   const updatedAtomIds: string[] = [];
+  const decisionIds: string[] = [];
+
+  const categoryCounts = new Map<string, number>();
   for (const atom of mockStore.atoms) {
-    if (!atom.facetData.task || atom.archivedAt) continue;
-    if (atom.facetData.task.status === "done" || atom.facetData.task.status === "archived") continue;
-    let layer: AttentionLayer = "long";
-    if (atom.facetData.task.status === "doing" || (atom.facetData.task.priority ?? 5) <= 1) layer = "l3";
-    else if ((atom.facetData.task.priority ?? 5) <= 2) layer = "ram";
-    else if ((atom.facetData.task.priority ?? 5) <= 3) layer = "short";
-    if (atom.facetData.task.hardDueAt && new Date(atom.facetData.task.hardDueAt) <= now) layer = "l3";
-    if (atom.facetData.task.attentionLayer !== layer) {
-      atom.facetData.task.attentionLayer = layer;
-      atom.updatedAt = nowIso();
+    const categories = atom.facetData.meta?.categories ?? [];
+    for (const category of categories) {
+      categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+    }
+  }
+
+  const computations: AttentionComputation[] = [];
+  for (const atom of mockStore.atoms) {
+    const task = atom.facetData.task;
+    if (!task || atom.archivedAt) continue;
+    if (task.status === "done" || task.status === "archived") continue;
+
+    const blocked = task.status === "blocked" || hasActiveCondition(atom.id);
+    const previousLayer = task.attentionLayer ?? atom.facetData.attention?.layer ?? "long";
+    const previousHeat = atom.facetData.attention?.heatScore ?? confidenceFromPriority(task.priority);
+    const staleHours = hoursBetween(atom.facetData.attention?.lastSignalAt ?? atom.updatedAt, now);
+    const baseHeat = previousHeat * Math.exp(-Math.min(staleHours, 24 * 30) / 72) + confidenceFromPriority(task.priority) * 0.35;
+
+    let signalDelta = 0;
+    if (task.status === "doing") signalDelta += 2;
+    if (staleHours <= 0.5) signalDelta += 1.8;
+    else if (staleHours <= 6) signalDelta += 1.1;
+    else if (staleHours <= 24) signalDelta += 0.4;
+
+    const recentWorkHours = latestWorkSignalHours(atom.id, now);
+    if (recentWorkHours !== undefined) {
+      if (recentWorkHours <= 2) signalDelta += 2.8;
+      else if (recentWorkHours <= 12) signalDelta += 1.8;
+      else if (recentWorkHours <= 48) signalDelta += 0.8;
+    }
+
+    let duePressure = 0;
+    const hardDays = daysUntil(task.hardDueAt, now);
+    const softDays = daysUntil(task.softDueAt, now);
+    if (hardDays !== undefined) {
+      if (hardDays <= 0) duePressure += 4;
+      else if (hardDays <= 1) duePressure += 3;
+      else if (hardDays <= 3) duePressure += 2;
+      else if (hardDays <= 7) duePressure += 1;
+    }
+    if (softDays !== undefined) {
+      if (softDays <= 0) duePressure += 2;
+      else if (softDays <= 1) duePressure += 1.4;
+      else if (softDays <= 3) duePressure += 0.9;
+      else if (softDays <= 7) duePressure += 0.4;
+    }
+
+    let commitmentPressure = 0;
+    const commitmentLevel = task.commitmentLevel ?? atom.facetData.commitment?.level;
+    if (commitmentLevel === "hard") {
+      commitmentPressure += 0.8;
+      const mustReviewDays = daysUntil(atom.facetData.commitment?.mustReviewBy, now);
+      if (mustReviewDays !== undefined) {
+        if (mustReviewDays <= 0) commitmentPressure += 2;
+        else if (mustReviewDays <= 2) commitmentPressure += 1.4;
+      }
+      if (hardDays !== undefined && hardDays <= 2) {
+        commitmentPressure += 1.2;
+      }
+    }
+
+    const categories = atom.facetData.meta?.categories ?? [];
+    const clusterInfluence = Math.min(
+      1,
+      categories.reduce((acc, category) => acc + Math.max(0, (categoryCounts.get(category) ?? 0) - 1) * 0.08, 0)
+    );
+
+    let score = Math.max(0, Math.min(20, baseHeat + signalDelta + duePressure + commitmentPressure + clusterInfluence));
+    let proposedLayer = scoreToLayer(score);
+    if (hardDays !== undefined && hardDays <= 0) {
+      proposedLayer = "l3";
+      score = Math.max(score, 10);
+    }
+    if (task.status === "doing") {
+      proposedLayer = "l3";
+      score = Math.max(score, 10.6);
+    }
+    if (blocked) {
+      proposedLayer = "archive";
+      score = Math.min(score, 1);
+    }
+
+    const dwellStartedAt = atom.facetData.attention?.dwellStartedAt ?? atom.updatedAt;
+    const dwellHours = hoursBetween(dwellStartedAt, now);
+    const minDwellHours: Record<AttentionLayer, number> = {
+      l3: 4,
+      ram: 12,
+      short: 24,
+      long: 48,
+      archive: 0
+    };
+    const previousRank = ATTENTION_LAYER_RANK[previousLayer];
+    const proposedRank = ATTENTION_LAYER_RANK[proposedLayer];
+    let boundedLayer = proposedLayer;
+    if (!blocked && proposedRank > previousRank && dwellHours < minDwellHours[previousLayer]) {
+      boundedLayer = previousLayer;
+    }
+
+    const reasonSegments: string[] = [];
+    if (blocked) reasonSegments.push("blocked");
+    if (duePressure > 0) reasonSegments.push(`due+${duePressure.toFixed(1)}`);
+    if (signalDelta > 0) reasonSegments.push(`work+${signalDelta.toFixed(1)}`);
+    if (commitmentPressure > 0) reasonSegments.push(`commitment+${commitmentPressure.toFixed(1)}`);
+    if (reasonSegments.length === 0) reasonSegments.push("decay");
+
+    computations.push({
+      atom,
+      score,
+      proposedLayer,
+      boundedLayer,
+      blocked,
+      duePressure,
+      signalDelta,
+      commitmentPressure,
+      reason: reasonSegments.join(" · ")
+    });
+  }
+
+  const capEligible = computations
+    .filter((entry) => !entry.blocked && entry.boundedLayer !== "archive")
+    .sort((a, b) => b.score - a.score);
+
+  const l3 = capEligible.filter((entry) => entry.boundedLayer === "l3");
+  if (l3.length > ATTENTION_CAPS.l3) {
+    const rankedL3 = [...l3].sort((a, b) => b.score - a.score);
+    const keepIds = rankedL3.slice(0, ATTENTION_CAPS.l3).map((entry) => entry.atom.id);
+    const overflowIds = rankedL3.slice(ATTENTION_CAPS.l3).map((entry) => entry.atom.id);
+    for (const overflow of rankedL3.slice(ATTENTION_CAPS.l3)) {
+      overflow.boundedLayer = overflow.score >= 6.4 ? "ram" : "short";
+    }
+    const decision = await upsertDecisionPrompt({
+      type: "l3_overflow",
+      dedupeKey: buildDecisionDedupeKey("l3_overflow", l3.map((entry) => entry.atom.id), nowValue.slice(0, 10)),
+      title: "L3 is over capacity",
+      body: `L3 can hold ${ATTENTION_CAPS.l3} hot tasks. Choose what stays hot.`,
+      atomIds: l3.map((entry) => entry.atom.id),
+      priority: 1,
+      triggerCode: "l3_overflow",
+      triggerReason: `L3 has ${l3.length} tasks for a cap of ${ATTENTION_CAPS.l3}.`,
+      options: [
+        {
+          id: "keep_hottest",
+          label: `Keep hottest ${ATTENTION_CAPS.l3}`,
+          actionKind: "task.do_now",
+          payload: { atomIds: keepIds }
+        },
+        {
+          id: "drift_excess",
+          label: "Let excess drift",
+          actionKind: "task.snooze",
+          payload: {
+            atomIds: overflowIds,
+            untilAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          }
+        },
+        {
+          id: "reschedule_excess",
+          label: "Reschedule excess",
+          actionKind: "task.reschedule",
+          payload: {
+            atomIds: overflowIds,
+            dueAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString()
+          }
+        }
+      ]
+    });
+    decisionIds.push(decision.id);
+  }
+
+  const ram = capEligible.filter((entry) => entry.boundedLayer === "ram");
+  if (ram.length > ATTENTION_CAPS.ram) {
+    const rankedRam = [...ram].sort((a, b) => b.score - a.score);
+    const keepIds = rankedRam.slice(0, ATTENTION_CAPS.ram).map((entry) => entry.atom.id);
+    const overflowIds = rankedRam.slice(ATTENTION_CAPS.ram).map((entry) => entry.atom.id);
+    for (const overflow of rankedRam.slice(ATTENTION_CAPS.ram)) {
+      overflow.boundedLayer = "short";
+    }
+    const decision = await upsertDecisionPrompt({
+      type: "ram_overflow",
+      dedupeKey: buildDecisionDedupeKey("ram_overflow", ram.map((entry) => entry.atom.id), nowValue.slice(0, 10)),
+      title: "RAM list is crowded",
+      body: `RAM can hold ${ATTENTION_CAPS.ram} warm tasks. Select what to keep warm.`,
+      atomIds: ram.map((entry) => entry.atom.id),
+      priority: 3,
+      triggerCode: "ram_overflow",
+      triggerReason: `RAM has ${ram.length} tasks for a cap of ${ATTENTION_CAPS.ram}.`,
+      options: [
+        {
+          id: "keep_warm",
+          label: `Keep warm ${ATTENTION_CAPS.ram}`,
+          actionKind: "task.do_now",
+          payload: { atomIds: keepIds }
+        },
+        {
+          id: "snooze_excess",
+          label: "Snooze excess",
+          actionKind: "task.snooze",
+          payload: {
+            atomIds: overflowIds,
+            untilAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          }
+        },
+        {
+          id: "reschedule_excess",
+          label: "Reschedule excess",
+          actionKind: "task.reschedule",
+          payload: {
+            atomIds: overflowIds,
+            dueAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString()
+          }
+        }
+      ]
+    });
+    decisionIds.push(decision.id);
+  }
+
+  for (const entry of computations) {
+    const atom = entry.atom;
+    const task = atom.facetData.task;
+    if (!task) {
+      continue;
+    }
+    const previousLayer = task.attentionLayer ?? atom.facetData.attention?.layer ?? "long";
+    const changedLayer = previousLayer !== entry.boundedLayer;
+    const previousHeat = atom.facetData.attention?.heatScore ?? 0;
+    const changedHeat = Math.abs(previousHeat - entry.score) > 0.12;
+    const previousHiddenReason = atom.facetData.attention?.hiddenReason;
+    const nextDecayEligibleAt =
+      entry.boundedLayer === "archive"
+        ? undefined
+        : new Date(
+            now.valueOf() +
+              (entry.boundedLayer === "l3"
+                ? 1
+                : entry.boundedLayer === "ram"
+                  ? 3
+                  : entry.boundedLayer === "short"
+                    ? 7
+                    : 21) *
+                24 *
+                60 *
+                60 *
+                1000
+          ).toISOString();
+    const attention: AtomRecord["facetData"]["attention"] = {
+      layer: entry.boundedLayer,
+      heatScore: Number(entry.score.toFixed(2)),
+      dwellStartedAt: changedLayer ? nowValue : atom.facetData.attention?.dwellStartedAt ?? nowValue,
+      decayEligibleAt: nextDecayEligibleAt,
+      lastPromotedAt:
+        ATTENTION_LAYER_RANK[entry.boundedLayer] < ATTENTION_LAYER_RANK[previousLayer]
+          ? nowValue
+          : atom.facetData.attention?.lastPromotedAt,
+      hiddenReason: entry.blocked ? "blocked" : undefined,
+      lastSignalAt: atom.facetData.attention?.lastSignalAt ?? atom.updatedAt,
+      lastSignalKind: atom.facetData.attention?.lastSignalKind,
+      explanation: entry.reason
+    };
+    task.attentionLayer = entry.boundedLayer;
+    atom.facetData.attention = attention;
+    if (changedLayer || changedHeat || previousHiddenReason !== attention.hiddenReason) {
+      atom.updatedAt = nowValue;
       atom.revision += 1;
       updatedAtomIds.push(atom.id);
     }
   }
+
+  if (updatedAtomIds.length > 0) {
+    recordWorkspaceEvent("rule.evaluated", { engine: "attention", updatedAtomIds, decisionIds });
+  }
   persistMockStore();
-  return { accepted: true, updatedAtomIds, decisionIds: [] };
+  return { accepted: true, updatedAtomIds, decisionIds: [...new Set(decisionIds)] };
 }
 
 export async function systemGenerateDecisionCards(
@@ -3123,17 +3895,107 @@ export async function systemGenerateDecisionCards(
   if (IS_TAURI) {
     return tauriInvoke("system_generate_decision_cards", { request: payload });
   }
+  if (!isFeatureFlagEnabled("workspace.decision_queue", true)) {
+    return { accepted: false, createdOrUpdatedIds: [] };
+  }
   const now = payload.now ? new Date(payload.now) : new Date();
+  const nowIsoValue = now.toISOString();
   const createdOrUpdatedIds: string[] = [];
-  for (const atom of mockStore.atoms) {
+  const liveTasks = mockStore.atoms.filter((atom) => {
     const task = atom.facetData.task;
-    if (!task || task.status === "done" || task.status === "archived") continue;
-    if (task.hardDueAt && new Date(task.hardDueAt) < now) {
-      const decision = await decisionCreate({
-        type: "force_decision",
-        title: `Overdue task: ${task.title}`,
-        body: "Hard due date has passed. Choose an action.",
+    return !!task && !atom.archivedAt && task.status !== "done" && task.status !== "archived";
+  });
+
+  const l3 = liveTasks.filter((atom) => atom.facetData.task?.attentionLayer === "l3");
+  if (l3.length > ATTENTION_CAPS.l3) {
+    const ranked = rankAtomsByAttentionPressure(l3);
+    const keepIds = ranked.slice(0, ATTENTION_CAPS.l3).map((atom) => atom.id);
+    const overflowIds = ranked.slice(ATTENTION_CAPS.l3).map((atom) => atom.id);
+    const decision = await upsertDecisionPrompt({
+      type: "l3_overflow",
+      dedupeKey: buildDecisionDedupeKey("l3_overflow", l3.map((atom) => atom.id), nowIsoValue.slice(0, 10)),
+      title: "Choose L3 hot threads",
+      body: `L3 has ${l3.length} tasks; choose ${ATTENTION_CAPS.l3} to keep hot.`,
+      atomIds: l3.map((atom) => atom.id),
+      priority: 1,
+      triggerCode: "l3_overflow",
+      triggerReason: `Overflow: ${l3.length}/${ATTENTION_CAPS.l3}`,
+      options: [
+        {
+          id: "keep_hottest",
+          label: `Keep hottest ${ATTENTION_CAPS.l3}`,
+          actionKind: "task.do_now",
+          payload: { atomIds: keepIds }
+        },
+        {
+          id: "snooze_extras",
+          label: "Snooze extras",
+          actionKind: "task.snooze",
+          payload: { atomIds: overflowIds, untilAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+        },
+        {
+          id: "reschedule_extras",
+          label: "Reschedule extras",
+          actionKind: "task.reschedule",
+          payload: { atomIds: overflowIds, dueAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString() }
+        }
+      ]
+    });
+    createdOrUpdatedIds.push(decision.id);
+  }
+
+  const ram = liveTasks.filter((atom) => atom.facetData.task?.attentionLayer === "ram");
+  if (ram.length > ATTENTION_CAPS.ram) {
+    const ranked = rankAtomsByAttentionPressure(ram);
+    const keepIds = ranked.slice(0, ATTENTION_CAPS.ram).map((atom) => atom.id);
+    const overflowIds = ranked.slice(ATTENTION_CAPS.ram).map((atom) => atom.id);
+    const decision = await upsertDecisionPrompt({
+      type: "ram_overflow",
+      dedupeKey: buildDecisionDedupeKey("ram_overflow", ram.map((atom) => atom.id), nowIsoValue.slice(0, 10)),
+      title: "Trim RAM list",
+      body: `RAM has ${ram.length} tasks; keep your warm set intentional.`,
+      atomIds: ram.map((atom) => atom.id),
+      priority: 3,
+      triggerCode: "ram_overflow",
+      triggerReason: `Overflow: ${ram.length}/${ATTENTION_CAPS.ram}`,
+      options: [
+        {
+          id: "keep_warm",
+          label: `Keep warm ${ATTENTION_CAPS.ram}`,
+          actionKind: "task.do_now",
+          payload: { atomIds: keepIds }
+        },
+        {
+          id: "snooze_extras",
+          label: "Snooze extras",
+          actionKind: "task.snooze",
+          payload: { atomIds: overflowIds, untilAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
+        },
+        {
+          id: "reschedule_extras",
+          label: "Reschedule extras",
+          actionKind: "task.reschedule",
+          payload: { atomIds: overflowIds, dueAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString() }
+        }
+      ]
+    });
+    createdOrUpdatedIds.push(decision.id);
+  }
+
+  for (const atom of liveTasks) {
+    const task = atom.facetData.task!;
+    const hardDays = daysUntil(task.hardDueAt, now);
+    if (hardDays !== undefined && hardDays <= 0) {
+      const decision = await upsertDecisionPrompt({
+        type: "overdue_hard_due",
+        dedupeKey: buildDecisionDedupeKey("overdue_hard_due", [atom.id]),
+        title: `Overdue hard due: ${task.title}`,
+        body: "Hard due date has passed. Choose the next move.",
         atomIds: [atom.id],
+        priority: 1,
+        dueAt: nowIsoValue,
+        triggerCode: "overdue_hard_due",
+        triggerReason: "Hard due date is overdue.",
         options: [
           { id: "do_now", label: "Do now", actionKind: "task.do_now" },
           { id: "reschedule", label: "Reschedule", actionKind: "task.reschedule" },
@@ -3142,6 +4004,215 @@ export async function systemGenerateDecisionCards(
       });
       createdOrUpdatedIds.push(decision.id);
     }
+
+    const commitment = task.commitmentLevel ?? atom.facetData.commitment?.level;
+    const mustReviewDays = daysUntil(atom.facetData.commitment?.mustReviewBy, now);
+    if (
+      commitment === "hard" &&
+      ((hardDays !== undefined && hardDays <= 2) || (mustReviewDays !== undefined && mustReviewDays <= 1))
+    ) {
+      const decision = await upsertDecisionPrompt({
+        type: "hard_commitment_review",
+        dedupeKey: buildDecisionDedupeKey("hard_commitment_review", [atom.id]),
+        title: `Hard commitment check: ${task.title}`,
+        body: "This hard commitment is near boundary. Recommit, reschedule, or release it.",
+        atomIds: [atom.id],
+        priority: 2,
+        triggerCode: "hard_commitment_review",
+        triggerReason: "Hard commitment is near due/review boundary.",
+        options: [
+          { id: "recommit", label: "Recommit", actionKind: "task.recommit" },
+          { id: "reschedule", label: "Reschedule", actionKind: "task.reschedule" },
+          { id: "cancel", label: "Cancel commitment", actionKind: "task.cancel_commitment" }
+        ]
+      });
+      createdOrUpdatedIds.push(decision.id);
+    }
+
+    const decayEligibleAt = parseIsoDate(atom.facetData.attention?.decayEligibleAt);
+    if (decayEligibleAt) {
+      const hoursToDecay = (decayEligibleAt.valueOf() - now.valueOf()) / (1000 * 60 * 60);
+      if (hoursToDecay <= 6) {
+        const decision = await upsertDecisionPrompt({
+          type: "boundary_drift_review",
+          dedupeKey: buildDecisionDedupeKey("boundary_drift_review", [atom.id]),
+          title: `Drifting soon: ${task.title}`,
+          body: "This task is near attention decay. Keep it hot or let it drift.",
+          atomIds: [atom.id],
+          priority: 3,
+          triggerCode: "boundary_drift_review",
+          triggerReason: `Decay boundary in ${Math.max(0, Math.round(hoursToDecay))}h.`,
+          options: [
+            { id: "do_now", label: "Do now", actionKind: "task.do_now" },
+            { id: "snooze", label: "Snooze", actionKind: "task.snooze" },
+            { id: "drift", label: "Let drift", actionKind: "task.reschedule" }
+          ]
+        });
+        createdOrUpdatedIds.push(decision.id);
+      }
+    }
+  }
+
+  const waitingConditions = mockStore.conditions.filter(
+    (condition) => condition.status === "active" && condition.mode === "person"
+  );
+  for (const condition of waitingConditions) {
+    const cadence = Math.max(1, condition.waitingCadenceDays ?? 7);
+    const nextFollowup = parseIsoDate(condition.nextFollowupAt);
+    const lastFollowup = parseIsoDate(condition.lastFollowupAt);
+    const due =
+      (nextFollowup && nextFollowup <= now) ||
+      (!nextFollowup && lastFollowup && (now.valueOf() - lastFollowup.valueOf()) / (1000 * 60 * 60 * 24) >= cadence);
+    if (!due) {
+      continue;
+    }
+    const atom = mockStore.atoms.find((entry) => entry.id === condition.atomId);
+    const title = atom?.facetData.task?.title ?? atom?.rawText ?? condition.atomId;
+    const decision = await upsertDecisionPrompt({
+      type: "blocked_followup",
+      dedupeKey: buildDecisionDedupeKey("blocked_followup", [condition.atomId], condition.id),
+      title: `Follow up: ${title}`,
+      body: `Waiting on ${condition.waitingOnPerson ?? "someone"}. Log a follow-up or unblock.`,
+      atomIds: [condition.atomId],
+      priority: 2,
+      triggerCode: "waiting_followup",
+      triggerReason: "Follow-up cadence is due.",
+      triggerMeta: { conditionId: condition.id },
+      options: [
+        { id: "unblock", label: "Mark unblocked", actionKind: "task.unblock" },
+        { id: "snooze", label: "Snooze", actionKind: "task.snooze" },
+        { id: "reschedule", label: "Reschedule", actionKind: "task.reschedule" }
+      ]
+    });
+    createdOrUpdatedIds.push(decision.id);
+  }
+
+  const hardCommitments = liveTasks.filter((atom) => {
+    const task = atom.facetData.task;
+    if (!task) return false;
+    const commitment = task.commitmentLevel ?? atom.facetData.commitment?.level;
+    return commitment === "hard";
+  });
+  const hardCommitmentCap = Math.max(2, ATTENTION_CAPS.l3);
+  if (hardCommitments.length > hardCommitmentCap) {
+    const ranked = rankAtomsByAttentionPressure(hardCommitments);
+    const keepIds = ranked.slice(0, hardCommitmentCap).map((atom) => atom.id);
+    const overflowIds = ranked.slice(hardCommitmentCap).map((atom) => atom.id);
+    const decision = await upsertDecisionPrompt({
+      type: "hard_commitment_overflow",
+      dedupeKey: buildDecisionDedupeKey("hard_commitment_overflow", hardCommitments.map((atom) => atom.id), nowIsoValue.slice(0, 10)),
+      title: "Too many hard commitments",
+      body: `You have ${hardCommitments.length} hard commitments. Keep only the commitments you can truly honor now.`,
+      atomIds: hardCommitments.map((atom) => atom.id),
+      priority: 1,
+      triggerCode: "hard_commitment_overflow",
+      triggerReason: `Hard commitments exceed cap (${hardCommitments.length}/${hardCommitmentCap}).`,
+      options: [
+        { id: "recommit_kept", label: `Keep ${hardCommitmentCap} commitments`, actionKind: "task.recommit", payload: { atomIds: keepIds } },
+        { id: "reschedule_excess", label: "Reschedule excess", actionKind: "task.reschedule", payload: { atomIds: overflowIds } },
+        { id: "cancel_excess", label: "Cancel excess commitments", actionKind: "task.cancel_commitment", payload: { atomIds: overflowIds } }
+      ]
+    });
+    createdOrUpdatedIds.push(decision.id);
+  }
+
+  for (const atom of liveTasks) {
+    const recurrence = atom.facetData.recurrence;
+    const task = atom.facetData.task;
+    if (!recurrence || !task) {
+      continue;
+    }
+    const hardDays = daysUntil(task.hardDueAt, now);
+    const softDays = daysUntil(task.softDueAt, now);
+    if ((hardDays !== undefined && hardDays <= -1) || (softDays !== undefined && softDays <= -1.5)) {
+      const decision = await upsertDecisionPrompt({
+        type: "recurrence_missed",
+        dedupeKey: buildDecisionDedupeKey("recurrence_missed", [atom.id]),
+        title: `Recurring task missed: ${task.title}`,
+        body: "A recurring task instance appears missed. Decide whether to do now or re-time the cadence.",
+        atomIds: [atom.id],
+        priority: 2,
+        triggerCode: "recurrence_missed",
+        triggerReason: "Recurring task is overdue relative to due boundary.",
+        options: [
+          { id: "do_now", label: "Do now", actionKind: "task.do_now" },
+          { id: "reschedule", label: "Reschedule", actionKind: "task.reschedule" },
+          { id: "snooze", label: "Snooze", actionKind: "task.snooze" }
+        ]
+      });
+      createdOrUpdatedIds.push(decision.id);
+    }
+  }
+
+  const activeNorthStars = mockStore.registryEntries.filter((entry) => entry.kind === "north_star" && entry.status === "active");
+  for (const northStar of activeNorthStars) {
+    const lastActivity = parseIsoDate(northStar.lastActivityAt);
+    const staleDays = lastActivity ? (now.valueOf() - lastActivity.valueOf()) / (1000 * 60 * 60 * 24) : Number.POSITIVE_INFINITY;
+    if (staleDays < 14) {
+      continue;
+    }
+    const relatedTaskIds = liveTasks
+      .filter((atom) => {
+        const categories = atom.facetData.meta?.categories ?? [];
+        if (categories.some((category) => category.toLowerCase() === northStar.name.toLowerCase())) {
+          return true;
+        }
+        return northStar.aliases.some((alias) => categories.some((category) => category.toLowerCase() === alias.toLowerCase()));
+      })
+      .map((atom) => atom.id);
+    const decision = await upsertDecisionPrompt({
+      type: "north_star_stale",
+      dedupeKey: buildDecisionDedupeKey("north_star_stale", relatedTaskIds, northStar.id),
+      title: `North star stale: ${northStar.name}`,
+      body: "This north star has been quiet. Confirm it is still active or reconnect active work to it.",
+      atomIds: relatedTaskIds,
+      priority: 3,
+      triggerCode: "north_star_stale",
+      triggerReason: Number.isFinite(staleDays) ? `No activity for ${Math.round(staleDays)} days.` : "No recorded activity.",
+      triggerMeta: { registryEntryId: northStar.id, northStarName: northStar.name },
+      options: [
+        { id: "recommit", label: "Recommit", actionKind: "task.recommit", payload: { atomIds: relatedTaskIds } },
+        { id: "reschedule", label: "Reschedule related tasks", actionKind: "task.reschedule", payload: { atomIds: relatedTaskIds } },
+        { id: "snooze", label: "Snooze review", actionKind: "task.snooze", payload: { atomIds: relatedTaskIds } }
+      ]
+    });
+    createdOrUpdatedIds.push(decision.id);
+  }
+
+  const confessionCandidates = liveTasks
+    .filter((atom) => {
+      const task = atom.facetData.task;
+      if (!task) return false;
+      const dread = task.dreadLevel ?? atom.facetData.energy?.dreadLevel ?? 0;
+      if (dread < 3) return false;
+      const ageHours = hoursBetween(atom.facetData.attention?.lastSignalAt ?? atom.updatedAt, now);
+      return ageHours >= 48 && task.status === "todo";
+    })
+    .sort((a, b) => atomAttentionScore(b) - atomAttentionScore(a))
+    .slice(0, 5);
+
+  for (const atom of confessionCandidates) {
+    const task = atom.facetData.task!;
+    const decision = await upsertDecisionPrompt({
+      type: "confession_suggestion",
+      dedupeKey: buildDecisionDedupeKey("confession_suggestion", [atom.id]),
+      title: `Stuck? ${task.title}`,
+      body: "This task looks avoided. Name the blocker, do a first step, or safely defer.",
+      atomIds: [atom.id],
+      priority: 3,
+      triggerCode: "confession_suggestion",
+      triggerReason: "High dread + stale signal suggests hidden blocker.",
+      options: [
+        { id: "first_step_now", label: "Do first step now", actionKind: "task.do_now" },
+        { id: "name_blocker", label: "Name blocker", actionKind: "confession.create_blocker" },
+        { id: "snooze", label: "Snooze", actionKind: "task.snooze" }
+      ]
+    });
+    createdOrUpdatedIds.push(decision.id);
+  }
+
+  if (createdOrUpdatedIds.length > 0) {
+    recordWorkspaceEvent("triage.prompted", { decisionIds: [...new Set(createdOrUpdatedIds)] });
   }
   return { accepted: true, createdOrUpdatedIds: [...new Set(createdOrUpdatedIds)] };
 }
@@ -3206,12 +4277,197 @@ export async function notificationDeliveriesList(
   return paginateWithRequest(items, request);
 }
 
+const DEFAULT_WORKSPACE_PROJECTION_IDS: Record<"tasks.waiting" | "focus.queue" | "today.a_list" | "history.daily", string> = {
+  "tasks.waiting": "projection.tasks.waiting",
+  "focus.queue": "projection.focus.queue",
+  "today.a_list": "projection.today.a_list",
+  "history.daily": "projection.history.daily"
+};
+
+function projectionTitleForAtom(atom: AtomRecord): string {
+  const taskTitle = atom.facetData.task?.title?.trim();
+  if (taskTitle && taskTitle.length > 0) {
+    return taskTitle;
+  }
+  const raw = atom.rawText.trim();
+  return raw.length > 0 ? raw : atom.id;
+}
+
+function projectionTaskLayer(atom: AtomRecord): AttentionLayer {
+  return atom.facetData.task?.attentionLayer ?? atom.facetData.attention?.layer ?? "long";
+}
+
+function activeProjectionTasks(): AtomRecord[] {
+  return mockStore.atoms.filter((atom) => {
+    const task = atom.facetData.task;
+    return !!task && !atom.archivedAt && task.status !== "done" && task.status !== "archived";
+  });
+}
+
+function buildProjectionPreview(type: ProjectionDefinition["type"], now: Date): Record<string, unknown> {
+  const nowIsoValue = now.toISOString();
+  const activeTasks = activeProjectionTasks();
+
+  if (type === "tasks.waiting") {
+    const waitingConditions = mockStore.conditions
+      .filter((condition) => condition.status === "active")
+      .map((condition) => {
+        const atom = mockStore.atoms.find((candidate) => candidate.id === condition.atomId);
+        return {
+          conditionId: condition.id,
+          atomId: condition.atomId,
+          title: atom ? projectionTitleForAtom(atom) : condition.atomId,
+          mode: condition.mode,
+          waitingOnPerson: condition.waitingOnPerson,
+          blockedUntil: condition.blockedUntil,
+          blockerAtomId: condition.blockerAtomId,
+          nextFollowupAt: condition.nextFollowupAt,
+          lastFollowupAt: condition.lastFollowupAt
+        };
+      })
+      .sort((a, b) => (a.nextFollowupAt ?? "").localeCompare(b.nextFollowupAt ?? ""));
+    return {
+      generatedAt: nowIsoValue,
+      total: waitingConditions.length,
+      items: waitingConditions
+    };
+  }
+
+  if (type === "focus.queue") {
+    const candidates = activeTasks
+      .filter((atom) => {
+        const status = atom.facetData.task?.status;
+        return status === "todo" || status === "doing";
+      })
+      .sort((a, b) => {
+        const layerDelta = ATTENTION_LAYER_RANK[projectionTaskLayer(a)] - ATTENTION_LAYER_RANK[projectionTaskLayer(b)];
+        if (layerDelta !== 0) return layerDelta;
+        const heatDelta = atomAttentionScore(b) - atomAttentionScore(a);
+        if (Math.abs(heatDelta) > 0.001) return heatDelta;
+        const priorityDelta = (a.facetData.task?.priority ?? 3) - (b.facetData.task?.priority ?? 3);
+        if (priorityDelta !== 0) return priorityDelta;
+        return b.updatedAt.localeCompare(a.updatedAt);
+      })
+      .slice(0, 12)
+      .map((atom) => ({
+        atomId: atom.id,
+        title: projectionTitleForAtom(atom),
+        status: atom.facetData.task?.status ?? "todo",
+        layer: projectionTaskLayer(atom),
+        heatScore: atom.facetData.attention?.heatScore ?? 0,
+        priority: atom.facetData.task?.priority ?? 3
+      }));
+    return {
+      generatedAt: nowIsoValue,
+      total: candidates.length,
+      items: candidates
+    };
+  }
+
+  if (type === "today.a_list") {
+    const ranked = rankAtomsByAttentionPressure(activeTasks).slice(0, 3).map((atom) => ({
+      atomId: atom.id,
+      title: projectionTitleForAtom(atom),
+      layer: projectionTaskLayer(atom),
+      heatScore: atom.facetData.attention?.heatScore ?? 0,
+      dueAt: atom.facetData.task?.hardDueAt ?? atom.facetData.task?.softDueAt
+    }));
+    const dueToday = activeTasks.filter((atom) => {
+      const due = atom.facetData.task?.hardDueAt ?? atom.facetData.task?.softDueAt;
+      if (!due) return false;
+      const dueDate = new Date(due);
+      if (Number.isNaN(dueDate.valueOf())) return false;
+      return dueDate.toDateString() === now.toDateString();
+    }).length;
+    return {
+      generatedAt: nowIsoValue,
+      total: ranked.length,
+      dueToday,
+      items: ranked
+    };
+  }
+
+  if (type === "history.daily") {
+    const days = Array.from({ length: 7 }, (_, offset) => {
+      const date = new Date(now.valueOf() - (6 - offset) * 24 * 60 * 60 * 1000);
+      const dayKey = date.toISOString().slice(0, 10);
+      return {
+        day: dayKey,
+        captured: 0,
+        completed: 0,
+        decisionsResolved: 0,
+        focusSessionsEnded: 0
+      };
+    });
+    const byDay = new Map(days.map((day) => [day.day, day]));
+    for (const event of mockStore.workspaceEvents) {
+      const day = event.occurredAt.slice(0, 10);
+      const target = byDay.get(day);
+      if (!target) continue;
+      if (event.type === "atom.created") target.captured += 1;
+      if (event.type === "task.completed") target.completed += 1;
+      if (event.type === "decision.resolved") target.decisionsResolved += 1;
+      if (event.type === "work.session.ended") target.focusSessionsEnded += 1;
+    }
+    return {
+      generatedAt: nowIsoValue,
+      totalDays: days.length,
+      days
+    };
+  }
+
+  return {
+    generatedAt: nowIsoValue,
+    total: activeTasks.length
+  };
+}
+
+function ensureDefaultProjections(): void {
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return;
+  }
+  const now = nowIso();
+  const defaults: Array<{ type: keyof typeof DEFAULT_WORKSPACE_PROJECTION_IDS }> = [
+    { type: "tasks.waiting" },
+    { type: "focus.queue" },
+    { type: "today.a_list" },
+    { type: "history.daily" }
+  ];
+  for (const entry of defaults) {
+    const existing = mockStore.projections.find((projection) => projection.type === entry.type);
+    if (existing) {
+      continue;
+    }
+    const projection: ProjectionDefinition = {
+      id: DEFAULT_WORKSPACE_PROJECTION_IDS[entry.type],
+      schemaVersion: 1,
+      type: entry.type,
+      source: "atoms+events",
+      enabled: true,
+      refreshMode: "manual",
+      versionTag: "v1",
+      revision: 1
+    };
+    mockStore.projections.unshift(projection);
+    mockStore.projectionCheckpoints.unshift({
+      projectionId: projection.id,
+      status: "healthy",
+      lastRebuiltAt: now,
+      preview: buildProjectionPreview(entry.type, new Date())
+    });
+  }
+}
+
 export async function projectionsList(
   request: PageRequest = {}
 ): Promise<PageResponse<ProjectionDefinition>> {
   if (IS_TAURI) {
     return tauriInvoke("projections_list", { ...request });
   }
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return paginateWithRequest([], request);
+  }
+  ensureDefaultProjections();
   const items = [...mockStore.projections].sort((a, b) => b.revision - a.revision);
   return paginateWithRequest(items, request);
 }
@@ -3220,6 +4476,10 @@ export async function projectionGet(projectionId: string): Promise<ProjectionDef
   if (IS_TAURI) {
     return tauriInvoke("projection_get", { projectionId });
   }
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return null;
+  }
+  ensureDefaultProjections();
   return mockStore.projections.find((projection) => projection.id === projectionId) ?? null;
 }
 
@@ -3230,6 +4490,10 @@ export async function projectionSave(
   if (IS_TAURI) {
     return tauriInvoke("projection_save", { projection: request });
   }
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    throw new Error("FEATURE_DISABLED: workspace.projections");
+  }
+  ensureDefaultProjections();
   const now = nowIso();
   const id = projection.id ?? uid("projection");
   const idx = mockStore.projections.findIndex((item) => item.id === id);
@@ -3267,9 +4531,13 @@ export async function projectionCheckpointGet(projectionId: string): Promise<Pro
   if (IS_TAURI) {
     return tauriInvoke("projection_checkpoint_get", { projectionId });
   }
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return { projectionId, status: "lagging", errorMessage: "workspace.projections is disabled" };
+  }
+  ensureDefaultProjections();
   const existing = mockStore.projectionCheckpoints.find((cp) => cp.projectionId === projectionId);
   if (existing) return existing;
-  return { projectionId, status: "healthy" };
+  return { projectionId, status: "healthy", preview: {} };
 }
 
 export async function projectionRefresh(
@@ -3281,14 +4549,28 @@ export async function projectionRefresh(
   if (IS_TAURI) {
     return tauriInvoke("projection_refresh", { projectionId, mode, idempotencyKey: mutationKey });
   }
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return {
+      projectionId,
+      status: "lagging",
+      errorMessage: "workspace.projections is disabled"
+    };
+  }
+  ensureDefaultProjections();
+  const projection = await projectionGet(projectionId);
+  if (!projection) {
+    throw new Error(`Projection not found: ${projectionId}`);
+  }
   const now = nowIso();
+  const preview = buildProjectionPreview(projection.type, new Date());
   const cp = await projectionCheckpointGet(projectionId);
   const next: ProjectionCheckpoint = {
     ...cp,
     lastEventCursor: mockStore.workspaceEvents[0]?.id,
     lastRebuiltAt: now,
     status: "healthy",
-    errorMessage: undefined
+    errorMessage: undefined,
+    preview
   };
   const idx = mockStore.projectionCheckpoints.findIndex((item) => item.projectionId === projectionId);
   if (idx >= 0) {
@@ -3296,7 +4578,7 @@ export async function projectionRefresh(
   } else {
     mockStore.projectionCheckpoints.unshift(next);
   }
-  recordWorkspaceEvent("projection.refreshed", { projectionId, mode });
+  recordWorkspaceEvent("projection.refreshed", { projectionId, mode, projectionType: projection.type });
   persistMockStore();
   return next;
 }
@@ -3309,10 +4591,23 @@ export async function projectionRebuild(
   if (IS_TAURI) {
     return tauriInvoke("projection_rebuild", { projectionIds, idempotencyKey: mutationKey });
   }
+  if (!isFeatureFlagEnabled("workspace.projections", true)) {
+    return { accepted: true, jobRunIds: [] };
+  }
+  ensureDefaultProjections();
   const ids = projectionIds?.length ? projectionIds : mockStore.projections.map((projection) => projection.id);
+  let projectionJob = mockStore.workspaceJobs.find((job) => job.type === "projection.refresh");
+  if (!projectionJob) {
+    projectionJob = await jobSave({
+      id: "job.projection.refresh",
+      type: "projection.refresh",
+      enabled: true,
+      schedule: { kind: "manual" }
+    });
+  }
   const jobRunIds: string[] = [];
   for (const projectionId of ids) {
-    const run = await jobRun(`projection.rebuild.${projectionId}`, { projectionId }, `projection-rebuild-${projectionId}`);
+    const run = await jobRun(projectionJob.id, { projectionId }, `projection-rebuild-${projectionId}`);
     jobRunIds.push(run.id);
     await projectionRefresh(projectionId, "full");
   }

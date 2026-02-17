@@ -13,7 +13,7 @@ NOW = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 metrics = []
 
 # ═══════════════════════════════════════════════════════════════════════
-# 1. Trailing Discovery Calls (independent — queries HubSpot)
+# 1. Trailing Discovery Calls (dependent on weekly-discovery-calls)
 # ═══════════════════════════════════════════════════════════════════════
 
 weekly_data = [
@@ -54,32 +54,42 @@ metrics.append({
     "slug": "trailing-discovery-calls",
     "name": "Trailing Discovery Calls",
     "screen_id": "pipeline",
-    "instructions": r"""Retrieve HubSpot deals that entered the Discovery Call stage and compute the trailing 30-day discovery call count measured weekly.
+    "instructions": r"""Compute trailing 30-day discovery call metrics using dependency input from `weekly-discovery-calls`. Do not call HubSpot or calendar APIs in this metric.
 
-## Data Source
-HubSpot Deals via Kiingo MCP `hubspot.searchAllDeals()` and `hubspot.listPipelineStages()`.
+## Dependency Input
+You will receive one dependency input:
+1. **weekly-discovery-calls** with values like:
+   - `weeklyData`: array of `{ weekOf, count }`
+   - `currentWeek`, `priorWeek`, `total`, `avgPerWeek`, `trend`
+   - optionally richer fields such as `dailyData` (`{ date, count }`) or `discoveryCalls` (ISO timestamps)
 
-## Retrieval Steps
-1. Confirm the Discovery Call stage ID: call `hubspot.listPipelineStages({ pipelineId: 'default' })` and find the stage labeled "Discovery Call" (expected ID: `appointmentscheduled`). Also check upsell pipelines ('798580396', '796136972') for their discovery stages.
-2. Search all deals that have entered Discovery Call: `hubspot.searchAllDeals({ filters: [{ propertyName: 'hs_date_entered_appointmentscheduled', operator: 'HAS_PROPERTY' }], properties: ['dealname', 'hs_date_entered_appointmentscheduled', 'amount', 'dealstage', 'pipeline'] })`.
-3. Parse `hs_date_entered_appointmentscheduled` as the date each deal entered discovery. Sort ascending.
-4. Compute trailing 30-day count for each week starting from the first full Sunday after the earliest entry:
-   - For each week-ending date, count deals whose `hs_date_entered_appointmentscheduled` falls in the 30-day window ending on that date.
-5. Also compute: current trailing 30 count (from today), by-month breakdown, peak/trough/average.
+## Computation Steps
+1. Locate dependency input where `slug == "weekly-discovery-calls"` and read its `values`.
+2. Build a trailing-30 weekly series:
+   - Preferred: if `discoveryCalls` or `dailyData` are present, compute exact 30-day windows for each week ending date in chronological order.
+   - Fallback: if only `weeklyData` exists, estimate each trailing 30 value as:
+     current week + prior 3 full weeks + (2/7 * week-4), rounded to nearest integer.
+3. Compute summary metrics from that trailing series:
+   - `trailing30`: most recent trailing value
+   - `peak`, `peakWeek`: max trailing value and week
+   - `trough`, `troughWeek`: min trailing value and week
+   - `avgTrailing`: average trailing value
+4. Compute total/monthly context:
+   - `total`: use dependency `total` if present, else sum of weekly discovery counts
+   - `byMonth`: if daily timestamps exist, aggregate by month exactly; otherwise derive a best-effort monthly rollup from weekly buckets.
 
 ## Narrative Context
-- Discovery calls are the top of the active sales funnel — a leading indicator of pipeline health.
-- A sustained drop in trailing discovery calls signals future pipeline problems 60-90 days out.
-- Holiday dips (mid-Dec through early Jan) are expected.
-- Include both New Business and Upsell pipeline discovery stages if present.
+- Discovery calls are an early-funnel leading indicator.
+- This metric is calendar-derived through `weekly-discovery-calls`, anchored to David and Sohrab meeting activity.
+- A sustained trailing decline signals likely pipeline softness 60-90 days ahead.
 
 ## Values to Return
 - `trailing30`: current trailing 30-day count
 - `peak`: highest weekly trailing 30 value and which week
 - `peakWeek`: ISO date of peak week
-- `trough`: lowest weekly trailing 30 value (excluding ramp-up) and which week
+- `trough`: lowest weekly trailing 30 value and which week
 - `troughWeek`: ISO date of trough week
-- `total`: total discovery calls all-time
+- `total`: total discovery calls in dependency lookback
 - `avgTrailing`: average trailing 30 across all weeks
 - `weeklyData`: array of { weekOf, trailing30 } for the chart
 - `byMonth`: object of month -> count""",
@@ -115,7 +125,7 @@ HubSpot Deals via Kiingo MCP `hubspot.searchAllDeals()` and `hubspot.listPipelin
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <MetricNote>Each point = trailing 30-day discovery calls · Source: HubSpot CRM via Kiingo MCP</MetricNote>
+      <MetricNote>Each point = trailing 30-day discovery calls · Source: Weekly Discovery Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
 })()""",
@@ -152,7 +162,7 @@ HubSpot Deals via Kiingo MCP `hubspot.searchAllDeals()` and `hubspot.listPipelin
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <MetricNote>Each point = trailing 30-day discovery calls · Source: HubSpot CRM via Kiingo MCP</MetricNote>
+      <MetricNote>Each point = trailing 30-day discovery calls · Source: Weekly Discovery Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
 }})()""",
@@ -163,7 +173,7 @@ HubSpot Deals via Kiingo MCP `hubspot.searchAllDeals()` and `hubspot.listPipelin
     "grid_h": 7,
     "grid_x": 0,
     "grid_y": 18,
-    "metadata_json": "{}",
+    "metadata_json": json.dumps({"dependencies": ["weekly-discovery-calls"]}),
 })
 
 
