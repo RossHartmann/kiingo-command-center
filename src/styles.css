@@ -2939,6 +2939,7 @@ body.metric-dragging {
   padding: 0.3rem;
   display: grid;
   gap: 0.18rem;
+  align-content: start;
 }
 
 .notepad-tree-row {
