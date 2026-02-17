@@ -44,7 +44,7 @@ import type {
   WorkspaceHealth
 } from "../lib/types";
 import { NotepadToolbar } from "../components/notepad/NotepadToolbar";
-import { NOTEPAD_ESTIMATED_ROW_HEIGHT, NotepadTree } from "../components/notepad/NotepadTree";
+import { NotepadTree } from "../components/notepad/NotepadTree";
 import {
   resolveContainerKeyAction,
   resolveEditorKeyAction
@@ -335,13 +335,17 @@ export function NotepadScreen(): JSX.Element {
   }, [uiState.selectedPlacementId]);
 
   useEffect(() => {
-    if (quickTargetNotepadId) {
+    const destinationOptions = notepads.filter((value) => value.id !== uiState.activeNotepadId);
+    if (destinationOptions.length === 0) {
+      if (quickTargetNotepadId) {
+        setQuickTargetNotepadId("");
+      }
       return;
     }
-    const candidate = notepads.find((value) => value.id !== uiState.activeNotepadId);
-    if (candidate) {
-      setQuickTargetNotepadId(candidate.id);
+    if (quickTargetNotepadId && destinationOptions.some((value) => value.id === quickTargetNotepadId)) {
+      return;
     }
+    setQuickTargetNotepadId(destinationOptions[0].id);
   }, [notepads, quickTargetNotepadId, uiState.activeNotepadId]);
 
   useEffect(() => {
@@ -705,12 +709,12 @@ export function NotepadScreen(): JSX.Element {
       if (!container) {
         return;
       }
-      const rowIndex = treeData.flatRows.findIndex((row) => row.placement.id === placementId);
-      if (rowIndex === -1) {
+      const row = container.querySelector<HTMLElement>(`.notepad-row[data-placement-id="${placementId}"]`);
+      if (!row) {
         return;
       }
-      const rowTop = rowIndex * NOTEPAD_ESTIMATED_ROW_HEIGHT;
-      const rowBottom = rowTop + NOTEPAD_ESTIMATED_ROW_HEIGHT;
+      const rowTop = row.offsetTop;
+      const rowBottom = rowTop + row.offsetHeight;
       const viewportTop = container.scrollTop;
       const viewportBottom = viewportTop + container.clientHeight;
 
@@ -720,7 +724,7 @@ export function NotepadScreen(): JSX.Element {
         container.scrollTop = rowBottom - container.clientHeight;
       }
     },
-    [treeData.flatRows]
+    []
   );
 
   const focusEditorForPlacement = useCallback(

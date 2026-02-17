@@ -2922,7 +2922,6 @@ body.metric-dragging {
 }
 
 .notepad-tree {
-  position: relative;
   height: min(68vh, 720px);
   overflow: auto;
   border: 1px solid var(--line);
@@ -2936,14 +2935,14 @@ body.metric-dragging {
 }
 
 .notepad-tree-inner {
-  position: relative;
   min-height: 100%;
+  padding: 0.3rem;
+  display: grid;
+  gap: 0.18rem;
 }
 
 .notepad-tree-row {
-  position: absolute;
-  left: 0;
-  right: 0;
+  min-width: 0;
 }
 
 .notepad-row {
@@ -2984,7 +2983,6 @@ body.metric-dragging {
 .notepad-editor {
   width: 100%;
   min-height: 1.45rem;
-  max-height: 1.45rem;
   resize: none;
   border-radius: 8px;
   border: 1px solid var(--line);
@@ -2993,9 +2991,9 @@ body.metric-dragging {
   padding: 0.38rem 0.45rem;
   font-size: 0.82rem;
   line-height: 1.1;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .notepad-pill {
@@ -3015,6 +3013,11 @@ body.metric-dragging {
 
 .notepad-pill.attention {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line) 55%);
+}
+
+.notepad-pill.collapsed-descendants {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line) 70%);
+  color: color-mix(in srgb, var(--accent) 45%, var(--ink-muted) 55%);
 }
 
 .notepad-pill.attention-heat {

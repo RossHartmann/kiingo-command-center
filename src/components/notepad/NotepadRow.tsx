@@ -59,6 +59,7 @@ export function NotepadRow({
     <article
       className={`notepad-row ${selected ? "selected" : ""}`}
       style={{ paddingLeft: `${0.6 + row.depth * 1.1}rem` }}
+      data-placement-id={row.placement.id}
       onMouseDownCapture={handleMouseDownCapture}
       onClick={handleRowClick}
       tabIndex={-1}
@@ -87,6 +88,11 @@ export function NotepadRow({
       />
 
       {isTask && <span className="notepad-pill">{row.atom?.facetData.task?.status ?? row.block.taskStatus ?? "todo"}</span>}
+      {row.collapsed && row.descendantCount > 0 && (
+        <span className="notepad-pill collapsed-descendants">
+          {row.descendantCount} hidden
+        </span>
+      )}
       {attentionLayer && <span className="notepad-pill attention">{attentionLayer.toUpperCase()}</span>}
       {typeof heatScore === "number" && <span className="notepad-pill attention-heat">{heatScore.toFixed(1)}</span>}
       {overlayMode && (

@@ -106,6 +106,29 @@ export function buildTreeData(
     parentNode.children.push(node);
   }
 
+  const descendantCountByPlacementId: Record<string, number> = {};
+  const countDescendants = (node: Node, path: Set<string>): number => {
+    if (path.has(node.placement.id)) {
+      return 0;
+    }
+    const nextPath = new Set(path);
+    nextPath.add(node.placement.id);
+    let total = 0;
+    for (const child of node.children) {
+      total += 1 + countDescendants(child, nextPath);
+    }
+    descendantCountByPlacementId[node.placement.id] = total;
+    return total;
+  };
+  for (const root of roots) {
+    countDescendants(root, new Set());
+  }
+  for (const node of nodesByPlacementId.values()) {
+    if (descendantCountByPlacementId[node.placement.id] === undefined) {
+      countDescendants(node, new Set());
+    }
+  }
+
   const flatRows: FlatRow[] = [];
   const rowByPlacementId: Record<string, FlatRow> = {};
   const childrenByParentKey: Record<string, string[]> = {};
@@ -136,6 +159,7 @@ export function buildTreeData(
       atom: node.atom,
       depth,
       hasChildren: node.children.length > 0,
+      descendantCount: descendantCountByPlacementId[node.placement.id] ?? 0,
       collapsed: !!collapsedByPlacement[node.placement.id],
       effectiveParentPlacementId: node.effectiveParentPlacementId,
       overlay: node.atom ? activeOverlay(conditionsByAtomId[node.atom.id]) : undefined

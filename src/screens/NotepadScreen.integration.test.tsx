@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { notepadSave } from "../lib/tauriClient";
+import { notepadBlockCreate, notepadSave } from "../lib/tauriClient";
 import { NotepadScreen } from "./NotepadScreen";
 
 function uniqueNotepadId(prefix: string): string {
@@ -30,6 +30,13 @@ async function createTestNotepad(notepadId: string): Promise<void> {
       },
       layoutMode: "outline"
     }
+  });
+}
+
+async function seedRow(notepadId: string, text: string): Promise<void> {
+  await notepadBlockCreate({
+    notepadId,
+    rawText: text
   });
 }
 
@@ -205,6 +212,7 @@ describe("NotepadScreen integration", () => {
 
     expect(document.querySelector(`textarea.notepad-editor[data-placement-id="${childPlacementId}"]`)).toBeNull();
     expect(parentRow.className).toContain("selected");
+    expect(within(parentRow).getByText("1 hidden")).toBeTruthy();
   });
 
   it("reorders siblings and preserves subtree parentage", async () => {
@@ -252,5 +260,42 @@ describe("NotepadScreen integration", () => {
     const child = editorByPlacementId(childPlacementId!);
     const childRow = child.closest(".notepad-row") as HTMLElement;
     expect(childRow.getAttribute("aria-level")).toBe("2");
+  });
+
+  it("re-targets move/copy destination when switching active project", async () => {
+    const sourceNotepadId = uniqueNotepadId("itest-move-source");
+    const targetNotepadId = uniqueNotepadId("itest-move-target");
+    await createTestNotepad(sourceNotepadId);
+    await createTestNotepad(targetNotepadId);
+    await seedRow(sourceNotepadId, "source-row");
+    await seedRow(targetNotepadId, "target-row");
+    await renderNotepadAndSwitch(sourceNotepadId);
+
+    const inspectorToggle = screen.getByRole("button", { name: /Show|Hide/ });
+    if (inspectorToggle.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(inspectorToggle);
+    }
+    const moveCopyToggle = screen.getByRole("button", { name: "Move/Copy" });
+    if (moveCopyToggle.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(moveCopyToggle);
+    }
+
+    const destinationBefore = (await screen.findByLabelText("Destination project")) as HTMLSelectElement;
+    fireEvent.change(destinationBefore, { target: { value: targetNotepadId } });
+    expect(destinationBefore.value).toBe(targetNotepadId);
+
+    const activeProject = (await screen.findByLabelText("Active project")) as HTMLSelectElement;
+    fireEvent.change(activeProject, { target: { value: targetNotepadId } });
+    await waitFor(() => {
+      expect(activeProject.value).toBe(targetNotepadId);
+    });
+    await settleNotepad();
+
+    const destinationAfter = (await screen.findByLabelText("Destination project")) as HTMLSelectElement;
+    const available = Array.from(destinationAfter.options)
+      .map((option) => option.value)
+      .filter((value) => value.length > 0);
+    expect(available).not.toContain(targetNotepadId);
+    expect(available).toContain(destinationAfter.value);
   });
 });

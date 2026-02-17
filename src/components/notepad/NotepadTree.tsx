@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import type { FocusEvent, KeyboardEvent } from "react";
 import { NotepadRow } from "./NotepadRow";
 import type { FlatRow } from "./types";
 
@@ -17,9 +17,6 @@ interface NotepadTreeProps {
   onContainerKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }
 
-export const NOTEPAD_ESTIMATED_ROW_HEIGHT = 48;
-const OVERSCAN_ROWS = 20;
-
 export function NotepadTree({
   rows,
   selectedPlacementId,
@@ -34,62 +31,31 @@ export function NotepadTree({
   onEditorKeyDown,
   onContainerKeyDown
 }: NotepadTreeProps): JSX.Element {
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(420);
-
-  const totalHeight = rows.length * NOTEPAD_ESTIMATED_ROW_HEIGHT;
-
-  const windowed = useMemo(() => {
-    const start = Math.max(0, Math.floor(scrollTop / NOTEPAD_ESTIMATED_ROW_HEIGHT) - OVERSCAN_ROWS);
-    const end = Math.min(
-      rows.length,
-      Math.ceil((scrollTop + viewportHeight) / NOTEPAD_ESTIMATED_ROW_HEIGHT) + OVERSCAN_ROWS
-    );
-    return {
-      start,
-      end,
-      items: rows.slice(start, end)
-    };
-  }, [rows, scrollTop, viewportHeight]);
-
   return (
     <div
       className="notepad-tree"
-      ref={viewportRef}
       tabIndex={0}
       role="tree"
       onKeyDown={onContainerKeyDown}
-      onScroll={(event) => {
-        const target = event.currentTarget;
-        setScrollTop(target.scrollTop);
-        if (target.clientHeight !== viewportHeight) {
-          setViewportHeight(target.clientHeight);
-        }
-      }}
     >
-      <div className="notepad-tree-inner" style={{ height: `${totalHeight}px` }}>
-        {windowed.items.map((row, index) => {
-          const absoluteIndex = windowed.start + index;
-          const top = absoluteIndex * NOTEPAD_ESTIMATED_ROW_HEIGHT;
-          return (
-            <div className="notepad-tree-row" key={row.placement.id} style={{ transform: `translateY(${top}px)` }}>
-              <NotepadRow
-                row={row}
-                selected={selectedPlacementId === row.placement.id}
-                textValue={getRowText(row)}
-                overlayMode={parseOverlayMode(row)}
-                isTask={isTaskRow(row)}
-                onSelect={onSelectRow}
-                onToggleCollapsed={onToggleCollapsed}
-                onEditorFocus={onEditorFocus}
-                onEditorChange={onEditorChange}
-                onEditorBlur={onEditorBlur}
-                onEditorKeyDown={onEditorKeyDown}
-              />
-            </div>
-          );
-        })}
+      <div className="notepad-tree-inner">
+        {rows.map((row) => (
+          <div className="notepad-tree-row" key={row.placement.id}>
+            <NotepadRow
+              row={row}
+              selected={selectedPlacementId === row.placement.id}
+              textValue={getRowText(row)}
+              overlayMode={parseOverlayMode(row)}
+              isTask={isTaskRow(row)}
+              onSelect={onSelectRow}
+              onToggleCollapsed={onToggleCollapsed}
+              onEditorFocus={onEditorFocus}
+              onEditorChange={onEditorChange}
+              onEditorBlur={onEditorBlur}
+              onEditorKeyDown={onEditorKeyDown}
+            />
+          </div>
+        ))}
       </div>
     </div>
   );

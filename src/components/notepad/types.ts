@@ -8,6 +8,7 @@ export interface FlatRow {
   atom?: AtomRecord;
   depth: number;
   hasChildren: boolean;
+  descendantCount: number;
   collapsed: boolean;
   effectiveParentPlacementId?: string;
   overlay?: ConditionRecord;
