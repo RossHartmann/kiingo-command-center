@@ -36,13 +36,25 @@ export function OmniSearch() {
   const filtered = useMemo(() => {
     if (!query.trim()) return ALL_RESULTS;
     const q = query.toLowerCase();
-    return ALL_RESULTS.filter(
-      (r) =>
-        r.label.toLowerCase().includes(q) ||
-        r.group.toLowerCase().includes(q) ||
-        r.description.toLowerCase().includes(q) ||
-        r.screen.toLowerCase().includes(q)
-    );
+    const scored: { result: SearchResult; score: number }[] = [];
+    for (const r of ALL_RESULTS) {
+      const label = r.label.toLowerCase();
+      const group = r.group.toLowerCase();
+      const desc = r.description.toLowerCase();
+      const screen = r.screen.toLowerCase();
+      let score = 0;
+      if (label === q) score = 100;                       // exact label match
+      else if (label.startsWith(q)) score = 80;           // label starts with
+      else if (label.split(/\s+/).some((w) => w.startsWith(q))) score = 60; // word starts with
+      else if (label.includes(q)) score = 50;             // label contains
+      else if (screen.includes(q)) score = 40;            // screen id contains
+      else if (group.toLowerCase() === q) score = 35;     // exact group match
+      else if (group.includes(q)) score = 25;             // group contains
+      else if (desc.includes(q)) score = 15;              // description contains
+      if (score > 0) scored.push({ result: r, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map((s) => s.result);
   }, [query]);
 
   // Keep refs in sync so the keydown handler always reads fresh values

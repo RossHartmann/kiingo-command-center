@@ -55,47 +55,68 @@ function formatDuration(secs: number | null): string {
   return `${m}m ${s}s`;
 }
 
-function ProgressBar({ elapsed, expected, label }: { elapsed: number; expected: number; label: string }) {
-  const pct = Math.min((elapsed / expected) * 100, 100);
-  const overrun = elapsed > expected;
-  return (
-    <div className="refresh-progress-row">
-      <div className="refresh-progress-track">
-        <div
-          className={`refresh-progress-fill${overrun ? " overrun" : ""}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="refresh-progress-label">
-        {formatDuration(elapsed)} / ~{formatDuration(expected)} <span className="refresh-progress-tag">{label}</span>
-      </span>
-    </div>
-  );
-}
-
-function RefreshProgressBars({ startedAt, diagnostics }: { startedAt: string; diagnostics: MetricDiagnostics | null }) {
+function RefreshOverlay({ startTime, diagnostics }: { startTime: number; diagnostics: MetricDiagnostics | null }) {
   const [elapsed, setElapsed] = useState(() =>
-    Math.max(0, (Date.now() - new Date(startedAt).valueOf()) / 1000)
+    Math.max(0, (Date.now() - startTime) / 1000)
   );
 
   useEffect(() => {
     const id = setInterval(() => {
-      setElapsed(Math.max(0, (Date.now() - new Date(startedAt).valueOf()) / 1000));
+      setElapsed(Math.max(0, (Date.now() - startTime) / 1000));
     }, 1000);
     return () => clearInterval(id);
-  }, [startedAt]);
+  }, [startTime]);
 
-  if (!diagnostics || (diagnostics.lastRunDurationSecs == null && diagnostics.avgRunDurationSecs == null)) {
-    return null;
-  }
+  const hasTimings = diagnostics && (diagnostics.lastRunDurationSecs != null || diagnostics.avgRunDurationSecs != null);
+  // Use last-run as primary estimate, fall back to avg
+  const primaryExpected = diagnostics?.lastRunDurationSecs ?? diagnostics?.avgRunDurationSecs ?? null;
+  const primaryPct = primaryExpected != null ? Math.min((elapsed / primaryExpected) * 100, 100) : null;
+  const overrun = primaryExpected != null && elapsed > primaryExpected;
 
   return (
-    <div className="refresh-progress">
-      {diagnostics.lastRunDurationSecs != null && (
-        <ProgressBar elapsed={elapsed} expected={diagnostics.lastRunDurationSecs} label="last" />
-      )}
-      {diagnostics.avgRunDurationSecs != null && (
-        <ProgressBar elapsed={elapsed} expected={diagnostics.avgRunDurationSecs} label="avg" />
+    <div className="refresh-overlay">
+      <div className="refresh-overlay-top">
+        <div className="refresh-pulse" />
+        {primaryPct != null ? (
+          <span className={`refresh-pct${overrun ? " overrun" : ""}`}>
+            {overrun ? "100" : Math.round(primaryPct)}%
+          </span>
+        ) : (
+          <span className="refresh-pct">{"\u2026"}</span>
+        )}
+        <span className="refresh-elapsed">{formatDuration(elapsed)} elapsed</span>
+      </div>
+      {hasTimings && (
+        <div className="refresh-bars">
+          {diagnostics!.lastRunDurationSecs != null && (
+            <div className="refresh-bar-row">
+              <div className="refresh-bar-head">
+                <span className="refresh-bar-tag">last run</span>
+                <span className="refresh-bar-est">~{formatDuration(diagnostics!.lastRunDurationSecs)}</span>
+              </div>
+              <div className="refresh-bar-track">
+                <div
+                  className={`refresh-bar-fill${elapsed > diagnostics!.lastRunDurationSecs! ? " overrun" : ""}`}
+                  style={{ width: `${Math.min((elapsed / diagnostics!.lastRunDurationSecs!) * 100, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {diagnostics!.avgRunDurationSecs != null && (
+            <div className="refresh-bar-row">
+              <div className="refresh-bar-head">
+                <span className="refresh-bar-tag">avg run</span>
+                <span className="refresh-bar-est">~{formatDuration(diagnostics!.avgRunDurationSecs)}</span>
+              </div>
+              <div className="refresh-bar-track">
+                <div
+                  className={`refresh-bar-fill${elapsed > diagnostics!.avgRunDurationSecs! ? " overrun" : ""}`}
+                  style={{ width: `${Math.min((elapsed / diagnostics!.avgRunDurationSecs!) * 100, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -164,11 +185,16 @@ export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnostics, setDiagnostics] = useState<MetricDiagnostics | null>(null);
   const prevRefreshing = useRef(false);
+  const [refreshStartTime, setRefreshStartTime] = useState<number | null>(null);
 
-  // Fetch diagnostics when refresh starts so we have timing data for progress bars
+  // Fetch diagnostics and capture start time when refresh begins
   useEffect(() => {
     if (refreshInProgress && !prevRefreshing.current) {
+      setRefreshStartTime(Date.now());
       void getMetricDiagnostics(definition.id).then(setDiagnostics);
+    }
+    if (!refreshInProgress && prevRefreshing.current) {
+      setRefreshStartTime(null);
     }
     prevRefreshing.current = refreshInProgress;
   }, [refreshInProgress, definition.id]);
@@ -202,20 +228,16 @@ export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
 
   if (refreshInProgress) {
     return (
-      <div className="metric-card metric-loading">
+      <div className="metric-card metric-refreshing">
         <div className="metric-card-header">
           <strong>{definition.name}</strong>
-          <small className="metric-card-time">refreshing...</small>
+          <small className="metric-card-time">refreshing\u2026</small>
         </div>
         <div className="metric-card-body">
-          {latestSnapshot?.createdAt && diagnostics ? (
-            <RefreshProgressBars startedAt={latestSnapshot.createdAt} diagnostics={diagnostics} />
-          ) : null}
-          <div className="metric-shimmer">
-            <div className="shimmer-line" />
-            <div className="shimmer-line short" />
-            <div className="shimmer-line" />
-          </div>
+          <RefreshOverlay
+            startTime={refreshStartTime ?? Date.now()}
+            diagnostics={diagnostics}
+          />
         </div>
       </div>
     );

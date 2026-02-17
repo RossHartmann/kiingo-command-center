@@ -1123,46 +1123,109 @@ button.primary {
   font-size: 0.82rem;
 }
 
-/* Refresh progress bars */
-.refresh-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 0.8rem;
+/* Refresh overlay */
+.metric-refreshing {
+  border-color: var(--accent);
+  border-width: 1px;
+  box-shadow: 0 0 0 1px rgba(91, 138, 245, 0.08), var(--shadow);
 }
 
-.refresh-progress-row {
+.refresh-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.2rem;
+  height: 100%;
+  min-height: 100px;
+}
+
+.refresh-overlay-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.refresh-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: refresh-ping 1.8s ease-in-out infinite;
+}
+
+@keyframes refresh-ping {
+  0%, 100% { opacity: 0.4; transform: scale(1); box-shadow: 0 0 0 0 rgba(91, 138, 245, 0.3); }
+  50% { opacity: 1; transform: scale(1.15); box-shadow: 0 0 0 6px rgba(91, 138, 245, 0); }
+}
+
+.refresh-pct {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.refresh-pct.overrun {
+  color: #d7a13f;
+}
+
+.refresh-elapsed {
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.refresh-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 220px;
+}
+
+.refresh-bar-row {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
 }
 
-.refresh-progress-track {
-  height: 6px;
-  border-radius: 3px;
+.refresh-bar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.refresh-bar-tag {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  opacity: 0.7;
+}
+
+.refresh-bar-est {
+  font-size: 0.62rem;
+  color: var(--ink-muted);
+}
+
+.refresh-bar-track {
+  height: 4px;
+  border-radius: 2px;
   background: var(--line);
   overflow: hidden;
 }
 
-.refresh-progress-fill {
+.refresh-bar-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--accent);
   transition: width 1s linear;
 }
 
-.refresh-progress-fill.overrun {
+.refresh-bar-fill.overrun {
   background: #d7a13f;
-}
-
-.refresh-progress-label {
-  font-size: 0.68rem;
-  color: var(--ink-muted);
-}
-
-.refresh-progress-tag {
-  opacity: 0.6;
-  font-style: italic;
 }
 
 .metric-stale {
