@@ -2947,6 +2947,10 @@ body.metric-dragging {
   min-width: 0;
 }
 
+.notepad-tree-row.drag-follow {
+  pointer-events: none;
+}
+
 .notepad-tree-row.drop-before::before,
 .notepad-tree-row.drop-after::after {
   content: "";

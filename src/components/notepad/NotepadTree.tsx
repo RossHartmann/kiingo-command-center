@@ -6,6 +6,7 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent
 } from "@dnd-kit/core";
@@ -13,7 +14,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { NotepadRow } from "./NotepadRow";
 import type { FlatRow } from "./types";
-import type { PlacementDropIntent } from "./treeData";
+import { collectVisibleSubtreePlacementIds, type PlacementDropIntent } from "./treeData";
 
 interface NotepadTreeDropPayload {
   sourcePlacementId: string;
@@ -44,6 +45,8 @@ interface SortableNotepadRowProps {
   overlayMode?: "person" | "task" | "date";
   isTask: boolean;
   dropHint?: PlacementDropIntent;
+  followsParentDrag?: boolean;
+  parentDragDelta?: { x: number; y: number };
   onSelect: (placementId: string) => void;
   onToggleCollapsed: (placementId: string) => void;
   onEditorFocus: (placementId: string) => void;
@@ -59,6 +62,8 @@ function SortableNotepadRow({
   overlayMode,
   isTask,
   dropHint,
+  followsParentDrag,
+  parentDragDelta,
   onSelect,
   onToggleCollapsed,
   onEditorFocus,
@@ -69,15 +74,19 @@ function SortableNotepadRow({
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: row.placement.id
   });
+  const shouldFollowParent = !!followsParentDrag && !isDragging;
+  const followTransform = shouldFollowParent
+    ? `translate3d(${parentDragDelta?.x ?? 0}px, ${parentDragDelta?.y ?? 0}px, 0px)`
+    : undefined;
 
   return (
     <div
       ref={setNodeRef}
-      className={`notepad-tree-row${dropHint ? ` drop-${dropHint}` : ""}${isDragging ? " dragging" : ""}`}
+      className={`notepad-tree-row${dropHint ? ` drop-${dropHint}` : ""}${isDragging ? " dragging" : ""}${shouldFollowParent ? " drag-follow" : ""}`}
       style={{
-        transform: CSS.Transform.toString(transform),
-        transition,
-        opacity: isDragging ? 0.45 : undefined
+        transform: followTransform ?? CSS.Transform.toString(transform),
+        transition: shouldFollowParent ? undefined : transition,
+        opacity: isDragging ? 0.45 : shouldFollowParent ? 0.82 : undefined
       }}
     >
       <NotepadRow
@@ -148,7 +157,13 @@ export function NotepadTree({
 }: NotepadTreeProps): JSX.Element {
   const [activePlacementId, setActivePlacementId] = useState<string>();
   const [dropTarget, setDropTarget] = useState<Omit<NotepadTreeDropPayload, "sourcePlacementId">>();
+  const [dragDelta, setDragDelta] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const rowIds = useMemo(() => rows.map((row) => row.placement.id), [rows]);
+  const activeSubtreeIds = useMemo(
+    () => (activePlacementId ? collectVisibleSubtreePlacementIds(rows, activePlacementId) : []),
+    [activePlacementId, rows]
+  );
+  const activeSubtreeSet = useMemo(() => new Set(activeSubtreeIds), [activeSubtreeIds]);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 }
@@ -158,12 +173,18 @@ export function NotepadTree({
   const resetDragState = (): void => {
     setActivePlacementId(undefined);
     setDropTarget(undefined);
+    setDragDelta({ x: 0, y: 0 });
   };
 
   const handleDragStart = (event: DragStartEvent): void => {
     const sourcePlacementId = String(event.active.id);
     setActivePlacementId(sourcePlacementId);
+    setDragDelta({ x: 0, y: 0 });
     onSelectRow(sourcePlacementId);
+  };
+
+  const handleDragMove = (event: DragMoveEvent): void => {
+    setDragDelta(event.delta);
   };
 
   const handleDragOver = (event: DragOverEvent): void => {
@@ -189,6 +210,7 @@ export function NotepadTree({
       sensors={sensors}
       collisionDetection={closestCenter}
       onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={resetDragState}
@@ -214,6 +236,12 @@ export function NotepadTree({
                     ? dropTarget.intent
                     : undefined
                 }
+                followsParentDrag={
+                  !!activePlacementId &&
+                  row.placement.id !== activePlacementId &&
+                  activeSubtreeSet.has(row.placement.id)
+                }
+                parentDragDelta={dragDelta}
                 onSelect={onSelectRow}
                 onToggleCollapsed={onToggleCollapsed}
                 onEditorFocus={onEditorFocus}
