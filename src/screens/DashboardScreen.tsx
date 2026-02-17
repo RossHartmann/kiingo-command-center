@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricGrid } from "../components/MetricGrid";
+import { OMNI_SCROLL_TO_METRIC } from "../components/OmniSearch";
 import type { MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
 
 interface DashboardScreenProps {
@@ -32,6 +33,7 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [compact, setCompact] = useState(false);
+  const [showToolsPanel, setShowToolsPanel] = useState(false);
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,6 +63,23 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
       void actions.refreshMetric(view.definition.id).catch(() => {});
     }
   }, [views, actions]);
+
+  // Scroll-to-metric when triggered from OmniSearch
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { bindingId } = (e as CustomEvent).detail as { bindingId: string };
+      const el = gridContainerRef.current?.querySelector<HTMLElement>(
+        `[data-binding-id="${CSS.escape(bindingId)}"]`
+      );
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("omni-highlight");
+        setTimeout(() => el.classList.remove("omni-highlight"), 2000);
+      }
+    };
+    window.addEventListener(OMNI_SCROLL_TO_METRIC, handler);
+    return () => window.removeEventListener(OMNI_SCROLL_TO_METRIC, handler);
+  }, []);
 
   const handleLayoutChange = useCallback(
     (layouts: ScreenMetricLayoutItem[]) => {
@@ -249,36 +268,56 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
   return (
     <div className={`screen dashboard-screen${editMode ? " dashboard-editing" : ""}`}>
       <div className="dashboard-toolbar">
-        {editMode && (
-          <>
-            <button type="button" onClick={() => setDrawerOpen(!drawerOpen)}>
-              + Add Widget
-            </button>
-            <button
-              type="button"
-              className={compact ? "active" : ""}
-              onClick={() => setCompact(!compact)}
-              title={compact ? "Switch to free-form layout" : "Switch to vertical compaction"}
-            >
-              {compact ? "Compact" : "Free-form"}
-            </button>
-            <button type="button" onClick={handleAutoArrange} title="Pack widgets tightly with no gaps">
-              Auto-arrange
-            </button>
-          </>
-        )}
         <button
           type="button"
           className={editMode ? "primary" : ""}
           onClick={() => {
-            setEditMode(!editMode);
+            const nextEditMode = !editMode;
+            setEditMode(nextEditMode);
+            if (!nextEditMode) {
+              setShowToolsPanel(false);
+            }
             setDrawerOpen(false);
             setSearch("");
           }}
         >
           {editMode ? "Done" : "Edit"}
         </button>
+        {editMode && (
+          <>
+            <button type="button" onClick={() => setDrawerOpen(!drawerOpen)}>
+              {drawerOpen ? "Hide Widgets" : "Widgets"}
+            </button>
+            <button
+              type="button"
+              className={showToolsPanel ? "primary" : ""}
+              onClick={() => setShowToolsPanel((current) => !current)}
+              aria-expanded={showToolsPanel}
+            >
+              Tools
+            </button>
+          </>
+        )}
       </div>
+
+      {editMode && showToolsPanel && (
+        <div className="dashboard-toolbar-panel">
+          <small className="settings-hint">Layout controls</small>
+          <div className="dashboard-toolbar-panel-actions">
+            <button
+              type="button"
+              className={compact ? "primary" : ""}
+              onClick={() => setCompact(!compact)}
+              title={compact ? "Switch to free-form layout" : "Switch to vertical compaction"}
+            >
+              {compact ? "Compact On" : "Compact Off"}
+            </button>
+            <button type="button" onClick={handleAutoArrange} title="Pack widgets tightly with no gaps">
+              Auto-arrange
+            </button>
+          </div>
+        </div>
+      )}
 
       <div ref={gridContainerRef}>
         <MetricGrid

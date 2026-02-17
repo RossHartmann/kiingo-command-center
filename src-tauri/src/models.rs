@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 pub enum Provider {
     Codex,
     Claude,
+    KiingoMcp,
 }
 
 impl Provider {
@@ -14,6 +15,7 @@ impl Provider {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::KiingoMcp => "kiingo-mcp",
         }
     }
 }

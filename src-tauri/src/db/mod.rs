@@ -1326,6 +1326,20 @@ impl Database {
         Ok(result)
     }
 
+    pub fn get_latest_inflight_snapshot_id(&self, metric_id: &str) -> AppResult<Option<String>> {
+        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.query_row(
+            "SELECT id FROM metric_snapshots
+             WHERE metric_id = ?1 AND status IN ('pending', 'running')
+             ORDER BY created_at DESC
+             LIMIT 1",
+            [metric_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(AppError::from)
+    }
+
     pub fn get_metric_diagnostics(&self, metric_id: &str) -> AppResult<MetricDiagnostics> {
         let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
 
@@ -2987,6 +3001,7 @@ fn parse_provider(raw: &str) -> rusqlite::Result<Provider> {
     match raw {
         "codex" => Ok(Provider::Codex),
         "claude" => Ok(Provider::Claude),
+        "kiingo-mcp" => Ok(Provider::KiingoMcp),
         other => Err(rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Text,

@@ -35,14 +35,14 @@ async function createTestNotepad(notepadId: string): Promise<void> {
 
 async function settleNotepad(): Promise<void> {
   await waitFor(() => {
-    expect(screen.queryByText("Loading notepad...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading project...")).not.toBeInTheDocument();
     expect(screen.queryByText("Saving...")).not.toBeInTheDocument();
   });
 }
 
 async function renderNotepadAndSwitch(notepadId: string): Promise<HTMLSelectElement> {
   render(<NotepadScreen />);
-  const selector = (await screen.findByLabelText("Active notepad")) as HTMLSelectElement;
+  const selector = (await screen.findByLabelText("Active project")) as HTMLSelectElement;
   fireEvent.change(selector, { target: { value: notepadId } });
   await waitFor(() => {
     expect(selector.value).toBe(notepadId);
@@ -52,7 +52,9 @@ async function renderNotepadAndSwitch(notepadId: string): Promise<HTMLSelectElem
 }
 
 async function clickNewRow(): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "New Row" }));
+  const tree = screen.getByRole("tree");
+  fireEvent.focus(tree);
+  fireEvent.keyDown(tree, { key: "Enter" });
   await settleNotepad();
 }
 
@@ -180,10 +182,13 @@ describe("NotepadScreen integration", () => {
     fireEvent.focus(editor);
     fireEvent.change(editor, { target: { value: "parent-row" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "New Child" }));
+    fireEvent.keyDown(editor, { key: "Enter" });
     await settleNotepad();
     editor = selectedEditor();
     fireEvent.focus(editor);
+    fireEvent.keyDown(editor, { key: "Tab" });
+    await settleNotepad();
+    editor = selectedEditor();
     fireEvent.change(editor, { target: { value: "child-row" } });
 
     const childPlacementId = editor.dataset.placementId;
@@ -225,10 +230,13 @@ describe("NotepadScreen integration", () => {
     const parentEditor = editorByPlacementId(parentPlacementId!);
     fireEvent.focus(parentEditor);
 
-    fireEvent.click(screen.getByRole("button", { name: "New Child" }));
+    fireEvent.keyDown(parentEditor, { key: "Enter" });
     await settleNotepad();
     editor = selectedEditor();
     fireEvent.focus(editor);
+    fireEvent.keyDown(editor, { key: "Tab" });
+    await settleNotepad();
+    editor = selectedEditor();
     fireEvent.change(editor, { target: { value: "B-child" } });
     const childPlacementId = editor.dataset.placementId;
     expect(childPlacementId).toBeTruthy();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricDefinitionEditor } from "../components/MetricDefinitionEditor";
 import { MetricBindingManager } from "../components/MetricBindingManager";
@@ -16,6 +16,14 @@ export function MetricAdminScreen(): JSX.Element {
   const [showEditor, setShowEditor] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [historySnapshots, setHistorySnapshots] = useState<MetricSnapshot[]>([]);
+  const dependencyLookup = useMemo(() => {
+    const lookup = new Map<string, string>();
+    for (const metric of state.metricDefinitions) {
+      lookup.set(metric.id, metric.name);
+      lookup.set(metric.slug, metric.name);
+    }
+    return lookup;
+  }, [state.metricDefinitions]);
 
   useEffect(() => {
     void actions.loadMetricDefinitions();
@@ -94,48 +102,54 @@ export function MetricAdminScreen(): JSX.Element {
           )}
 
           <div className="metric-admin-list">
-            {state.metricDefinitions.map((def) => (
-              <div key={def.id} className={`metric-admin-item${def.archivedAt ? " archived" : ""}`}>
-                <div className="metric-admin-item-header">
-                  <div>
-                    <strong>{def.name}</strong>
-                    <small className="metric-slug">{def.slug}</small>
+            {state.metricDefinitions.map((def) => {
+              const dependencies = dependencyLabels(def, dependencyLookup);
+              return (
+                <div key={def.id} className={`metric-admin-item${def.archivedAt ? " archived" : ""}`}>
+                  <div className="metric-admin-item-header">
+                    <div>
+                      <strong>{def.name}</strong>
+                      <small className="metric-slug">{def.slug}</small>
+                    </div>
+                    <div className="metric-admin-item-badges">
+                      <span className={`metric-badge ${def.enabled ? "enabled" : "disabled"}`}>
+                        {def.enabled ? "enabled" : "disabled"}
+                      </span>
+                      {def.proactive && <span className="metric-badge proactive">proactive</span>}
+                      <span className="metric-badge provider">{def.provider}</span>
+                    </div>
                   </div>
-                  <div className="metric-admin-item-badges">
-                    <span className={`metric-badge ${def.enabled ? "enabled" : "disabled"}`}>
-                      {def.enabled ? "enabled" : "disabled"}
-                    </span>
-                    {def.proactive && <span className="metric-badge proactive">proactive</span>}
-                    <span className="metric-badge provider">{def.provider}</span>
-                  </div>
-                </div>
-                <p className="metric-admin-instructions">{def.instructions.slice(0, 120)}...</p>
-                <div className="metric-admin-item-actions">
-                  <button type="button" onClick={() => handleEdit(def)}>Edit</button>
-                  <button type="button" onClick={() => handleToggleHistory(def.id)}>
-                    {expandedHistory === def.id ? "Hide History" : "History"}
-                  </button>
-                  {!def.archivedAt && (
-                    <button type="button" onClick={() => handleArchive(def.id)}>Archive</button>
+                  <p className="metric-admin-instructions">{def.instructions.slice(0, 120)}...</p>
+                  {dependencies.length > 0 && (
+                    <p className="settings-hint">Depends on: {dependencies.join(", ")}</p>
                   )}
-                  <button type="button" onClick={() => handleDelete(def.id)}>Delete</button>
-                </div>
-
-                {expandedHistory === def.id && (
-                  <div className="metric-history">
-                    <h4>Recent Snapshots</h4>
-                    {historySnapshots.length === 0 && <p className="settings-hint">No snapshots yet</p>}
-                    {historySnapshots.map((snap) => (
-                      <div key={snap.id} className="metric-history-item">
-                        <span className={`metric-badge ${snap.status}`}>{snap.status}</span>
-                        <small>{new Date(snap.createdAt).toLocaleString()}</small>
-                        {snap.errorMessage && <small className="metric-error-text">{snap.errorMessage}</small>}
-                      </div>
-                    ))}
+                  <div className="metric-admin-item-actions">
+                    <button type="button" onClick={() => handleEdit(def)}>Edit</button>
+                    <button type="button" onClick={() => handleToggleHistory(def.id)}>
+                      {expandedHistory === def.id ? "Hide History" : "History"}
+                    </button>
+                    {!def.archivedAt && (
+                      <button type="button" onClick={() => handleArchive(def.id)}>Archive</button>
+                    )}
+                    <button type="button" onClick={() => handleDelete(def.id)}>Delete</button>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {expandedHistory === def.id && (
+                    <div className="metric-history">
+                      <h4>Recent Snapshots</h4>
+                      {historySnapshots.length === 0 && <p className="settings-hint">No snapshots yet</p>}
+                      {historySnapshots.map((snap) => (
+                        <div key={snap.id} className="metric-history-item">
+                          <span className={`metric-badge ${snap.status}`}>{snap.status}</span>
+                          <small>{new Date(snap.createdAt).toLocaleString()}</small>
+                          {snap.errorMessage && <small className="metric-error-text">{snap.errorMessage}</small>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -143,4 +157,16 @@ export function MetricAdminScreen(): JSX.Element {
       {activeTab === "bindings" && <MetricBindingManager />}
     </div>
   );
+}
+
+function dependencyLabels(definition: MetricDefinition, lookup: Map<string, string>): string[] {
+  const raw = definition.metadataJson?.dependencies;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .map((value) => lookup.get(value) ?? value);
 }

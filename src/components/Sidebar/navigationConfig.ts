@@ -100,7 +100,7 @@ export const NAVIGATION: NavGroup[] = [
     icon: "\u270E",
     defaultExpanded: true,
     items: [
-      { id: "notepad", label: "Notepad", icon: "\u270E" },
+      { id: "notepad", label: "Projects", icon: "\u270E" },
       { id: "tasks", label: "Tasks", icon: "\u2611" }
     ]
   },
@@ -182,8 +182,8 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   "cco-principles": { title: "CCO Principles", description: "Customer success principles for retention and expansion", group: "team" },
   "chro-principles": { title: "CHRO Principles", description: "People leadership principles for culture and talent", group: "team" },
 
-  notepad: { title: "Notepad", description: "Dynalist-style outliner over shared workspace blocks", group: "workspace" },
-  tasks: { title: "Tasks", description: "Capture and manage workspace task atoms", group: "workspace" },
+  notepad: { title: "Projects", description: "Dynalist-style project outliner over shared workspace blocks", group: "workspace" },
+  tasks: { title: "Tasks", description: "Task projection across all projects", group: "workspace" },
 
   chat: { title: "Chat", description: "AI coding assistant chat", group: "ai-agent" },
   composer: { title: "Composer", description: "Compose and launch runs", group: "ai-agent" },

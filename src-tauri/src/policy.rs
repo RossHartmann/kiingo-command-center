@@ -241,7 +241,7 @@ impl PolicyEngine {
     ) -> AppResult<Vec<String>> {
         let allowed_base = match provider {
             Provider::Codex => &self.codex_base_flags,
-            Provider::Claude => &self.claude_base_flags,
+            Provider::Claude | Provider::KiingoMcp => &self.claude_base_flags,
         };
         let capability_allowed: BTreeSet<_> = capability
             .supported_flags
@@ -323,7 +323,7 @@ impl PolicyEngine {
     ) -> AppResult<()> {
         let allowed_base = match provider {
             Provider::Codex => &self.codex_base_flags,
-            Provider::Claude => &self.claude_base_flags,
+            Provider::Claude | Provider::KiingoMcp => &self.claude_base_flags,
         };
 
         let capability_allowed: BTreeSet<_> = capability

@@ -39,7 +39,7 @@ impl CompatibilityRegistry {
 
         let entry = match provider {
             Provider::Codex => codex_matrix().into_iter().find(|candidate| version_between(&cli_version, candidate.min_version, candidate.max_version)),
-            Provider::Claude => claude_matrix().into_iter().find(|candidate| version_between(&cli_version, candidate.min_version, candidate.max_version)),
+            Provider::Claude | Provider::KiingoMcp => claude_matrix().into_iter().find(|candidate| version_between(&cli_version, candidate.min_version, candidate.max_version)),
         };
 
         match entry {

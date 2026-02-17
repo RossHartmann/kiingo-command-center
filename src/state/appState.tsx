@@ -142,6 +142,7 @@ interface State {
   metricDefinitions: MetricDefinition[];
   screenMetricViews: Record<string, ScreenMetricView[]>;
   metricRefreshes: Record<string, string>;
+  metricRefreshErrors: Record<string, string>;
   workspaceAtoms: AtomRecord[];
   workspaceNotepads: NotepadViewDefinition[];
   pendingChatContext: { systemPrompt: string; initialMessage: string } | null;
@@ -170,6 +171,8 @@ type Action =
   | { type: "set_screen_metric_views"; screenId: string; views: ScreenMetricView[] }
   | { type: "set_metric_refresh"; metricId: string; snapshotId: string }
   | { type: "clear_metric_refresh"; metricId: string }
+  | { type: "set_metric_refresh_error"; metricId: string; error: string }
+  | { type: "clear_metric_refresh_error"; metricId: string }
   | { type: "patch_screen_metric_layouts"; screenId: string; layouts: ScreenMetricLayoutItem[] }
   | { type: "set_workspace_atoms"; atoms: AtomRecord[] }
   | { type: "set_workspace_notepads"; notepads: NotepadViewDefinition[] }
@@ -189,6 +192,7 @@ const initialState: State = {
   metricDefinitions: [],
   screenMetricViews: {},
   metricRefreshes: {},
+  metricRefreshErrors: {},
   workspaceAtoms: [],
   workspaceNotepads: [],
   pendingChatContext: null,
@@ -282,16 +286,34 @@ function reducer(state: State, action: Action): State {
         }
       };
     case "set_metric_refresh":
-      return {
-        ...state,
-        metricRefreshes: {
-          ...state.metricRefreshes,
-          [action.metricId]: action.snapshotId
-        }
-      };
+      // New refresh attempt supersedes any prior blocked/error messaging for this metric.
+      // Runtime execution failures are surfaced by snapshot state after completion.
+      {
+        const { [action.metricId]: _, ...restErrors } = state.metricRefreshErrors;
+        return {
+          ...state,
+          metricRefreshes: {
+            ...state.metricRefreshes,
+            [action.metricId]: action.snapshotId
+          },
+          metricRefreshErrors: restErrors
+        };
+      }
     case "clear_metric_refresh": {
       const { [action.metricId]: _, ...rest } = state.metricRefreshes;
       return { ...state, metricRefreshes: rest };
+    }
+    case "set_metric_refresh_error":
+      return {
+        ...state,
+        metricRefreshErrors: {
+          ...state.metricRefreshErrors,
+          [action.metricId]: action.error
+        }
+      };
+    case "clear_metric_refresh_error": {
+      const { [action.metricId]: _, ...rest } = state.metricRefreshErrors;
+      return { ...state, metricRefreshErrors: rest };
     }
     case "patch_screen_metric_layouts": {
       const existing = state.screenMetricViews[action.screenId];
@@ -407,7 +429,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
   const refreshAll = useCallback(async () => {
     safeDispatch({ type: "loading", value: true });
     try {
-      const [runsResult, conversationsResult, profilesResult, capabilitiesResult, jobsResult, grantsResult, settingsResult] =
+      const [runsResult, conversationsResult, profilesResult, capabilitiesResult, jobsResult, grantsResult, settingsResult, metricDefsResult] =
         await Promise.allSettled([
         listRuns({ limit: 200, offset: 0 }),
         listConversations({ limit: 200, offset: 0, includeArchived: true }),
@@ -415,7 +437,8 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         listCapabilities(),
         listQueueJobs(),
         listWorkspaceGrants(),
-        getSettings()
+        getSettings(),
+        listMetricDefinitions()
       ]);
       const [notepadsResult] = await Promise.allSettled([notepadsList()]);
 
@@ -459,6 +482,11 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
       } else {
         collectError(settingsResult);
       }
+      if (metricDefsResult.status === "fulfilled") {
+        safeDispatch({ type: "set_metric_definitions", definitions: metricDefsResult.value });
+      } else {
+        collectError(metricDefsResult);
+      }
       if (notepadsResult.status === "fulfilled") {
         safeDispatch({ type: "set_workspace_notepads", notepads: notepadsResult.value });
       } else {
@@ -492,6 +520,7 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         const metricId = event.payload.metricId as string | undefined;
         if (metricId) {
           safeDispatch({ type: "clear_metric_refresh", metricId });
+          safeDispatch({ type: "clear_metric_refresh_error", metricId });
           // Reload all cached screen views that might contain this metric
           void reloadAllScreenMetrics(safeDispatch, screenMetricViewsRef.current);
         }
@@ -705,10 +734,19 @@ export function AppStateProvider({ children }: PropsWithChildren): JSX.Element {
         safeDispatch({ type: "set_screen_metric_views", screenId, views });
       },
       refreshMetric: async (metricId) => {
-        const result = await refreshMetric(metricId);
-        safeDispatch({ type: "set_metric_refresh", metricId: result.metricId, snapshotId: result.snapshotId });
-        // Reload views so the card shows the "refreshing..." shimmer immediately
-        void reloadAllScreenMetrics(safeDispatch, screenMetricViewsRef.current);
+        try {
+          const result = await refreshMetric(metricId);
+          safeDispatch({ type: "set_metric_refresh", metricId: result.metricId, snapshotId: result.snapshotId });
+          // Reload views so the card shows the "refreshing..." shimmer immediately
+          void reloadAllScreenMetrics(safeDispatch, screenMetricViewsRef.current);
+        } catch (error) {
+          safeDispatch({
+            type: "set_metric_refresh_error",
+            metricId,
+            error: normalizeMetricRefreshError(asError(error))
+          });
+          throw error;
+        }
       },
       bindMetricToScreen: async (payload) => {
         await bindMetricToScreen(payload);
@@ -954,6 +992,15 @@ function asError(error: unknown): string {
     }
   }
   return "Unexpected error";
+}
+
+function normalizeMetricRefreshError(message: string): string {
+  return message
+    .replace(/^POLICY_DENIED:\s*/i, "")
+    .replace(/^NOT_FOUND:\s*/i, "")
+    .replace(/^INTERNAL:\s*/i, "")
+    .replace(/^IO_FAILURE:\s*/i, "")
+    .replace(/^CLI_INVALID:\s*/i, "");
 }
 
 function loadConversationSelection(): Record<Provider, string | undefined> {

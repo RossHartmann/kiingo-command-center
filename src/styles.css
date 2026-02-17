@@ -1354,6 +1354,27 @@ button.primary {
   opacity: 1;
 }
 
+.dashboard-toolbar-panel {
+  position: absolute;
+  top: 2.1rem;
+  right: 0;
+  z-index: 49;
+  min-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.6rem;
+  background: rgba(255, 252, 244, 0.97);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 0.5rem;
+}
+
+.dashboard-toolbar-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 /* Metric library drawer — overlays from right, doesn't affect grid width */
 .metric-drawer {
   position: absolute;
@@ -2192,11 +2213,22 @@ body.metric-dragging {
 
 .tasks-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
 }
 
 .tasks-card-actions select {
   font-size: 0.72rem;
+}
+
+.tasks-card-more {
+  min-width: 4.2rem;
+}
+
+.tasks-card-disclosure {
+  grid-column: 1 / -1;
+  border-top: 1px dashed var(--line);
+  padding-top: 0.45rem;
 }
 
 .tasks-projection-bar {
@@ -2210,6 +2242,16 @@ body.metric-dragging {
 .tasks-projection-actions {
   display: flex;
   gap: 0.4rem;
+}
+
+.tasks-projection-disclosure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  border-top: 1px dashed var(--line);
+  padding-top: 0.45rem;
 }
 
 @media (max-width: 980px) {
@@ -2228,6 +2270,7 @@ body.metric-dragging {
 }
 
 .notepad-toolbar {
+  display: grid;
   gap: 0.6rem;
 }
 
@@ -2240,6 +2283,30 @@ body.metric-dragging {
 
 .notepad-toolbar-row label {
   min-width: 220px;
+}
+
+.notepad-preset-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.notepad-disclosure-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.notepad-disclosure-actions button {
+  min-width: 4.8rem;
+}
+
+.notepad-disclosure-panel {
+  display: grid;
+  gap: 0.5rem;
+  border-top: 1px dashed var(--line);
+  padding-top: 0.5rem;
 }
 
 .notepad-shortcuts {
@@ -2294,8 +2361,9 @@ body.metric-dragging {
 
 .notepad-outline-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .notepad-outline-header h3 {
@@ -2305,13 +2373,35 @@ body.metric-dragging {
   color: var(--ink-muted);
 }
 
+.notepad-outline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.notepad-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.2rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  padding: 0 0.4rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  color: var(--ink-muted);
+  background: var(--bg);
+}
+
 .notepad-tree {
   position: relative;
   height: min(68vh, 720px);
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, rgba(255, 245, 216, 0.62), rgba(255, 250, 240, 0.96)),
+    var(--panel);
 }
 
 .notepad-tree-inner {
@@ -2361,7 +2451,7 @@ body.metric-dragging {
   resize: none;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: var(--bg);
+  background: rgba(255, 249, 234, 0.94);
   padding: 0.38rem 0.45rem;
   font-size: 0.82rem;
   line-height: 1.1;
@@ -2430,8 +2520,21 @@ body.metric-dragging {
   gap: 0.4rem;
 }
 
+.notepad-inspector-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.notepad-inspector-toggle-row button {
+  min-width: 5.2rem;
+}
+
 .quick-actions-panel {
   margin-top: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.98), rgba(255, 246, 228, 0.98));
   gap: 0.5rem;
 }
 
@@ -2603,6 +2706,36 @@ body.metric-dragging {
   white-space: nowrap;
   flex-shrink: 0;
   opacity: 0.7;
+}
+
+.omni-metric-icon {
+  color: var(--accent);
+}
+
+.omni-project-icon {
+  color: #365f50;
+}
+
+.omni-result-badge {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent-strong);
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+/* Highlight flash when scrolling to a metric from OmniSearch */
+@keyframes omni-highlight-pulse {
+  0%   { box-shadow: 0 0 0 3px var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.omni-highlight > .metric-card {
+  animation: omni-highlight-pulse 2s ease-out;
 }
 
 .omni-footer {

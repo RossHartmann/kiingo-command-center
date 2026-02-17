@@ -22,7 +22,7 @@ use crate::models::{
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
     DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest,
     ListConversationsFilters, ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse,
-    MetricSnapshot, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider,
+    MetricSnapshot, MetricSnapshotStatus, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider,
     RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
     SaveNotepadViewRequest, SetTaskStatusRequest, TaskReopenRequest,
@@ -48,7 +48,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::json;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -266,7 +266,7 @@ impl RunnerCore {
 
         let configured_binary = match effective_payload.provider {
             Provider::Codex => settings.codex_path.clone(),
-            Provider::Claude => settings.claude_path.clone(),
+            Provider::Claude | Provider::KiingoMcp => settings.claude_path.clone(),
         };
         let (binary_path, execution_path) =
             self.resolve_binary_path(effective_payload.provider, &configured_binary, &settings)?;
@@ -1626,6 +1626,7 @@ impl RunnerCore {
                 .persist_encrypted_raw_artifact(&run_id, &buffered_text)
                 .await;
         }
+        let _ = self.persist_session_transcript_artifact(&run_id, &buffered_text);
 
         if was_canceled {
             let _ = self
@@ -2917,79 +2918,228 @@ impl RunnerCore {
     pub async fn refresh_metric(&self, metric_id: &str) -> AppResult<MetricRefreshResponse> {
         tracing::info!(metric_id = %metric_id, "metric refresh requested");
 
-        let definition = self.db.get_metric_definition(metric_id)?
-            .ok_or_else(|| AppError::NotFound(format!("Metric definition not found: {}", metric_id)))?;
+        let plan = self.build_metric_refresh_plan(metric_id)?;
+        let target_metric_id = metric_id.to_string();
+        let mut completed_snapshots: HashMap<String, MetricSnapshot> = HashMap::new();
 
-        if !definition.enabled || definition.archived_at.is_some() {
-            tracing::warn!(metric_id = %metric_id, "metric refresh blocked: disabled or archived");
-            return Err(AppError::Policy("Metric is disabled or archived".to_string()));
-        }
-
-        if self.db.has_pending_snapshot(metric_id)? {
-            tracing::warn!(metric_id = %metric_id, "metric refresh blocked: already in progress");
-            return Err(AppError::Policy("Refresh already in progress for this metric".to_string()));
-        }
-
-        let snapshot = self.db.insert_metric_snapshot(metric_id)?;
-        tracing::info!(metric_id = %metric_id, snapshot_id = %snapshot.id, "metric snapshot created, queuing run");
-
-        let system_prompt = concat!(
-            "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. ",
-            "Then produce a React/JSX expression that displays the results.\n\n",
-            "Your output is rendered via react-live inside the app's themed dashboard. ",
-            "Do NOT hardcode color hex values. Do NOT set background on the outermost container. ",
-            "The dashboard imposes its own theme — your job is data retrieval and choosing the right presentation.\n\n",
-            "## Available in scope\n\n",
-            "### Recharts\n",
-            "AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, ComposedChart, ",
-            "XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ",
-            "ReferenceArea, ReferenceDot, Cell, LabelList, Brush, Scatter, ScatterChart, ",
-            "RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Treemap, Funnel, FunnelChart, ",
-            "RadialBarChart, RadialBar, Sector, Text, Label, Dot, Cross, Curve, Rectangle, ",
-            "Symbols, Polygon, Trapezoid, useState.\n\n",
-            "### Layout components\n",
-            "- `<MetricSection title?>` — outer container, sets color/spacing\n",
-            "- `<MetricRow>` — flex row for side-by-side items\n",
-            "- `<StatCard label value subtitle? trend? trendDirection?>` — single stat display (trendDirection: \"up\"|\"down\"|\"flat\")\n",
-            "- `<MetricText>` — narrative paragraph\n",
-            "- `<MetricNote>` — footnote/source text\n\n",
-            "These are optional — use them when they fit, or use raw divs with `theme.*` inline styles.\n\n",
-            "### Theme object (`theme`)\n",
-            "Keys: bg, panel, ink, inkMuted, line, accent, accentStrong, danger, ",
-            "axisStroke, gridStroke, tooltipBg, tooltipBorder, tooltipText, gradientFrom.\n",
-            "Usage: `style={{ color: theme.ink }}` or `<XAxis stroke={theme.axisStroke} />`\n\n",
-            "### Recharts theming examples\n",
-            "```jsx\n",
-            "<CartesianGrid stroke={theme.gridStroke} />\n",
-            "<XAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />\n",
-            "<YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />\n",
-            "<Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />\n",
-            "<Area stroke={theme.accent} fill=\"url(#gradient)\" />\n",
-            "// gradient stop: <stop stopColor={theme.gradientFrom} />\n",
-            "```\n\n",
-            "## Output format\n\n",
-            "Return a JSON object with two keys:\n",
-            "- \"values\": an object containing the raw extracted metric values (numbers, arrays) for trending/storage\n",
-            "- \"html\": a string containing the JSX expression to render\n\n",
-            "Choose the presentation that fits the data: a single number, a paragraph, a chart, or any combination.\n\n",
-            "IMPORTANT: The \"html\" value must be a single JSX expression, not multiple statements. ",
-            "Do not use import/export. Do not define standalone functions or components outside the expression. ",
-            "Data should be embedded as inline constants within the JSX expression using IIFE if needed."
-        ).to_string();
-
-        let user_prompt = format!(
-            "# Metric: {name}\n\n## Instructions\n{instructions}\n\n## JSX Template\n{template}\n\nReturn your response as JSON with `values` and `html` keys. The `html` value must be a JSX expression string.",
-            name = definition.name,
-            instructions = definition.instructions,
-            template = if definition.template_html.is_empty() {
-                "Create a clean React/Recharts JSX component to display the metric data with stat cards and an appropriate chart type.".to_string()
-            } else {
-                definition.template_html.clone()
+        for metric in &plan {
+            if !metric.enabled || metric.archived_at.is_some() {
+                tracing::warn!(metric_id = %metric.id, "metric refresh blocked: disabled or archived");
+                return Err(AppError::Policy(format!(
+                    "Metric '{}' is disabled or archived",
+                    metric.slug
+                )));
             }
-        );
+
+            let dependency_inputs = self.build_dependency_inputs_for_metric(metric, &completed_snapshots)?;
+            if metric.id == target_metric_id {
+                if self.db.has_pending_snapshot(&metric.id)? {
+                    tracing::warn!(metric_id = %metric.id, "metric refresh blocked: already in progress");
+                    return Err(AppError::Policy("Refresh already in progress for this metric".to_string()));
+                }
+                return self.start_metric_refresh_run(metric, &dependency_inputs).await;
+            }
+
+            let completed = self
+                .ensure_metric_refreshed_and_completed(metric, &dependency_inputs)
+                .await?;
+            completed_snapshots.insert(metric.id.clone(), completed);
+        }
+
+        Err(AppError::Internal(format!(
+            "Unable to build refresh plan for metric {}",
+            metric_id
+        )))
+    }
+
+    fn build_metric_refresh_plan(&self, metric_id: &str) -> AppResult<Vec<MetricDefinition>> {
+        let root = self
+            .db
+            .get_metric_definition(metric_id)?
+            .ok_or_else(|| AppError::NotFound(format!("Metric definition not found: {}", metric_id)))?;
+        let mut stack = Vec::new();
+        let mut visited = HashSet::new();
+        let mut ordered = Vec::new();
+        self.visit_metric_dependencies(&root, &mut stack, &mut visited, &mut ordered)?;
+        Ok(ordered)
+    }
+
+    fn visit_metric_dependencies(
+        &self,
+        metric: &MetricDefinition,
+        stack: &mut Vec<String>,
+        visited: &mut HashSet<String>,
+        ordered: &mut Vec<MetricDefinition>,
+    ) -> AppResult<()> {
+        if visited.contains(&metric.id) {
+            return Ok(());
+        }
+        if let Some(cycle_start) = stack.iter().position(|id| id == &metric.id) {
+            let mut cycle = stack[cycle_start..].to_vec();
+            cycle.push(metric.id.clone());
+            return Err(AppError::Policy(format!(
+                "Metric dependency cycle detected: {}",
+                cycle.join(" -> ")
+            )));
+        }
+
+        stack.push(metric.id.clone());
+        for dependency in self.resolve_metric_dependencies(metric)? {
+            self.visit_metric_dependencies(&dependency, stack, visited, ordered)?;
+        }
+        stack.pop();
+
+        visited.insert(metric.id.clone());
+        ordered.push(metric.clone());
+        Ok(())
+    }
+
+    fn resolve_metric_dependencies(&self, metric: &MetricDefinition) -> AppResult<Vec<MetricDefinition>> {
+        let mut resolved = Vec::new();
+        let mut seen = HashSet::new();
+        for reference in dependency_refs_from_metadata(metric) {
+            let dependency = self.resolve_metric_dependency_reference(metric, &reference)?;
+            if seen.insert(dependency.id.clone()) {
+                resolved.push(dependency);
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_metric_dependency_reference(
+        &self,
+        metric: &MetricDefinition,
+        reference: &str,
+    ) -> AppResult<MetricDefinition> {
+        let dependency = match self.db.get_metric_definition(reference)? {
+            Some(definition) => definition,
+            None => self.db.get_metric_definition_by_slug(reference)?.ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "Metric '{}' depends on unknown metric reference '{}'",
+                    metric.slug, reference
+                ))
+            })?,
+        };
+
+        if dependency.id == metric.id {
+            return Err(AppError::Policy(format!(
+                "Metric '{}' cannot depend on itself",
+                metric.slug
+            )));
+        }
+        if dependency.archived_at.is_some() {
+            return Err(AppError::Policy(format!(
+                "Metric '{}' depends on archived metric '{}'",
+                metric.slug, dependency.slug
+            )));
+        }
+        if !dependency.enabled {
+            return Err(AppError::Policy(format!(
+                "Metric '{}' depends on disabled metric '{}'",
+                metric.slug, dependency.slug
+            )));
+        }
+
+        Ok(dependency)
+    }
+
+    fn build_dependency_inputs_for_metric(
+        &self,
+        metric: &MetricDefinition,
+        completed_snapshots: &HashMap<String, MetricSnapshot>,
+    ) -> AppResult<Vec<serde_json::Value>> {
+        let mut inputs = Vec::new();
+        for dependency in self.resolve_metric_dependencies(metric)? {
+            let snapshot = if let Some(snapshot) = completed_snapshots.get(&dependency.id) {
+                snapshot.clone()
+            } else {
+                self.db.get_latest_snapshot(&dependency.id)?.ok_or_else(|| {
+                    AppError::Policy(format!(
+                        "Dependency metric '{}' has no completed snapshot",
+                        dependency.slug
+                    ))
+                })?
+            };
+
+            inputs.push(json!({
+                "metricId": dependency.id,
+                "slug": dependency.slug,
+                "name": dependency.name,
+                "snapshotId": snapshot.id,
+                "completedAt": snapshot.completed_at.map(|dt| dt.to_rfc3339()),
+                "values": snapshot.values_json,
+            }));
+        }
+        Ok(inputs)
+    }
+
+    async fn ensure_metric_refreshed_and_completed(
+        &self,
+        metric: &MetricDefinition,
+        dependency_inputs: &[serde_json::Value],
+    ) -> AppResult<MetricSnapshot> {
+        let snapshot_id = if let Some(existing) = self.db.get_latest_inflight_snapshot_id(&metric.id)? {
+            existing
+        } else {
+            let response = self.start_metric_refresh_run(metric, dependency_inputs).await?;
+            response.snapshot_id
+        };
+
+        self.wait_for_snapshot_terminal(&metric.id, &snapshot_id, 180)
+            .await
+    }
+
+    async fn wait_for_snapshot_terminal(
+        &self,
+        metric_id: &str,
+        snapshot_id: &str,
+        timeout_seconds: u64,
+    ) -> AppResult<MetricSnapshot> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+        loop {
+            let snapshot = self.db.get_snapshot(snapshot_id)?.ok_or_else(|| {
+                AppError::NotFound(format!("Metric snapshot not found while waiting: {}", snapshot_id))
+            })?;
+
+            match snapshot.status {
+                MetricSnapshotStatus::Completed => return Ok(snapshot),
+                MetricSnapshotStatus::Failed => {
+                    return Err(AppError::Policy(format!(
+                        "Dependency metric '{}' failed: {}",
+                        metric_id,
+                        snapshot
+                            .error_message
+                            .as_deref()
+                            .unwrap_or("refresh failed")
+                    )));
+                }
+                MetricSnapshotStatus::Pending | MetricSnapshotStatus::Running => {}
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err(AppError::Policy(format!(
+                    "Timed out waiting for dependency metric '{}'",
+                    metric_id
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(350)).await;
+        }
+    }
+
+    async fn start_metric_refresh_run(
+        &self,
+        definition: &MetricDefinition,
+        dependency_inputs: &[serde_json::Value],
+    ) -> AppResult<MetricRefreshResponse> {
+        let snapshot = self.db.insert_metric_snapshot(&definition.id)?;
+        tracing::info!(metric_id = %definition.id, snapshot_id = %snapshot.id, "metric snapshot created, queuing run");
+
+        let system_prompt = build_metric_system_prompt();
+        let user_prompt = build_metric_user_prompt(definition, dependency_inputs)?;
 
         let grants = self.db.list_workspace_grants()?;
-        let active_cwd = definition.cwd
+        let active_cwd = definition
+            .cwd
             .clone()
             .or_else(|| grants.iter().find(|g| g.revoked_at.is_none()).map(|g| g.path.clone()))
             .unwrap_or_else(|| ".".to_string());
@@ -3025,19 +3175,18 @@ impl RunnerCore {
             }),
         };
 
-        let result = self.start_run(payload).await;
-        match result {
+        match self.start_run(payload).await {
             Ok(response) => {
-                tracing::info!(metric_id = %metric_id, run_id = %response.run_id, snapshot_id = %snapshot.id, "metric run started successfully");
+                tracing::info!(metric_id = %definition.id, run_id = %response.run_id, snapshot_id = %snapshot.id, "metric run started successfully");
                 self.db.update_metric_snapshot_run_id(&snapshot.id, &response.run_id)?;
                 Ok(MetricRefreshResponse {
-                    metric_id: metric_id.to_string(),
+                    metric_id: definition.id.clone(),
                     snapshot_id: snapshot.id,
                     run_id: Some(response.run_id),
                 })
             }
             Err(err) => {
-                tracing::error!(metric_id = %metric_id, snapshot_id = %snapshot.id, error = %err, "metric run failed to start");
+                tracing::error!(metric_id = %definition.id, snapshot_id = %snapshot.id, error = %err, "metric run failed to start");
                 self.db.fail_metric_snapshot(&snapshot.id, &err.to_string())?;
                 Err(err)
             }
@@ -3384,7 +3533,7 @@ impl RunnerCore {
     fn adapter_for(&self, provider: Provider) -> Arc<dyn Adapter> {
         match provider {
             Provider::Codex => self.codex.clone(),
-            Provider::Claude => self.claude.clone(),
+            Provider::Claude | Provider::KiingoMcp => self.claude.clone(),
         }
     }
 
@@ -3722,7 +3871,7 @@ impl RunnerCore {
                     payload.model = Some(DEFAULT_CODEX_MODEL.to_string());
                 }
             },
-            Provider::Claude => {
+            Provider::Claude | Provider::KiingoMcp => {
                 if payload.model.is_none() {
                     payload.model = Some(DEFAULT_CLAUDE_MODEL.to_string());
                 }
@@ -3740,7 +3889,7 @@ impl RunnerCore {
     ) -> AppResult<(String, RunExecutionPath)> {
         let expected = match provider {
             Provider::Codex => "codex",
-            Provider::Claude => "claude",
+            Provider::Claude | Provider::KiingoMcp => "claude",
         };
 
         let candidate = Path::new(binary_path);
@@ -4031,6 +4180,94 @@ fn render_text_export(detail: &RunDetail) -> String {
     out
 }
 
+fn dependency_refs_from_metadata(metric: &MetricDefinition) -> Vec<String> {
+    metric
+        .metadata_json
+        .get("dependencies")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+}
+
+fn build_metric_system_prompt() -> String {
+    concat!(
+        "You are a metrics data agent. Follow the instructions to retrieve data using available MCP tools. ",
+        "Then produce a React/JSX expression that displays the results.\n\n",
+        "Your output is rendered via react-live inside the app's themed dashboard. ",
+        "Do NOT hardcode color hex values. Do NOT set background on the outermost container. ",
+        "The dashboard imposes its own theme — your job is data retrieval and choosing the right presentation.\n\n",
+        "## Dependency inputs\n",
+        "You may receive `dependencyInputs` in the prompt. These are read-only outputs from upstream metrics. ",
+        "Use them as authoritative context and only perform extra data collection when needed.\n\n",
+        "## Available in scope\n\n",
+        "### Recharts\n",
+        "AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, ComposedChart, ",
+        "XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ",
+        "ReferenceArea, ReferenceDot, Cell, LabelList, Brush, Scatter, ScatterChart, ",
+        "RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Treemap, Funnel, FunnelChart, ",
+        "RadialBarChart, RadialBar, Sector, Text, Label, Dot, Cross, Curve, Rectangle, ",
+        "Symbols, Polygon, Trapezoid, useState.\n\n",
+        "### Layout components\n",
+        "- `<MetricSection title?>` — outer container, sets color/spacing\n",
+        "- `<MetricRow>` — flex row for side-by-side items\n",
+        "- `<StatCard label value subtitle? trend? trendDirection?>` — single stat display (trendDirection: \"up\"|\"down\"|\"flat\")\n",
+        "- `<MetricText>` — narrative paragraph\n",
+        "- `<MetricNote>` — footnote/source text\n\n",
+        "These are optional — use them when they fit, or use raw divs with `theme.*` inline styles.\n\n",
+        "### Theme object (`theme`)\n",
+        "Keys: bg, panel, ink, inkMuted, line, accent, accentStrong, danger, ",
+        "axisStroke, gridStroke, tooltipBg, tooltipBorder, tooltipText, gradientFrom.\n",
+        "Usage: `style={{ color: theme.ink }}` or `<XAxis stroke={theme.axisStroke} />`\n\n",
+        "### Recharts theming examples\n",
+        "```jsx\n",
+        "<CartesianGrid stroke={theme.gridStroke} />\n",
+        "<XAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />\n",
+        "<YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />\n",
+        "<Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />\n",
+        "<Area stroke={theme.accent} fill=\"url(#gradient)\" />\n",
+        "// gradient stop: <stop stopColor={theme.gradientFrom} />\n",
+        "```\n\n",
+        "## Output format\n\n",
+        "Return a JSON object with two keys:\n",
+        "- \"values\": an object containing the raw extracted metric values (numbers, arrays) for trending/storage\n",
+        "- \"html\": a string containing the JSX expression to render\n\n",
+        "Choose the presentation that fits the data: a single number, a paragraph, a chart, or any combination.\n\n",
+        "IMPORTANT: The \"html\" value must be a single JSX expression, not multiple statements. ",
+        "Do not use import/export. Do not define standalone functions or components outside the expression. ",
+        "Data should be embedded as inline constants within the JSX expression using IIFE if needed."
+    ).to_string()
+}
+
+fn build_metric_user_prompt(
+    definition: &MetricDefinition,
+    dependency_inputs: &[serde_json::Value],
+) -> AppResult<String> {
+    let template = if definition.template_html.is_empty() {
+        "Create a clean React/Recharts JSX component to display the metric data with stat cards and an appropriate chart type.".to_string()
+    } else {
+        definition.template_html.clone()
+    };
+    let dependency_json = if dependency_inputs.is_empty() {
+        "[]".to_string()
+    } else {
+        serde_json::to_string_pretty(dependency_inputs)?
+    };
+
+    Ok(format!(
+        "# Metric: {name}\n\n## Instructions\n{instructions}\n\n## JSX Template\n{template}\n\n## Dependency Inputs (read-only)\n{dependency_json}\n\nUse dependency inputs when helpful for calculation, explanation, and validation. Do not mutate them.\n\nReturn your response as JSON with `values` and `html` keys. The `html` value must be a JSX expression string.",
+        name = definition.name,
+        instructions = definition.instructions,
+    ))
+}
+
 fn parse_metric_output(raw: &str) -> Result<(serde_json::Value, String), String> {
     // The raw text may be NDJSON from the CLI. Collect all candidate texts to try parsing.
     let mut candidates: Vec<String> = Vec::new();
@@ -4141,14 +4378,15 @@ fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_diagnostic_line, is_known_bad_codex_model, is_resume_invalid_failure, payload_has_resume_request,
+        dependency_refs_from_metadata, detect_diagnostic_line, is_known_bad_codex_model, is_resume_invalid_failure, payload_has_resume_request,
         RunExecutionPath, RunnerCore,
         DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL,
     };
     use crate::models::{
-        AppSettings, CreateConversationPayload, HarnessRequestOptions, Provider, RunMode, SaveProfilePayload,
+        AppSettings, CreateConversationPayload, HarnessRequestOptions, MetricDefinition, Provider, RunMode, SaveProfilePayload,
         SendConversationMessagePayload, StartRunPayload,
     };
+    use chrono::Utc;
     use std::collections::BTreeMap;
 
     fn base_payload(provider: Provider) -> StartRunPayload {
@@ -4168,6 +4406,43 @@ mod tests {
             retry_backoff_ms: Some(1_000),
             harness: None,
         }
+    }
+
+    fn metric_with_metadata(metadata_json: serde_json::Value) -> MetricDefinition {
+        MetricDefinition {
+            id: "metric-root".to_string(),
+            name: "Root Metric".to_string(),
+            slug: "root-metric".to_string(),
+            instructions: "test".to_string(),
+            template_html: String::new(),
+            ttl_seconds: 300,
+            provider: Provider::Claude,
+            model: None,
+            profile_id: None,
+            cwd: None,
+            enabled: true,
+            proactive: false,
+            metadata_json,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            archived_at: None,
+        }
+    }
+
+    #[test]
+    fn dependency_refs_extracts_clean_string_entries() {
+        let metric = metric_with_metadata(serde_json::json!({
+            "dependencies": [" metric-a ", "metric-b", "", 123, null]
+        }));
+        let deps = dependency_refs_from_metadata(&metric);
+        assert_eq!(deps, vec!["metric-a".to_string(), "metric-b".to_string()]);
+    }
+
+    #[test]
+    fn dependency_refs_defaults_to_empty_when_missing() {
+        let metric = metric_with_metadata(serde_json::json!({"foo": "bar"}));
+        let deps = dependency_refs_from_metadata(&metric);
+        assert!(deps.is_empty());
     }
 
     #[tokio::test]

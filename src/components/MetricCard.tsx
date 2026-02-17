@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { LiveProvider, LivePreview, LiveError } from "react-live";
 import * as Recharts from "recharts";
-import { useAppActions } from "../state/appState";
+import { useAppActions, useAppState } from "../state/appState";
 import type { MetricDiagnostics, ScreenMetricView } from "../lib/types";
 import { getMetricDiagnostics } from "../lib/tauriClient";
 import { StatCard, MetricSection, MetricRow, MetricText, MetricNote } from "./MetricComponents";
@@ -181,7 +181,9 @@ interface MetricCardProps {
 
 export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
   const actions = useAppActions();
+  const state = useAppState();
   const { definition, latestSnapshot, isStale, refreshInProgress } = view;
+  const refreshError = state.metricRefreshErrors[definition.id];
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnostics, setDiagnostics] = useState<MetricDiagnostics | null>(null);
   const prevRefreshing = useRef(false);
@@ -204,7 +206,7 @@ export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
     : "never";
 
   const handleRefresh = () => {
-    void actions.refreshMetric(definition.id);
+    void actions.refreshMetric(definition.id).catch(() => undefined);
   };
 
   const handleToggleDiagnostics = () => {
@@ -278,7 +280,8 @@ export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
           </button>
         </div>
         <div className="metric-card-body">
-          <p className="metric-empty-message">No data yet</p>
+          <p className="metric-empty-message">{refreshError ? "Refresh blocked" : "No data yet"}</p>
+          {refreshError && <p className="metric-error-text">{refreshError}</p>}
         </div>
       </div>
     );
@@ -302,6 +305,7 @@ export function MetricCard({ view, onRemove }: MetricCardProps): JSX.Element {
         </span>
       </div>
       <div className="metric-card-body">
+        {refreshError && <p className="metric-error-text">{refreshError}</p>}
         {showDiagnostics ? (
           <DiagnosticsPanel data={diagnostics} />
         ) : (

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAppActions } from "../state/appState";
+import { useAppActions, useAppState } from "../state/appState";
 import type { MetricDefinition, SaveMetricDefinitionPayload } from "../lib/types";
 
 interface MetricDefinitionEditorProps {
@@ -9,6 +9,7 @@ interface MetricDefinitionEditorProps {
 
 export function MetricDefinitionEditor({ definition, onClose }: MetricDefinitionEditorProps): JSX.Element {
   const actions = useAppActions();
+  const state = useAppState();
   const [name, setName] = useState(definition?.name ?? "");
   const [slug, setSlug] = useState(definition?.slug ?? "");
   const [instructions, setInstructions] = useState(definition?.instructions ?? "");
@@ -19,9 +20,17 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
   const [cwd, setCwd] = useState(definition?.cwd ?? "");
   const [enabled, setEnabled] = useState(definition?.enabled ?? true);
   const [proactive, setProactive] = useState(definition?.proactive ?? false);
+  const initialDependencies = Array.isArray(definition?.metadataJson?.dependencies)
+    ? definition.metadataJson.dependencies.filter((value): value is string => typeof value === "string")
+    : [];
+  const [dependencies, setDependencies] = useState<string[]>(initialDependencies);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+
+  const dependencyOptions = state.metricDefinitions.filter(
+    (metric) => !metric.archivedAt && metric.id !== definition?.id
+  );
 
   const handleSlugify = (value: string) => {
     const slugified = value
@@ -46,7 +55,11 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
         model: model.trim() || undefined,
         cwd: cwd.trim() || undefined,
         enabled,
-        proactive
+        proactive,
+        metadataJson: {
+          ...(definition?.metadataJson ?? {}),
+          dependencies
+        }
       };
       await actions.saveMetricDefinition(payload);
       onClose();
@@ -71,7 +84,11 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
         model: model.trim() || undefined,
         cwd: cwd.trim() || undefined,
         enabled: true,
-        proactive: false
+        proactive: false,
+        metadataJson: {
+          ...(definition?.metadataJson ?? {}),
+          dependencies
+        }
       });
       await actions.refreshMetric(saved.id);
       setTestResult("Refresh triggered. Check dashboard for results.");
@@ -167,6 +184,30 @@ export function MetricDefinitionEditor({ definition, onClose }: MetricDefinition
           <input type="checkbox" checked={proactive} onChange={(e) => setProactive(e.target.checked)} />
           Proactive refresh (background)
         </label>
+      </div>
+
+      <div className="metric-editor-checks">
+        <label>Dependencies (run before this metric)</label>
+        {dependencyOptions.length === 0 && (
+          <p className="settings-hint">No other metrics available.</p>
+        )}
+        {dependencyOptions.map((metric) => (
+          <label key={metric.id} className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={dependencies.includes(metric.id)}
+              onChange={(event) => {
+                setDependencies((current) => {
+                  if (event.target.checked) {
+                    return [...current, metric.id];
+                  }
+                  return current.filter((id) => id !== metric.id);
+                });
+              }}
+            />
+            {metric.name}
+          </label>
+        ))}
       </div>
 
       {testResult && <div className="banner info">{testResult}</div>}

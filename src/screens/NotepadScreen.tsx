@@ -46,9 +46,11 @@ import {
 import { buildTreeData, findSiblingSwapTarget, insertPlacementAfter, parseOverlayMode, sortPlacements } from "../components/notepad/treeData";
 import type { FlatRow } from "../components/notepad/types";
 import { ROOT_KEY } from "../components/notepad/types";
+import { OMNI_OPEN_PROJECT } from "../components/OmniSearch";
 import { useNotepadUiState } from "../state/notepadState";
 
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
+const ACTIVE_ROW_STATUSES: TaskStatus[] = ["todo", "doing", "blocked"];
 
 function idempotencyKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -183,10 +185,15 @@ export function NotepadScreen(): JSX.Element {
   const [editingNotepad, setEditingNotepad] = useState(false);
 
   const [quickTargetNotepadId, setQuickTargetNotepadId] = useState("");
+  const [pendingProjectId, setPendingProjectId] = useState<string>();
+  const [showMoveCopyPanel, setShowMoveCopyPanel] = useState(false);
+  const [showBlockingPanel, setShowBlockingPanel] = useState(false);
+  const [showAdvancedPanel, setShowAdvancedPanel] = useState(false);
 
   const saveTimersRef = useRef<Map<string, number>>(new Map());
   const pendingEditorFocusPlacementIdRef = useRef<string | undefined>(undefined);
   const selectedPlacementRef = useRef<string | undefined>(undefined);
+  const quickTargetSelectRef = useRef<HTMLSelectElement | null>(null);
 
   const activeNotepad = useMemo(
     () => notepads.find((notepad) => notepad.id === uiState.activeNotepadId),
@@ -199,6 +206,33 @@ export function NotepadScreen(): JSX.Element {
   );
 
   const selectedRow = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+  const projectCategories = activeNotepad?.filters.categories ?? [];
+  const statusPreset = useMemo<"active" | "all">(() => {
+    const statuses = activeNotepad?.filters.statuses;
+    if (!statuses || statuses.length === 0) {
+      return "all";
+    }
+    const statusSet = new Set(statuses);
+    const activeOnly = ACTIVE_ROW_STATUSES.every((status) => statusSet.has(status)) && !statusSet.has("done");
+    return activeOnly ? "active" : "all";
+  }, [activeNotepad]);
+  const activeRowCount = useMemo(
+    () =>
+      treeData.flatRows.filter((row) => {
+        const status = row.atom?.facetData.task?.status;
+        return !row.atom?.archivedAt && status !== "done" && status !== "archived";
+      }).length,
+    [treeData.flatRows]
+  );
+  const latestRowUpdate = useMemo(() => {
+    let latest: string | undefined;
+    for (const row of treeData.flatRows) {
+      if (!latest || row.block.updatedAt > latest) {
+        latest = row.block.updatedAt;
+      }
+    }
+    return latest;
+  }, [treeData.flatRows]);
 
   const isGateOpen = useMemo(() => !gateError, [gateError]);
 
@@ -225,6 +259,38 @@ export function NotepadScreen(): JSX.Element {
     }
   }, [notepads, quickTargetNotepadId, uiState.activeNotepadId]);
 
+  useEffect(() => {
+    setShowMoveCopyPanel(false);
+    setShowBlockingPanel(false);
+    setShowAdvancedPanel(false);
+  }, [uiState.selectedPlacementId]);
+
+  useEffect(() => {
+    const onOpenProject = (event: Event): void => {
+      const detail = (event as CustomEvent<{ projectId?: string }>).detail;
+      const projectId = detail?.projectId;
+      if (!projectId) {
+        return;
+      }
+      setPendingProjectId(projectId);
+    };
+    window.addEventListener(OMNI_OPEN_PROJECT, onOpenProject as EventListener);
+    return () => {
+      window.removeEventListener(OMNI_OPEN_PROJECT, onOpenProject as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingProjectId) {
+      return;
+    }
+    if (!notepads.some((view) => view.id === pendingProjectId)) {
+      return;
+    }
+    uiDispatch({ type: "set_active_notepad", notepadId: pendingProjectId });
+    setPendingProjectId(undefined);
+  }, [notepads, pendingProjectId, uiDispatch]);
+
   const loadWorkspaceGate = useCallback(async (): Promise<void> => {
     const [nextCapabilities, nextHealth, nextFlags] = await Promise.all([
       workspaceCapabilitiesGet(),
@@ -236,7 +302,7 @@ export function NotepadScreen(): JSX.Element {
     setFeatureFlags(nextFlags);
 
     if (!notepadUiFlagEnabled(nextFlags)) {
-      setGateError("Notepad is currently disabled by feature flag `workspace.notepad_ui_v2`.");
+      setGateError("Projects is currently disabled by feature flag `workspace.notepad_ui_v2`.");
       return;
     }
 
@@ -921,14 +987,6 @@ export function NotepadScreen(): JSX.Element {
     [flushDraft, isGateOpen, runMutation, treeData.flatRows, uiDispatch, uiState.draftsByPlacement]
   );
 
-  const deleteSelected = useCallback(async (): Promise<void> => {
-    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-    if (!row) {
-      return;
-    }
-    await deleteRow(row);
-  }, [deleteRow, treeData.rowByPlacementId, uiState.selectedPlacementId]);
-
   const copyOrCutSelected = useCallback(
     (mode: "copy" | "cut"): void => {
       const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
@@ -1183,10 +1241,11 @@ export function NotepadScreen(): JSX.Element {
       }
       const trimmedName = createName.trim();
       if (!trimmedName) {
-        setError("Notepad name is required.");
+        setError("Project name is required.");
         return;
       }
-      const categories = parseCategories(createCategories);
+      const inferredCategory = slugify(trimmedName);
+      const categories = parseCategories(createCategories) ?? (inferredCategory ? [inferredCategory] : undefined);
       setCreatingNotepad(true);
       setError(undefined);
       try {
@@ -1248,7 +1307,7 @@ export function NotepadScreen(): JSX.Element {
       }
       const trimmedName = editName.trim();
       if (!trimmedName) {
-        setError("Active notepad name cannot be empty.");
+        setError("Active project name cannot be empty.");
         return;
       }
       setEditingNotepad(true);
@@ -1285,6 +1344,43 @@ export function NotepadScreen(): JSX.Element {
       }
     },
     [activeNotepad, editCategories, editDescription, editName, editingNotepad, isGateOpen, loadNotepadsIntoState, reloadActiveNotepad]
+  );
+
+  const setStatusPreset = useCallback(
+    async (preset: "active" | "all"): Promise<void> => {
+      if (!activeNotepad || !isGateOpen || saving) {
+        return;
+      }
+      setSaving(true);
+      setError(undefined);
+      try {
+        await notepadSave({
+          expectedRevision: activeNotepad.revision,
+          idempotencyKey: idempotencyKey(),
+          definition: {
+            id: activeNotepad.id,
+            schemaVersion: activeNotepad.schemaVersion,
+            name: activeNotepad.name,
+            description: activeNotepad.description,
+            isSystem: activeNotepad.isSystem,
+            filters: {
+              ...activeNotepad.filters,
+              statuses: preset === "active" ? ACTIVE_ROW_STATUSES : undefined
+            },
+            sorts: activeNotepad.sorts,
+            captureDefaults: activeNotepad.captureDefaults,
+            layoutMode: activeNotepad.layoutMode
+          }
+        });
+        await loadNotepadsIntoState();
+        await loadNotepadData(activeNotepad.id);
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [activeNotepad, isGateOpen, loadNotepadData, loadNotepadsIntoState, saving]
   );
 
   const navigateSelection = useCallback(
@@ -1399,8 +1495,11 @@ export function NotepadScreen(): JSX.Element {
     if (!selectedRow) {
       return;
     }
-    uiDispatch({ type: "set_quick_actions_open", open: !uiState.quickActionsOpen });
-  }, [selectedRow, uiDispatch, uiState.quickActionsOpen]);
+    setShowMoveCopyPanel(true);
+    window.requestAnimationFrame(() => {
+      quickTargetSelectRef.current?.focus();
+    });
+  }, [selectedRow]);
 
   const moveEditorSelection = useCallback(
     (row: FlatRow, direction: "up" | "down"): void => {
@@ -1519,6 +1618,11 @@ export function NotepadScreen(): JSX.Element {
       if (event.target instanceof HTMLTextAreaElement) {
         return;
       }
+      if (event.key === "Enter" && treeData.flatRows.length === 0) {
+        event.preventDefault();
+        void createRow("sibling", { focusEditor: true });
+        return;
+      }
 
       const action = resolveContainerKeyAction({
         key: event.key,
@@ -1584,11 +1688,13 @@ export function NotepadScreen(): JSX.Element {
     },
     [
       copyOrCutSelected,
+      createRow,
       focusEditorForPlacement,
       navigateHorizontalSelection,
       navigateSelection,
       openQuickActions,
       pasteAfterSelected,
+      treeData.flatRows.length,
       uiState.selectedPlacementId
     ]
   );
@@ -1601,28 +1707,15 @@ export function NotepadScreen(): JSX.Element {
         notepads={notepads}
         activeNotepadId={uiState.activeNotepadId}
         activeNotepad={activeNotepad}
-        selectedRow={selectedRow}
         loading={loading}
         saving={saving}
-        clipboard={uiState.clipboard}
         capabilities={capabilities}
         health={health}
         featureFlags={featureFlags}
         isFeatureGateOpen={isGateOpen}
-        interactionMode={uiState.interactionMode}
+        statusPreset={statusPreset}
         onSelectNotepad={(notepadId) => uiDispatch({ type: "set_active_notepad", notepadId })}
-        onRefresh={() => void reloadActiveNotepad()}
-        onNewRow={() => void createRow("sibling", { focusEditor: true })}
-        onNewChild={() => void createRow("child", { focusEditor: true })}
-        onRemoveRow={() => void deleteSelected()}
-        onMoveUp={() => void reorderSelected("up")}
-        onMoveDown={() => void reorderSelected("down")}
-        onIndent={() => void indentSelected()}
-        onOutdent={() => void outdentSelected()}
-        onCopyRow={() => copyOrCutSelected("copy")}
-        onCutRow={() => copyOrCutSelected("cut")}
-        onPasteRow={() => void pasteAfterSelected()}
-        onToggleQuickActions={openQuickActions}
+        onSetStatusPreset={(preset) => void setStatusPreset(preset)}
         createName={createName}
         createCategories={createCategories}
         createDescription={createDescription}
@@ -1643,47 +1736,59 @@ export function NotepadScreen(): JSX.Element {
 
       {gateError && <div className="banner error">{gateError}</div>}
       {error && <div className="banner error">{error}</div>}
-      {(loading || saving) && <div className="banner info">{loading ? "Loading notepad..." : "Saving..."}</div>}
+      {(loading || saving) && <div className="banner info">{loading ? "Loading project..." : "Saving..."}</div>}
 
       <div className="notepad-layout">
         <div className="card notepad-outline">
           <header className="notepad-outline-header">
-            <h3>{activeNotepad?.name ?? "Notepad"}</h3>
-            <small>
-              {treeData.flatRows.length} row{treeData.flatRows.length === 1 ? "" : "s"}
-            </small>
+            <h3>{activeNotepad?.name ?? "Project"}</h3>
+            <div className="notepad-outline-meta">
+              <small className="notepad-meta-pill">
+                {treeData.flatRows.length} row{treeData.flatRows.length === 1 ? "" : "s"}
+              </small>
+              <small className="notepad-meta-pill">
+                {activeRowCount} active
+              </small>
+              {projectCategories.length > 0 && (
+                <small className="notepad-meta-pill">
+                  {projectCategories.join(", ")}
+                </small>
+              )}
+              {latestRowUpdate && (
+                <small className="notepad-meta-pill">Updated {new Date(latestRowUpdate).toLocaleString()}</small>
+              )}
+            </div>
           </header>
 
-          {treeData.flatRows.length === 0 ? (
-            <p className="settings-hint">No rows yet. Use "New Row" to start capturing.</p>
-          ) : (
-            <NotepadTree
-              rows={treeData.flatRows}
-              selectedPlacementId={uiState.selectedPlacementId}
-              getRowText={(row) => rowText(row, uiState.draftsByPlacement[row.placement.id])}
-              isTaskRow={isTaskRow}
-              parseOverlayMode={(row) => parseOverlayMode(row.overlay)}
-              onSelectRow={(placementId) => uiDispatch({ type: "set_selected_placement", placementId })}
-              onToggleCollapsed={toggleRowCollapsed}
-              onEditorFocus={(placementId) => {
-                uiDispatch({ type: "set_selected_placement", placementId });
-                uiDispatch({ type: "set_interaction_mode", mode: "edit" });
-              }}
-              onEditorChange={(placementId, nextText) => {
-                const row = treeData.rowByPlacementId[placementId];
-                if (!row) {
-                  return;
-                }
-                scheduleDraftSave(row, nextText);
-              }}
-              onEditorBlur={(placementId) => {
-                void flushDraft(placementId);
-                uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
-              }}
-              onEditorKeyDown={onRowEditorKeyDown}
-              onContainerKeyDown={onTreeContainerKeyDown}
-            />
+          {treeData.flatRows.length === 0 && (
+            <p className="settings-hint">No rows yet. Focus the outline and press Enter to add the first row.</p>
           )}
+          <NotepadTree
+            rows={treeData.flatRows}
+            selectedPlacementId={uiState.selectedPlacementId}
+            getRowText={(row) => rowText(row, uiState.draftsByPlacement[row.placement.id])}
+            isTaskRow={isTaskRow}
+            parseOverlayMode={(row) => parseOverlayMode(row.overlay)}
+            onSelectRow={(placementId) => uiDispatch({ type: "set_selected_placement", placementId })}
+            onToggleCollapsed={toggleRowCollapsed}
+            onEditorFocus={(placementId) => {
+              uiDispatch({ type: "set_selected_placement", placementId });
+              uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+            }}
+            onEditorChange={(placementId, nextText) => {
+              const row = treeData.rowByPlacementId[placementId];
+              if (!row) {
+                return;
+              }
+              scheduleDraftSave(row, nextText);
+            }}
+            onEditorBlur={(placementId) => {
+              void flushDraft(placementId);
+              uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+            }}
+            onEditorKeyDown={onRowEditorKeyDown}
+            onContainerKeyDown={onTreeContainerKeyDown}
+          />
         </div>
 
         <aside className="card notepad-inspector">
@@ -1694,10 +1799,6 @@ export function NotepadScreen(): JSX.Element {
               <p>
                 <strong>{rowTitle(selectedRow)}</strong>
               </p>
-              <small className="settings-hint">Block: {selectedRow.block.id}</small>
-              {selectedRow.atom && <small className="settings-hint">Atom: {selectedRow.atom.id}</small>}
-              <small className="settings-hint">Updated {new Date(selectedRow.block.updatedAt).toLocaleString()}</small>
-              <small className="settings-hint">Text length: {selectedRowText.length}</small>
 
               {isTaskRow(selectedRow) && selectedRow.atom && (
                 <>
@@ -1734,28 +1835,45 @@ export function NotepadScreen(): JSX.Element {
                 </>
               )}
 
-              <div className="notepad-inspector-actions">
-                <button type="button" onClick={() => void snoozeSelectedUntilTomorrow()} disabled={!selectedRow.atom || !isGateOpen}>
-                  Snooze 1 day
+              <div className="notepad-inspector-toggle-row" role="group" aria-label="Row detail panels">
+                <button
+                  type="button"
+                  className={showMoveCopyPanel ? "primary" : ""}
+                  onClick={() => setShowMoveCopyPanel((current) => !current)}
+                  aria-expanded={showMoveCopyPanel}
+                >
+                  Move/Copy
                 </button>
-                <button type="button" onClick={() => void setSelectedWaitingPerson()} disabled={!selectedRow.atom || !isGateOpen}>
-                  Waiting on person
+                <button
+                  type="button"
+                  className={showBlockingPanel ? "primary" : ""}
+                  onClick={() => setShowBlockingPanel((current) => !current)}
+                  aria-expanded={showBlockingPanel}
+                  disabled={!selectedRow.atom}
+                >
+                  Blocking
                 </button>
-                <button type="button" onClick={() => void setSelectedBlockedByTask()} disabled={!selectedRow.atom || !isGateOpen}>
-                  Blocked by task
-                </button>
-                <button type="button" onClick={() => void clearSelectedConditions()} disabled={!selectedRow.atom || !isGateOpen}>
-                  Clear blocking
+                <button
+                  type="button"
+                  className={showAdvancedPanel ? "primary" : ""}
+                  onClick={() => setShowAdvancedPanel((current) => !current)}
+                  aria-expanded={showAdvancedPanel}
+                >
+                  Advanced
                 </button>
               </div>
 
-              {uiState.quickActionsOpen && (
+              {showMoveCopyPanel && (
                 <div className="card quick-actions-panel">
-                  <h4>Quick Actions</h4>
+                  <h4>Move or Copy</h4>
                   <label>
-                    Destination notepad
-                    <select value={quickTargetNotepadId} onChange={(event) => setQuickTargetNotepadId(event.target.value)}>
-                      <option value="">Select notepad</option>
+                    Destination project
+                    <select
+                      ref={quickTargetSelectRef}
+                      value={quickTargetNotepadId}
+                      onChange={(event) => setQuickTargetNotepadId(event.target.value)}
+                    >
+                      <option value="">Select project</option>
                       {notepads
                         .filter((value) => value.id !== uiState.activeNotepadId)
                         .map((value) => (
@@ -1767,19 +1885,52 @@ export function NotepadScreen(): JSX.Element {
                   </label>
                   <div className="notepad-inspector-actions">
                     <button type="button" onClick={() => void moveSelectedToNotepad(quickTargetNotepadId, "copy")} disabled={!quickTargetNotepadId}>
-                      Copy to Notepad
+                      Copy to Project
                     </button>
                     <button type="button" onClick={() => void moveSelectedToNotepad(quickTargetNotepadId, "move")} disabled={!quickTargetNotepadId}>
-                      Move to Notepad
-                    </button>
-                    <button type="button" onClick={() => uiDispatch({ type: "set_quick_actions_open", open: false })}>
-                      Close
+                      Move to Project
                     </button>
                   </div>
                 </div>
               )}
 
-              {selectedRow.overlay && (
+              {showBlockingPanel && (
+                <div className="card quick-actions-panel">
+                  <h4>Blocking</h4>
+                  <div className="notepad-inspector-actions">
+                    <button type="button" onClick={() => void snoozeSelectedUntilTomorrow()} disabled={!selectedRow.atom || !isGateOpen}>
+                      Snooze 1 day
+                    </button>
+                    <button type="button" onClick={() => void setSelectedWaitingPerson()} disabled={!selectedRow.atom || !isGateOpen}>
+                      Waiting on person
+                    </button>
+                    <button type="button" onClick={() => void setSelectedBlockedByTask()} disabled={!selectedRow.atom || !isGateOpen}>
+                      Blocked by task
+                    </button>
+                    <button type="button" onClick={() => void clearSelectedConditions()} disabled={!selectedRow.atom || !isGateOpen}>
+                      Clear blocking
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showAdvancedPanel && (
+                <div className="card quick-actions-panel">
+                  <h4>Advanced</h4>
+                  <small className="settings-hint">Block: {selectedRow.block.id}</small>
+                  {selectedRow.atom && <small className="settings-hint">Atom: {selectedRow.atom.id}</small>}
+                  <small className="settings-hint">Updated {new Date(selectedRow.block.updatedAt).toLocaleString()}</small>
+                  <small className="settings-hint">Text length: {selectedRowText.length}</small>
+                  {selectedRow.overlay && (
+                    <small className="settings-hint">
+                      Active condition: {selectedRow.overlay.mode}
+                      {selectedRow.overlay.waitingOnPerson ? ` (${selectedRow.overlay.waitingOnPerson})` : ""}
+                    </small>
+                  )}
+                </div>
+              )}
+
+              {selectedRow.overlay && !showAdvancedPanel && (
                 <small className="settings-hint">
                   Active condition: {selectedRow.overlay.mode}
                   {selectedRow.overlay.waitingOnPerson ? ` (${selectedRow.overlay.waitingOnPerson})` : ""}
