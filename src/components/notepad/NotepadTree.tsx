@@ -1,5 +1,6 @@
 import { useMemo, useState, type FocusEvent, type KeyboardEvent } from "react";
 import {
+  pointerWithin,
   DndContext,
   PointerSensor,
   closestCenter,
@@ -8,7 +9,8 @@ import {
   type DragEndEvent,
   type DragMoveEvent,
   type DragOverEvent,
-  type DragStartEvent
+  type DragStartEvent,
+  type CollisionDetection
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -110,7 +112,7 @@ function SortableNotepadRow({
   );
 }
 
-function resolveDropIntent(event: DragOverEvent | DragEndEvent): PlacementDropIntent {
+function resolveDropIntent(event: DragOverEvent | DragEndEvent, targetDepth: number): PlacementDropIntent {
   const overRect = event.over?.rect;
   if (!overRect) {
     return "after";
@@ -119,8 +121,26 @@ function resolveDropIntent(event: DragOverEvent | DragEndEvent): PlacementDropIn
   if (!activeRect) {
     return "after";
   }
+
   const centerY = activeRect.top + activeRect.height / 2;
-  const edgeBand = Math.min(16, overRect.height * 0.32);
+  const relativeY = (centerY - overRect.top) / Math.max(overRect.height, 1);
+  const edgeBandRatio = 0.32;
+  const rightwardNestThreshold = targetDepth <= 0 ? 26 : 16;
+
+  if (relativeY <= edgeBandRatio) {
+    return "before";
+  }
+  if (relativeY >= 1 - edgeBandRatio) {
+    return "after";
+  }
+
+  // Nesting should feel intentional: drag horizontally to the right in the row center zone.
+  if (event.delta.x >= rightwardNestThreshold) {
+    return "inside";
+  }
+
+  // In the center band, default to sibling placement to avoid accidental child drops.
+  const edgeBand = Math.min(22, overRect.height * 0.42);
   if (centerY <= overRect.top + edgeBand) {
     return "before";
   }
@@ -128,23 +148,22 @@ function resolveDropIntent(event: DragOverEvent | DragEndEvent): PlacementDropIn
     return "after";
   }
 
-  // Require an intentional rightward drag to nest under the hovered row.
-  if (event.delta.x >= 24) {
-    return "inside";
-  }
-
-  // Default center-zone drops to sibling placement to avoid accidental nesting.
   const midline = overRect.top + overRect.height / 2;
   return centerY < midline ? "before" : "after";
 }
 
-function resolveDropTarget(event: DragOverEvent | DragEndEvent): Omit<NotepadTreeDropPayload, "sourcePlacementId"> | undefined {
+function resolveDropTarget(
+  event: DragOverEvent | DragEndEvent,
+  rowDepthByPlacementId: Record<string, number>
+): Omit<NotepadTreeDropPayload, "sourcePlacementId"> | undefined {
   if (!event.over) {
     return undefined;
   }
+  const targetPlacementId = String(event.over.id);
+  const targetDepth = rowDepthByPlacementId[targetPlacementId] ?? 0;
   return {
-    targetPlacementId: String(event.over.id),
-    intent: resolveDropIntent(event)
+    targetPlacementId,
+    intent: resolveDropIntent(event, targetDepth)
   };
 }
 
@@ -167,6 +186,13 @@ export function NotepadTree({
   const [dropTarget, setDropTarget] = useState<Omit<NotepadTreeDropPayload, "sourcePlacementId">>();
   const [dragDelta, setDragDelta] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const rowIds = useMemo(() => rows.map((row) => row.placement.id), [rows]);
+  const rowDepthByPlacementId = useMemo(() => {
+    const next: Record<string, number> = {};
+    for (const row of rows) {
+      next[row.placement.id] = row.depth;
+    }
+    return next;
+  }, [rows]);
   const activeSubtreeIds = useMemo(
     () => (activePlacementId ? collectVisibleSubtreePlacementIds(rows, activePlacementId) : []),
     [activePlacementId, rows]
@@ -174,8 +200,18 @@ export function NotepadTree({
   const activeSubtreeSet = useMemo(() => new Set(activeSubtreeIds), [activeSubtreeIds]);
   const sensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: { distance: 6 }
+      activationConstraint: { distance: 4 }
     })
+  );
+  const collisionDetection = useMemo<CollisionDetection>(
+    () => (args) => {
+      const pointerCollisions = pointerWithin(args);
+      if (pointerCollisions.length > 0) {
+        return pointerCollisions;
+      }
+      return closestCenter(args);
+    },
+    []
   );
 
   const resetDragState = (): void => {
@@ -196,12 +232,12 @@ export function NotepadTree({
   };
 
   const handleDragOver = (event: DragOverEvent): void => {
-    setDropTarget(resolveDropTarget(event));
+    setDropTarget(resolveDropTarget(event, rowDepthByPlacementId));
   };
 
   const handleDragEnd = (event: DragEndEvent): void => {
     const sourcePlacementId = String(event.active.id);
-    const nextDropTarget = resolveDropTarget(event);
+    const nextDropTarget = resolveDropTarget(event, rowDepthByPlacementId);
     resetDragState();
     if (!nextDropTarget) {
       return;
@@ -216,7 +252,7 @@ export function NotepadTree({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragOver={handleDragOver}
