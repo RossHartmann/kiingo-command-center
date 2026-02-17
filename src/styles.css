@@ -3022,7 +3022,7 @@ body.metric-dragging {
 
 .notepad-row {
   display: grid;
-  grid-template-columns: auto auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto;
   gap: 0.4rem;
   align-items: start;
   border: 1px solid transparent;
@@ -3041,20 +3041,6 @@ body.metric-dragging {
   }
 }
 
-.notepad-toggle {
-  width: 1.4rem;
-  height: 1.4rem;
-  border-radius: 6px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  font-size: 0.8rem;
-}
-
-.notepad-toggle:disabled {
-  opacity: 0.45;
-}
-
 .notepad-drag-handle {
   width: 1.4rem;
   height: 1.4rem;
@@ -3062,7 +3048,7 @@ body.metric-dragging {
   padding: 0;
   display: grid;
   place-items: center;
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   color: var(--ink-muted);
   cursor: grab;
   touch-action: none;

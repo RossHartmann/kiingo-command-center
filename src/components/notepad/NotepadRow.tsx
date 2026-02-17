@@ -40,6 +40,8 @@ export function NotepadRow({
   dragging
 }: NotepadRowProps): JSX.Element {
   const suppressRowClickRef = useRef(false);
+  const handlePointerDownRef = useRef<{ x: number; y: number }>();
+  const handlePointerMovedRef = useRef(false);
   const attentionLayer = row.atom?.facetData.task?.attentionLayer ?? row.atom?.facetData.attention?.layer;
   const heatScore = row.atom?.facetData.attention?.heatScore;
 
@@ -64,6 +66,24 @@ export function NotepadRow({
     }
   };
 
+  const handleGripClick = (event: MouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const moved = handlePointerMovedRef.current;
+    handlePointerMovedRef.current = false;
+    if (moved) {
+      return;
+    }
+    if (row.hasChildren) {
+      onToggleCollapsed(row.placement.id);
+    }
+    onSelect(row.placement.id);
+    const tree = event.currentTarget.closest(".notepad-tree");
+    if (tree instanceof HTMLElement) {
+      tree.focus();
+    }
+  };
+
   return (
     <article
       className={`notepad-row ${selected ? "selected" : ""}${dragging ? " dragging" : ""}`}
@@ -81,25 +101,32 @@ export function NotepadRow({
         type="button"
         className="notepad-drag-handle"
         ref={setDragHandleRef}
-        aria-label="Drag row"
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
+        aria-label={row.hasChildren ? (row.collapsed ? "Expand row" : "Collapse row") : "Drag row"}
+        onPointerDown={(event) => {
+          handlePointerDownRef.current = { x: event.clientX, y: event.clientY };
+          handlePointerMovedRef.current = false;
         }}
+        onPointerMove={(event) => {
+          const origin = handlePointerDownRef.current;
+          if (!origin) {
+            return;
+          }
+          if (Math.abs(event.clientX - origin.x) > 3 || Math.abs(event.clientY - origin.y) > 3) {
+            handlePointerMovedRef.current = true;
+          }
+        }}
+        onPointerUp={() => {
+          handlePointerDownRef.current = undefined;
+        }}
+        onPointerCancel={() => {
+          handlePointerDownRef.current = undefined;
+          handlePointerMovedRef.current = false;
+        }}
+        onClick={handleGripClick}
         {...dragHandleAttributes}
         {...dragHandleListeners}
       >
-        {"\u2261"}
-      </button>
-
-      <button
-        type="button"
-        className="notepad-toggle"
-        onClick={() => onToggleCollapsed(row.placement.id)}
-        disabled={!row.hasChildren}
-        aria-label={row.hasChildren ? (row.collapsed ? "Expand row" : "Collapse row") : "Leaf row"}
-      >
-        {row.hasChildren ? (row.collapsed ? "▸" : "▾") : "·"}
+        {row.hasChildren ? (row.collapsed ? "▸" : "▾") : "\u2261"}
       </button>
 
       <InlineBlockEditor

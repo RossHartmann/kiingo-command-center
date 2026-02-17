@@ -254,7 +254,7 @@ export function NotepadToolbar({
                   <li>`Cmd/Ctrl+Shift+ArrowUp/Down`: move selected block</li>
                   <li>`Cmd/Ctrl+Shift+ArrowRight/Left`: nest / outdent selected block</li>
                   <li>`Cmd/Ctrl+C`, `X`, `V`: copy/cut/paste row</li>
-                  <li>Drag `≡` handle: move rows; drag right to nest as child</li>
+                  <li>Use the left handle: click to collapse/expand, drag to move (drag right to nest)</li>
                   <li>After drag: use `Undo` banner to revert quickly</li>
                   <li>`Cmd/Ctrl+.`: focus project move actions</li>
                   <li>`Esc`: exit edit mode</li>
