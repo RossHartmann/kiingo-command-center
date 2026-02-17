@@ -39,6 +39,10 @@ export type ContainerKeyAction =
   | { type: "navigate_down" }
   | { type: "navigate_start" }
   | { type: "navigate_end" }
+  | { type: "reorder_up" }
+  | { type: "reorder_down" }
+  | { type: "indent_selected" }
+  | { type: "outdent_selected" }
   | { type: "expand_or_child" }
   | { type: "collapse_or_parent" }
   | { type: "focus_editor" }
@@ -101,6 +105,14 @@ export function resolveEditorKeyAction(ctx: EditorKeyContext): EditorKeyAction {
     return { type: "reorder_down" };
   }
 
+  if (modifier && ctx.shiftKey && ctx.key === "ArrowRight") {
+    return { type: "indent" };
+  }
+
+  if (modifier && ctx.shiftKey && ctx.key === "ArrowLeft") {
+    return { type: "outdent" };
+  }
+
   if (!modifier && !ctx.shiftKey && (ctx.key === "ArrowUp" || ctx.key === "ArrowDown")) {
     if (hasSelection) {
       return { type: "none" };
@@ -137,6 +149,22 @@ export function resolveEditorKeyAction(ctx: EditorKeyContext): EditorKeyAction {
 export function resolveContainerKeyAction(ctx: ContainerKeyContext): ContainerKeyAction {
   const modifier = isModifierPressed(ctx);
   const lowerKey = ctx.key.toLowerCase();
+
+  if (modifier && ctx.shiftKey && ctx.hasSelectedRow && ctx.key === "ArrowUp") {
+    return { type: "reorder_up" };
+  }
+
+  if (modifier && ctx.shiftKey && ctx.hasSelectedRow && ctx.key === "ArrowDown") {
+    return { type: "reorder_down" };
+  }
+
+  if (modifier && ctx.shiftKey && ctx.hasSelectedRow && ctx.key === "ArrowRight") {
+    return { type: "indent_selected" };
+  }
+
+  if (modifier && ctx.shiftKey && ctx.hasSelectedRow && ctx.key === "ArrowLeft") {
+    return { type: "outdent_selected" };
+  }
 
   if (ctx.key === "ArrowUp") {
     return { type: "navigate_up" };

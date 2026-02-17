@@ -251,9 +251,11 @@ export function NotepadToolbar({
                   <li>`ArrowUp`/`ArrowDown`: move between rows at line boundaries</li>
                   <li>`ArrowLeft`/`ArrowRight` (tree): collapse/expand</li>
                   <li>`Tab` / `Shift+Tab`: indent / outdent</li>
-                  <li>`Cmd/Ctrl+Shift+Arrow` (or `Cmd/Ctrl+Arrow`): reorder</li>
+                  <li>`Cmd/Ctrl+Shift+ArrowUp/Down`: move selected block</li>
+                  <li>`Cmd/Ctrl+Shift+ArrowRight/Left`: nest / outdent selected block</li>
                   <li>`Cmd/Ctrl+C`, `X`, `V`: copy/cut/paste row</li>
                   <li>Drag `≡` handle: move rows; drag right to nest as child</li>
+                  <li>After drag: use `Undo` banner to revert quickly</li>
                   <li>`Cmd/Ctrl+.`: focus project move actions</li>
                   <li>`Esc`: exit edit mode</li>
                 </ul>

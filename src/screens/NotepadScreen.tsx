@@ -53,7 +53,6 @@ import {
   buildTreeData,
   collectSubtreePlacementIds,
   collectVisibleSubtreePlacementIds,
-  findSiblingSwapTarget,
   insertPlacementAfter,
   isPlacementDescendant,
   parseOverlayMode,
@@ -62,7 +61,6 @@ import {
   type PlacementDropIntent
 } from "../components/notepad/treeData";
 import type { FlatRow } from "../components/notepad/types";
-import { ROOT_KEY } from "../components/notepad/types";
 import { OMNI_OPEN_PROJECT } from "../components/OmniSearch";
 import { useOptionalAppActions } from "../state/appState";
 import { useNotepadUiState } from "../state/notepadState";
@@ -74,6 +72,16 @@ const NOTEPAD_MOVE_COPY_OPEN_KEY = "notepad.disclosure.moveCopyOpen";
 const NOTEPAD_BLOCKING_OPEN_KEY = "notepad.disclosure.blockingOpen";
 const NOTEPAD_ADVANCED_OPEN_KEY = "notepad.disclosure.advancedOpen";
 const NOTEPAD_HINT_DISMISSED_KEY = "notepad.disclosure.hintDismissed";
+const NOTEPAD_DRAG_UNDO_TTL_MS = 10000;
+
+interface DragUndoState {
+  notepadId: string;
+  sourcePlacementId: string;
+  previousOrderedPlacementIds: string[];
+  previousParentPlacementId?: string;
+  previousCanonicalParentAtomId?: string;
+  message: string;
+}
 
 function loadNotepadBoolPreference(key: string, fallback: boolean): boolean {
   if (typeof window === "undefined" || typeof window.localStorage?.getItem !== "function") {
@@ -247,8 +255,11 @@ export function NotepadScreen(): JSX.Element {
   const [hintDismissed, setHintDismissed] = useState<boolean>(() =>
     loadNotepadBoolPreference(NOTEPAD_HINT_DISMISSED_KEY, false)
   );
+  const [dragUndo, setDragUndo] = useState<DragUndoState | null>(null);
+  const [dragAnnouncement, setDragAnnouncement] = useState("");
 
   const saveTimersRef = useRef<Map<string, number>>(new Map());
+  const dragUndoTimerRef = useRef<number>();
   const pendingEditorFocusPlacementIdRef = useRef<string | undefined>(undefined);
   const selectedPlacementRef = useRef<string | undefined>(undefined);
   const quickTargetSelectRef = useRef<HTMLSelectElement | null>(null);
@@ -331,6 +342,33 @@ export function NotepadScreen(): JSX.Element {
       setHintDismissed(true);
     }
   }, [hintDismissed]);
+  const announceDragAction = useCallback((message: string): void => {
+    setDragAnnouncement(message);
+    if (typeof window !== "undefined" && typeof window.setTimeout === "function") {
+      window.setTimeout(() => {
+        setDragAnnouncement((current) => (current === message ? "" : current));
+      }, 1400);
+    }
+  }, []);
+
+  const clearDragUndo = useCallback((): void => {
+    if (dragUndoTimerRef.current) {
+      window.clearTimeout(dragUndoTimerRef.current);
+      dragUndoTimerRef.current = undefined;
+    }
+    setDragUndo(null);
+  }, []);
+
+  const queueDragUndo = useCallback((nextUndo: DragUndoState): void => {
+    if (dragUndoTimerRef.current) {
+      window.clearTimeout(dragUndoTimerRef.current);
+    }
+    setDragUndo(nextUndo);
+    dragUndoTimerRef.current = window.setTimeout(() => {
+      setDragUndo((current) => (current?.sourcePlacementId === nextUndo.sourcePlacementId ? null : current));
+      dragUndoTimerRef.current = undefined;
+    }, NOTEPAD_DRAG_UNDO_TTL_MS);
+  }, []);
 
   useEffect(() => {
     if (!activeNotepad) {
@@ -358,6 +396,12 @@ export function NotepadScreen(): JSX.Element {
     }
     setQuickTargetNotepadId(destinationOptions[0].id);
   }, [notepads, quickTargetNotepadId, uiState.activeNotepadId]);
+
+  useEffect(() => {
+    if (dragUndo && dragUndo.notepadId !== uiState.activeNotepadId) {
+      clearDragUndo();
+    }
+  }, [clearDragUndo, dragUndo, uiState.activeNotepadId]);
 
   useEffect(() => {
     const onMouseDownCapture = (event: MouseEvent): void => {
@@ -711,6 +755,9 @@ export function NotepadScreen(): JSX.Element {
         window.clearTimeout(timer);
       }
       saveTimersRef.current.clear();
+      if (dragUndoTimerRef.current) {
+        window.clearTimeout(dragUndoTimerRef.current);
+      }
     };
   }, []);
 
@@ -878,14 +925,16 @@ export function NotepadScreen(): JSX.Element {
   );
 
   const runMutation = useCallback(
-    async (mutation: () => Promise<void>): Promise<void> => {
+    async (mutation: () => Promise<void>): Promise<boolean> => {
       setSaving(true);
       setError(undefined);
       try {
         await mutation();
         await reloadActiveNotepad();
+        return true;
       } catch (nextError) {
         setError(asErrorMessage(nextError));
+        return false;
       } finally {
         setSaving(false);
       }
@@ -1026,44 +1075,6 @@ export function NotepadScreen(): JSX.Element {
     ]
   );
 
-  const reorderSelected = useCallback(
-    async (direction: "up" | "down"): Promise<void> => {
-      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-      if (!row || !uiState.activeNotepadId || !isGateOpen) {
-        return;
-      }
-      const parentKey = row.effectiveParentPlacementId ?? ROOT_KEY;
-      const siblings = treeData.childrenByParentKey[parentKey] ?? [];
-      const swapWith = findSiblingSwapTarget(siblings, row.placement.id, direction);
-      if (!swapWith) {
-        return;
-      }
-
-      await runMutation(async () => {
-        const order = [...treeData.orderedPlacementIds];
-        const a = order.indexOf(row.placement.id);
-        const b = order.indexOf(swapWith);
-        if (a === -1 || b === -1) {
-          return;
-        }
-        [order[a], order[b]] = [order[b], order[a]];
-        await placementsReorder(uiState.activeNotepadId, {
-          orderedPlacementIds: order,
-          idempotencyKey: idempotencyKey()
-        });
-      });
-    },
-    [
-      isGateOpen,
-      runMutation,
-      treeData.childrenByParentKey,
-      treeData.orderedPlacementIds,
-      treeData.rowByPlacementId,
-      uiState.activeNotepadId,
-      uiState.selectedPlacementId
-    ]
-  );
-
   const indentSelected = useCallback(async (): Promise<void> => {
     const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
     if (!row || !isGateOpen) {
@@ -1106,7 +1117,12 @@ export function NotepadScreen(): JSX.Element {
   }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId, updateCanonicalParent, updatePlacementParent]);
 
   const dropReorderRow = useCallback(
-    async (sourcePlacementId: string, targetPlacementId: string, intent: PlacementDropIntent): Promise<void> => {
+    async (
+      sourcePlacementId: string,
+      targetPlacementId: string,
+      intent: PlacementDropIntent,
+      options?: { trackUndo?: boolean; announce?: boolean }
+    ): Promise<void> => {
       if (!uiState.activeNotepadId || !isGateOpen) {
         return;
       }
@@ -1114,6 +1130,7 @@ export function NotepadScreen(): JSX.Element {
       if (!sourceRow) {
         return;
       }
+      const targetRow = treeData.rowByPlacementId[targetPlacementId];
       const visibleSubtreeIds = collectVisibleSubtreePlacementIds(treeData.flatRows, sourcePlacementId);
       const canonicalSubtreeIds = collectSubtreePlacementIds(
         sourcePlacementId,
@@ -1136,6 +1153,9 @@ export function NotepadScreen(): JSX.Element {
       }
 
       await flushDraft(sourcePlacementId);
+      const previousOrderedPlacementIds = [...treeData.orderedPlacementIds];
+      const previousParentPlacementId = sourceRow.placement.parentPlacementId;
+      const previousCanonicalParentAtomId = sourceRow.atom?.relations.parentId;
       const nextParentAtomId = dropPlan.nextParentPlacementId
         ? treeData.rowByPlacementId[dropPlan.nextParentPlacementId]?.atom?.id
         : undefined;
@@ -1145,7 +1165,7 @@ export function NotepadScreen(): JSX.Element {
           (placementId, index) => placementId !== treeData.orderedPlacementIds[index]
         );
 
-      await runMutation(async () => {
+      const mutated = await runMutation(async () => {
         await updatePlacementParent(sourceRow, dropPlan.nextParentPlacementId);
         await updateCanonicalParent(sourceRow.atom, nextParentAtomId);
         if (orderChanged) {
@@ -1158,10 +1178,43 @@ export function NotepadScreen(): JSX.Element {
         uiDispatch({ type: "set_selected_placement", placementId: sourcePlacementId });
         uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
       });
+      if (!mutated) {
+        return;
+      }
+
+      const sourceTitle = rowTitle(sourceRow);
+      const targetTitle = targetRow ? rowTitle(targetRow) : "target row";
+      const movedRowCount = dropPlan.movedPlacementIds.length;
+
+      if (options?.trackUndo !== false) {
+        queueDragUndo({
+          notepadId: uiState.activeNotepadId,
+          sourcePlacementId,
+          previousOrderedPlacementIds,
+          previousParentPlacementId,
+          previousCanonicalParentAtomId,
+          message:
+            movedRowCount > 1
+              ? `Moved block (${movedRowCount} rows).`
+              : `Moved "${sourceTitle}".`
+        });
+      }
+
+      if (options?.announce !== false) {
+        if (intent === "inside") {
+          announceDragAction(`Nested ${sourceTitle} under ${targetTitle}.`);
+        } else if (intent === "before") {
+          announceDragAction(`Moved ${sourceTitle} above ${targetTitle}.`);
+        } else {
+          announceDragAction(`Moved ${sourceTitle} below ${targetTitle}.`);
+        }
+      }
     },
     [
+      announceDragAction,
       flushDraft,
       isGateOpen,
+      queueDragUndo,
       runMutation,
       treeData.effectiveParentByPlacementId,
       treeData.orderedPlacementIds,
@@ -1170,6 +1223,101 @@ export function NotepadScreen(): JSX.Element {
       uiState.activeNotepadId,
       updateCanonicalParent,
       updatePlacementParent
+    ]
+  );
+
+  const undoLastDrop = useCallback(async (): Promise<void> => {
+    if (!dragUndo || !isGateOpen || !uiState.activeNotepadId || dragUndo.notepadId !== uiState.activeNotepadId) {
+      return;
+    }
+    const sourceRow = treeData.rowByPlacementId[dragUndo.sourcePlacementId];
+    if (!sourceRow) {
+      clearDragUndo();
+      return;
+    }
+
+    clearDragUndo();
+    await flushDraft(dragUndo.sourcePlacementId);
+    const currentPlacementIds = treeData.orderedPlacementIds;
+    const canRestoreOrder =
+      currentPlacementIds.length === dragUndo.previousOrderedPlacementIds.length &&
+      dragUndo.previousOrderedPlacementIds.every((placementId) => currentPlacementIds.includes(placementId));
+
+    const reverted = await runMutation(async () => {
+      await updatePlacementParent(sourceRow, dragUndo.previousParentPlacementId);
+      await updateCanonicalParent(sourceRow.atom, dragUndo.previousCanonicalParentAtomId);
+      if (canRestoreOrder) {
+        await placementsReorder(uiState.activeNotepadId, {
+          orderedPlacementIds: dragUndo.previousOrderedPlacementIds,
+          idempotencyKey: idempotencyKey()
+        });
+      }
+      selectedPlacementRef.current = sourceRow.placement.id;
+      uiDispatch({ type: "set_selected_placement", placementId: sourceRow.placement.id });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    });
+
+    if (!reverted) {
+      return;
+    }
+    if (!canRestoreOrder) {
+      setError("Undo restored hierarchy, but ordering changed before undo could be applied.");
+    }
+    announceDragAction("Last drag action undone.");
+  }, [
+    announceDragAction,
+    clearDragUndo,
+    dragUndo,
+    flushDraft,
+    isGateOpen,
+    runMutation,
+    treeData.orderedPlacementIds,
+    treeData.rowByPlacementId,
+    uiDispatch,
+    uiState.activeNotepadId,
+    updateCanonicalParent,
+    updatePlacementParent
+  ]);
+
+  const reorderSelected = useCallback(
+    async (direction: "up" | "down"): Promise<void> => {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      if (!row || !uiState.activeNotepadId || !isGateOpen) {
+        return;
+      }
+
+      const visibleSubtreeIds = collectVisibleSubtreePlacementIds(treeData.flatRows, row.placement.id);
+      const rowIndex = treeData.flatRows.findIndex((value) => value.placement.id === row.placement.id);
+      if (rowIndex === -1) {
+        return;
+      }
+      const subtreeEndIndex = rowIndex + Math.max(0, visibleSubtreeIds.length - 1);
+
+      if (direction === "up") {
+        const targetRow = treeData.flatRows[rowIndex - 1];
+        if (!targetRow) {
+          return;
+        }
+        await dropReorderRow(row.placement.id, targetRow.placement.id, "before", { trackUndo: false, announce: false });
+        announceDragAction(`Moved ${rowTitle(row)} up.`);
+        return;
+      }
+
+      const targetRow = treeData.flatRows[subtreeEndIndex + 1];
+      if (!targetRow) {
+        return;
+      }
+      await dropReorderRow(row.placement.id, targetRow.placement.id, "after", { trackUndo: false, announce: false });
+      announceDragAction(`Moved ${rowTitle(row)} down.`);
+    },
+    [
+      announceDragAction,
+      dropReorderRow,
+      isGateOpen,
+      treeData.flatRows,
+      treeData.rowByPlacementId,
+      uiState.activeNotepadId,
+      uiState.selectedPlacementId
     ]
   );
 
@@ -1970,6 +2118,22 @@ export function NotepadScreen(): JSX.Element {
           event.preventDefault();
           navigateSelection("end");
           return;
+        case "reorder_up":
+          event.preventDefault();
+          void reorderSelected("up");
+          return;
+        case "reorder_down":
+          event.preventDefault();
+          void reorderSelected("down");
+          return;
+        case "indent_selected":
+          event.preventDefault();
+          void indentSelected();
+          return;
+        case "outdent_selected":
+          event.preventDefault();
+          void outdentSelected();
+          return;
         case "expand_or_child":
           event.preventDefault();
           navigateHorizontalSelection("right");
@@ -2010,10 +2174,13 @@ export function NotepadScreen(): JSX.Element {
       createRow,
       dismissHint,
       focusEditorForPlacement,
+      indentSelected,
       navigateHorizontalSelection,
       navigateSelection,
       openQuickActions,
+      outdentSelected,
       pasteAfterSelected,
+      reorderSelected,
       treeData.flatRows.length,
       uiState.selectedPlacementId
     ]
@@ -2023,6 +2190,9 @@ export function NotepadScreen(): JSX.Element {
 
   return (
     <section className="notepad-screen screen">
+      <div className="notepad-live-announcer" role="status" aria-live="polite" aria-atomic="true">
+        {dragAnnouncement}
+      </div>
       <NotepadToolbar
         notepads={notepads}
         activeNotepadId={uiState.activeNotepadId}
@@ -2057,6 +2227,14 @@ export function NotepadScreen(): JSX.Element {
       {gateError && <div className="banner error">{gateError}</div>}
       {error && <div className="banner error">{error}</div>}
       {(loading || saving) && <div className="banner info">{loading ? "Loading project..." : "Saving..."}</div>}
+      {dragUndo && dragUndo.notepadId === uiState.activeNotepadId && (
+        <div className="banner info notepad-undo-banner">
+          <span>{dragUndo.message}</span>
+          <button type="button" onClick={() => void undoLastDrop()} disabled={saving || loading}>
+            Undo
+          </button>
+        </div>
+      )}
 
       <div className="notepad-layout">
         <div className="card notepad-outline">
@@ -2180,6 +2358,9 @@ export function NotepadScreen(): JSX.Element {
             onDropRow={({ sourcePlacementId, targetPlacementId, intent }) => {
               dismissHint();
               void dropReorderRow(sourcePlacementId, targetPlacementId, intent);
+            }}
+            onAutoExpandRow={(placementId) => {
+              setRowCollapsed(placementId, false);
             }}
           />
         </div>

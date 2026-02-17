@@ -151,6 +151,18 @@ describe("keyboardContract", () => {
         selectionEnd: 3
       })
     ).toEqual({ type: "none" });
+
+    expect(
+      resolveEditorKeyAction({
+        key: "ArrowRight",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: true,
+        rowText: "hello",
+        selectionStart: 5,
+        selectionEnd: 5
+      })
+    ).toEqual({ type: "indent" });
   });
 
   it("maps container keys for navigation and mode transitions", () => {
@@ -193,5 +205,25 @@ describe("keyboardContract", () => {
         hasSelectedRow: true
       })
     ).toEqual({ type: "clipboard_paste" });
+
+    expect(
+      resolveContainerKeyAction({
+        key: "ArrowUp",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: true,
+        hasSelectedRow: true
+      })
+    ).toEqual({ type: "reorder_up" });
+
+    expect(
+      resolveContainerKeyAction({
+        key: "ArrowRight",
+        metaKey: false,
+        ctrlKey: true,
+        shiftKey: true,
+        hasSelectedRow: true
+      })
+    ).toEqual({ type: "indent_selected" });
   });
 });

@@ -2776,6 +2776,29 @@ body.metric-dragging {
   gap: 0.9rem;
 }
 
+.notepad-live-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.notepad-undo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.notepad-undo-banner button {
+  padding: 0.2rem 0.55rem;
+}
+
 .notepad-toolbar {
   display: grid;
   gap: 0.6rem;
@@ -2949,6 +2972,25 @@ body.metric-dragging {
 
 .notepad-tree-row.drag-follow {
   pointer-events: none;
+}
+
+.notepad-drop-intent {
+  position: absolute;
+  top: -0.78rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  height: 1rem;
+  padding: 0 0.38rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line) 45%);
+  background: color-mix(in srgb, var(--bg) 92%, var(--accent) 8%);
+  color: color-mix(in srgb, var(--accent) 60%, var(--ink-muted) 40%);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 4;
 }
 
 .notepad-tree-row.drop-before::before,

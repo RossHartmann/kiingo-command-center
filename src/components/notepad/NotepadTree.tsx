@@ -1,4 +1,4 @@
-import { useMemo, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import {
   pointerWithin,
   DndContext,
@@ -38,6 +38,7 @@ interface NotepadTreeProps {
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
   onContainerKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   onDropRow: (payload: NotepadTreeDropPayload) => void;
+  onAutoExpandRow: (placementId: string) => void;
 }
 
 interface SortableNotepadRowProps {
@@ -47,6 +48,7 @@ interface SortableNotepadRowProps {
   overlayMode?: "person" | "task" | "date";
   isTask: boolean;
   dropHint?: PlacementDropIntent;
+  dropIntentLabel?: string;
   followsParentDrag?: boolean;
   parentDragDelta?: { x: number; y: number };
   onSelect: (placementId: string) => void;
@@ -64,6 +66,7 @@ function SortableNotepadRow({
   overlayMode,
   isTask,
   dropHint,
+  dropIntentLabel,
   followsParentDrag,
   parentDragDelta,
   onSelect,
@@ -91,6 +94,7 @@ function SortableNotepadRow({
         opacity: isDragging ? 0.45 : shouldFollowParent ? 0.82 : undefined
       }}
     >
+      {dropIntentLabel && <span className="notepad-drop-intent">{dropIntentLabel}</span>}
       <NotepadRow
         row={row}
         selected={selected}
@@ -123,9 +127,12 @@ function resolveDropIntent(event: DragOverEvent | DragEndEvent, targetDepth: num
   }
 
   const centerY = activeRect.top + activeRect.height / 2;
+  const activeAnchorX = activeRect.left + Math.min(activeRect.width * 0.35, 28);
   const relativeY = (centerY - overRect.top) / Math.max(overRect.height, 1);
-  const edgeBandRatio = 0.32;
-  const rightwardNestThreshold = targetDepth <= 0 ? 26 : 16;
+  const edgeBandRatio = 0.34;
+  const rightwardNestThreshold = targetDepth <= 0 ? 20 : 12;
+  const nestingGuideX = overRect.left + 54 + (10 + targetDepth * 18);
+  const nestingIntentional = event.delta.x >= rightwardNestThreshold || activeAnchorX >= nestingGuideX;
 
   if (relativeY <= edgeBandRatio) {
     return "before";
@@ -134,8 +141,8 @@ function resolveDropIntent(event: DragOverEvent | DragEndEvent, targetDepth: num
     return "after";
   }
 
-  // Nesting should feel intentional: drag horizontally to the right in the row center zone.
-  if (event.delta.x >= rightwardNestThreshold) {
+  // Nesting should feel intentional: move to the center band and drag right past the nesting guide.
+  if (nestingIntentional) {
     return "inside";
   }
 
@@ -167,6 +174,12 @@ function resolveDropTarget(
   };
 }
 
+function dropIntentLabel(intent: PlacementDropIntent): string {
+  if (intent === "before") return "Move above";
+  if (intent === "after") return "Move below";
+  return "Nest under";
+}
+
 export function NotepadTree({
   rows,
   selectedPlacementId,
@@ -180,12 +193,22 @@ export function NotepadTree({
   onEditorBlur,
   onEditorKeyDown,
   onContainerKeyDown,
-  onDropRow
+  onDropRow,
+  onAutoExpandRow
 }: NotepadTreeProps): JSX.Element {
   const [activePlacementId, setActivePlacementId] = useState<string>();
   const [dropTarget, setDropTarget] = useState<Omit<NotepadTreeDropPayload, "sourcePlacementId">>();
   const [dragDelta, setDragDelta] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const expandHoverTimerRef = useRef<number>();
+  const expandHoverTargetIdRef = useRef<string>();
   const rowIds = useMemo(() => rows.map((row) => row.placement.id), [rows]);
+  const rowByPlacementId = useMemo(() => {
+    const next: Record<string, FlatRow> = {};
+    for (const row of rows) {
+      next[row.placement.id] = row;
+    }
+    return next;
+  }, [rows]);
   const rowDepthByPlacementId = useMemo(() => {
     const next: Record<string, number> = {};
     for (const row of rows) {
@@ -214,10 +237,25 @@ export function NotepadTree({
     []
   );
 
+  const clearExpandHoverTimer = useCallback((): void => {
+    if (expandHoverTimerRef.current) {
+      window.clearTimeout(expandHoverTimerRef.current);
+      expandHoverTimerRef.current = undefined;
+    }
+    expandHoverTargetIdRef.current = undefined;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearExpandHoverTimer();
+    };
+  }, [clearExpandHoverTimer]);
+
   const resetDragState = (): void => {
     setActivePlacementId(undefined);
     setDropTarget(undefined);
     setDragDelta({ x: 0, y: 0 });
+    clearExpandHoverTimer();
   };
 
   const handleDragStart = (event: DragStartEvent): void => {
@@ -232,7 +270,28 @@ export function NotepadTree({
   };
 
   const handleDragOver = (event: DragOverEvent): void => {
-    setDropTarget(resolveDropTarget(event, rowDepthByPlacementId));
+    const nextDropTarget = resolveDropTarget(event, rowDepthByPlacementId);
+    setDropTarget(nextDropTarget);
+
+    if (!nextDropTarget || nextDropTarget.intent !== "inside") {
+      clearExpandHoverTimer();
+      return;
+    }
+    const targetRow = rowByPlacementId[nextDropTarget.targetPlacementId];
+    if (!targetRow || !targetRow.hasChildren || !targetRow.collapsed || targetRow.placement.id === activePlacementId) {
+      clearExpandHoverTimer();
+      return;
+    }
+    if (expandHoverTargetIdRef.current === targetRow.placement.id && expandHoverTimerRef.current) {
+      return;
+    }
+
+    clearExpandHoverTimer();
+    expandHoverTargetIdRef.current = targetRow.placement.id;
+    expandHoverTimerRef.current = window.setTimeout(() => {
+      onAutoExpandRow(targetRow.placement.id);
+      clearExpandHoverTimer();
+    }, 350);
   };
 
   const handleDragEnd = (event: DragEndEvent): void => {
@@ -278,6 +337,11 @@ export function NotepadTree({
                 dropHint={
                   dropTarget?.targetPlacementId === row.placement.id && activePlacementId !== row.placement.id
                     ? dropTarget.intent
+                    : undefined
+                }
+                dropIntentLabel={
+                  dropTarget?.targetPlacementId === row.placement.id && activePlacementId !== row.placement.id
+                    ? dropIntentLabel(dropTarget.intent)
                     : undefined
                 }
                 followsParentDrag={
