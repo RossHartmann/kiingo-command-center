@@ -3,6 +3,7 @@ import {
   activeOverlay,
   buildTreeData,
   collectSubtreePlacementIds,
+  collectVisibleSubtreePlacementIds,
   findSiblingSwapTarget,
   insertPlacementAfter,
   isPlacementDescendant,
@@ -210,5 +211,33 @@ describe("notepad treeData", () => {
       intent: "inside"
     });
     expect(invalidPlan).toBeUndefined();
+  });
+
+  it("collects visible subtree by depth and accepts explicit move blocks", () => {
+    const visibleSubtree = collectVisibleSubtreePlacementIds(
+      [
+        { placement: placement("a", "ba", "0001"), depth: 0 },
+        { placement: placement("b", "bb", "0002"), depth: 1 },
+        { placement: placement("c", "bc", "0003"), depth: 2 },
+        { placement: placement("d", "bd", "0004"), depth: 0 }
+      ],
+      "a"
+    );
+    expect(visibleSubtree).toEqual(["a", "b", "c"]);
+
+    const plan = planPlacementDrop({
+      orderedPlacementIds: ["a", "b", "c", "d"],
+      effectiveParentByPlacementId: {
+        a: undefined,
+        b: undefined,
+        c: undefined,
+        d: undefined
+      },
+      sourcePlacementId: "a",
+      targetPlacementId: "d",
+      intent: "after",
+      movedPlacementIds: visibleSubtree
+    });
+    expect(plan?.orderedPlacementIds).toEqual(["d", "a", "b", "c"]);
   });
 });

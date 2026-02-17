@@ -51,6 +51,8 @@ import {
 } from "../components/notepad/keyboardContract";
 import {
   buildTreeData,
+  collectSubtreePlacementIds,
+  collectVisibleSubtreePlacementIds,
   findSiblingSwapTarget,
   insertPlacementAfter,
   isPlacementDescendant,
@@ -1112,13 +1114,22 @@ export function NotepadScreen(): JSX.Element {
       if (!sourceRow) {
         return;
       }
+      const visibleSubtreeIds = collectVisibleSubtreePlacementIds(treeData.flatRows, sourcePlacementId);
+      const canonicalSubtreeIds = collectSubtreePlacementIds(
+        sourcePlacementId,
+        treeData.effectiveParentByPlacementId,
+        treeData.orderedPlacementIds
+      );
+      const movedSet = new Set<string>([...canonicalSubtreeIds, ...visibleSubtreeIds]);
+      const movedPlacementIds = treeData.orderedPlacementIds.filter((placementId) => movedSet.has(placementId));
 
       const dropPlan = planPlacementDrop({
         orderedPlacementIds: treeData.orderedPlacementIds,
         effectiveParentByPlacementId: treeData.effectiveParentByPlacementId,
         sourcePlacementId,
         targetPlacementId,
-        intent
+        intent,
+        movedPlacementIds
       });
       if (!dropPlan) {
         return;

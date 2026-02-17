@@ -276,6 +276,26 @@ export function collectSubtreePlacementIds(
   return orderedPlacementIds.filter((placementId) => visited.has(placementId));
 }
 
+export function collectVisibleSubtreePlacementIds(
+  flatRows: Array<Pick<FlatRow, "placement" | "depth">>,
+  rootPlacementId: string
+): string[] {
+  const rootIndex = flatRows.findIndex((row) => row.placement.id === rootPlacementId);
+  if (rootIndex === -1) {
+    return [];
+  }
+  const rootDepth = flatRows[rootIndex].depth;
+  const ids = [rootPlacementId];
+  for (let index = rootIndex + 1; index < flatRows.length; index += 1) {
+    const candidate = flatRows[index];
+    if (candidate.depth <= rootDepth) {
+      break;
+    }
+    ids.push(candidate.placement.id);
+  }
+  return ids;
+}
+
 export interface PlacementDropPlan {
   orderedPlacementIds: string[];
   movedPlacementIds: string[];
@@ -288,6 +308,7 @@ interface PlanPlacementDropArgs {
   sourcePlacementId: string;
   targetPlacementId: string;
   intent: PlacementDropIntent;
+  movedPlacementIds?: string[];
 }
 
 export function planPlacementDrop({
@@ -295,18 +316,25 @@ export function planPlacementDrop({
   effectiveParentByPlacementId,
   sourcePlacementId,
   targetPlacementId,
-  intent
+  intent,
+  movedPlacementIds: explicitMovedPlacementIds
 }: PlanPlacementDropArgs): PlacementDropPlan | undefined {
   if (!orderedPlacementIds.includes(sourcePlacementId) || !orderedPlacementIds.includes(targetPlacementId)) {
     return undefined;
   }
 
-  const movedPlacementIds = collectSubtreePlacementIds(
-    sourcePlacementId,
-    effectiveParentByPlacementId,
-    orderedPlacementIds
-  );
+  const movedPlacementIds =
+    explicitMovedPlacementIds && explicitMovedPlacementIds.length > 0
+      ? orderedPlacementIds.filter((placementId) => explicitMovedPlacementIds.includes(placementId))
+      : collectSubtreePlacementIds(
+          sourcePlacementId,
+          effectiveParentByPlacementId,
+          orderedPlacementIds
+        );
   if (movedPlacementIds.length === 0) {
+    return undefined;
+  }
+  if (!movedPlacementIds.includes(sourcePlacementId)) {
     return undefined;
   }
 
