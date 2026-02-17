@@ -253,7 +253,7 @@ export function NotepadToolbar({
                   <li>`Tab` / `Shift+Tab`: indent / outdent</li>
                   <li>`Cmd/Ctrl+Shift+Arrow` (or `Cmd/Ctrl+Arrow`): reorder</li>
                   <li>`Cmd/Ctrl+C`, `X`, `V`: copy/cut/paste row</li>
-                  <li>Drag `≡` handle: move before/inside/after rows</li>
+                  <li>Drag `≡` handle: move rows; drag right to nest as child</li>
                   <li>`Cmd/Ctrl+.`: focus project move actions</li>
                   <li>`Esc`: exit edit mode</li>
                 </ul>

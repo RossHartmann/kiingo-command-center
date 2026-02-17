@@ -113,21 +113,29 @@ function SortableNotepadRow({
 function resolveDropIntent(event: DragOverEvent | DragEndEvent): PlacementDropIntent {
   const overRect = event.over?.rect;
   if (!overRect) {
-    return "inside";
+    return "after";
   }
   const activeRect = event.active.rect.current.translated ?? event.active.rect.current.initial;
   if (!activeRect) {
-    return "inside";
+    return "after";
   }
   const centerY = activeRect.top + activeRect.height / 2;
-  const edgeBand = Math.min(16, overRect.height * 0.28);
+  const edgeBand = Math.min(16, overRect.height * 0.32);
   if (centerY <= overRect.top + edgeBand) {
     return "before";
   }
   if (centerY >= overRect.bottom - edgeBand) {
     return "after";
   }
-  return "inside";
+
+  // Require an intentional rightward drag to nest under the hovered row.
+  if (event.delta.x >= 24) {
+    return "inside";
+  }
+
+  // Default center-zone drops to sibling placement to avoid accidental nesting.
+  const midline = overRect.top + overRect.height / 2;
+  return centerY < midline ? "before" : "after";
 }
 
 function resolveDropTarget(event: DragOverEvent | DragEndEvent): Omit<NotepadTreeDropPayload, "sourcePlacementId"> | undefined {
