@@ -49,7 +49,16 @@ import {
   resolveContainerKeyAction,
   resolveEditorKeyAction
 } from "../components/notepad/keyboardContract";
-import { buildTreeData, findSiblingSwapTarget, insertPlacementAfter, parseOverlayMode, sortPlacements } from "../components/notepad/treeData";
+import {
+  buildTreeData,
+  findSiblingSwapTarget,
+  insertPlacementAfter,
+  isPlacementDescendant,
+  parseOverlayMode,
+  planPlacementDrop,
+  sortPlacements,
+  type PlacementDropIntent
+} from "../components/notepad/treeData";
 import type { FlatRow } from "../components/notepad/types";
 import { ROOT_KEY } from "../components/notepad/types";
 import { OMNI_OPEN_PROJECT } from "../components/OmniSearch";
@@ -1094,6 +1103,65 @@ export function NotepadScreen(): JSX.Element {
     });
   }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId, updateCanonicalParent, updatePlacementParent]);
 
+  const dropReorderRow = useCallback(
+    async (sourcePlacementId: string, targetPlacementId: string, intent: PlacementDropIntent): Promise<void> => {
+      if (!uiState.activeNotepadId || !isGateOpen) {
+        return;
+      }
+      const sourceRow = treeData.rowByPlacementId[sourcePlacementId];
+      if (!sourceRow) {
+        return;
+      }
+
+      const dropPlan = planPlacementDrop({
+        orderedPlacementIds: treeData.orderedPlacementIds,
+        effectiveParentByPlacementId: treeData.effectiveParentByPlacementId,
+        sourcePlacementId,
+        targetPlacementId,
+        intent
+      });
+      if (!dropPlan) {
+        return;
+      }
+
+      await flushDraft(sourcePlacementId);
+      const nextParentAtomId = dropPlan.nextParentPlacementId
+        ? treeData.rowByPlacementId[dropPlan.nextParentPlacementId]?.atom?.id
+        : undefined;
+      const orderChanged =
+        dropPlan.orderedPlacementIds.length === treeData.orderedPlacementIds.length &&
+        dropPlan.orderedPlacementIds.some(
+          (placementId, index) => placementId !== treeData.orderedPlacementIds[index]
+        );
+
+      await runMutation(async () => {
+        await updatePlacementParent(sourceRow, dropPlan.nextParentPlacementId);
+        await updateCanonicalParent(sourceRow.atom, nextParentAtomId);
+        if (orderChanged) {
+          await placementsReorder(uiState.activeNotepadId, {
+            orderedPlacementIds: dropPlan.orderedPlacementIds,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+        selectedPlacementRef.current = sourcePlacementId;
+        uiDispatch({ type: "set_selected_placement", placementId: sourcePlacementId });
+        uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+      });
+    },
+    [
+      flushDraft,
+      isGateOpen,
+      runMutation,
+      treeData.effectiveParentByPlacementId,
+      treeData.orderedPlacementIds,
+      treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.activeNotepadId,
+      updateCanonicalParent,
+      updatePlacementParent
+    ]
+  );
+
   const deleteRow = useCallback(
     async (row: FlatRow, options?: { preferPrevious?: boolean; focusEditor?: boolean }): Promise<void> => {
       if (!isGateOpen) {
@@ -1652,14 +1720,11 @@ export function NotepadScreen(): JSX.Element {
 
   const isDescendantOf = useCallback(
     (candidatePlacementId: string, ancestorPlacementId: string): boolean => {
-      let cursor = treeData.effectiveParentByPlacementId[candidatePlacementId];
-      while (cursor) {
-        if (cursor === ancestorPlacementId) {
-          return true;
-        }
-        cursor = treeData.effectiveParentByPlacementId[cursor];
-      }
-      return false;
+      return isPlacementDescendant(
+        candidatePlacementId,
+        ancestorPlacementId,
+        treeData.effectiveParentByPlacementId
+      );
     },
     [treeData.effectiveParentByPlacementId]
   );
@@ -2101,6 +2166,10 @@ export function NotepadScreen(): JSX.Element {
             }}
             onEditorKeyDown={onRowEditorKeyDown}
             onContainerKeyDown={onTreeContainerKeyDown}
+            onDropRow={({ sourcePlacementId, targetPlacementId, intent }) => {
+              dismissHint();
+              void dropReorderRow(sourcePlacementId, targetPlacementId, intent);
+            }}
           />
         </div>
 

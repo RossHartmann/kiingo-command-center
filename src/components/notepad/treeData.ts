@@ -2,6 +2,8 @@ import type { AtomRecord, BlockRecord, ConditionRecord, PlacementRecord } from "
 import type { FlatRow, TreeData } from "./types";
 import { ROOT_KEY } from "./types";
 
+export type PlacementDropIntent = "before" | "after" | "inside";
+
 export function overlayPriority(condition: ConditionRecord): number {
   if (condition.mode === "person") return 0;
   if (condition.mode === "task") return 1;
@@ -211,6 +213,162 @@ export function findSiblingSwapTarget(siblings: string[], selectedId: string, di
     return index > 0 ? siblings[index - 1] : undefined;
   }
   return index < siblings.length - 1 ? siblings[index + 1] : undefined;
+}
+
+export function isPlacementDescendant(
+  candidatePlacementId: string,
+  ancestorPlacementId: string,
+  effectiveParentByPlacementId: Record<string, string | undefined>
+): boolean {
+  let cursor = effectiveParentByPlacementId[candidatePlacementId];
+  while (cursor) {
+    if (cursor === ancestorPlacementId) {
+      return true;
+    }
+    cursor = effectiveParentByPlacementId[cursor];
+  }
+  return false;
+}
+
+function buildChildrenByParent(
+  effectiveParentByPlacementId: Record<string, string | undefined>,
+  orderedPlacementIds: string[]
+): Record<string, string[]> {
+  const orderIndex = new Map(orderedPlacementIds.map((id, index) => [id, index]));
+  const childrenByParent: Record<string, string[]> = {};
+  for (const [placementId, parentPlacementId] of Object.entries(effectiveParentByPlacementId)) {
+    if (!parentPlacementId) {
+      continue;
+    }
+    if (!childrenByParent[parentPlacementId]) {
+      childrenByParent[parentPlacementId] = [];
+    }
+    childrenByParent[parentPlacementId].push(placementId);
+  }
+  for (const children of Object.values(childrenByParent)) {
+    children.sort((a, b) => (orderIndex.get(a) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b) ?? Number.MAX_SAFE_INTEGER));
+  }
+  return childrenByParent;
+}
+
+export function collectSubtreePlacementIds(
+  rootPlacementId: string,
+  effectiveParentByPlacementId: Record<string, string | undefined>,
+  orderedPlacementIds: string[]
+): string[] {
+  if (!orderedPlacementIds.includes(rootPlacementId)) {
+    return [];
+  }
+  const childrenByParent = buildChildrenByParent(effectiveParentByPlacementId, orderedPlacementIds);
+  const visited = new Set<string>();
+  const stack = [rootPlacementId];
+  while (stack.length > 0) {
+    const placementId = stack.pop();
+    if (!placementId || visited.has(placementId)) {
+      continue;
+    }
+    visited.add(placementId);
+    const children = childrenByParent[placementId] ?? [];
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push(children[index]);
+    }
+  }
+  return orderedPlacementIds.filter((placementId) => visited.has(placementId));
+}
+
+export interface PlacementDropPlan {
+  orderedPlacementIds: string[];
+  movedPlacementIds: string[];
+  nextParentPlacementId?: string;
+}
+
+interface PlanPlacementDropArgs {
+  orderedPlacementIds: string[];
+  effectiveParentByPlacementId: Record<string, string | undefined>;
+  sourcePlacementId: string;
+  targetPlacementId: string;
+  intent: PlacementDropIntent;
+}
+
+export function planPlacementDrop({
+  orderedPlacementIds,
+  effectiveParentByPlacementId,
+  sourcePlacementId,
+  targetPlacementId,
+  intent
+}: PlanPlacementDropArgs): PlacementDropPlan | undefined {
+  if (!orderedPlacementIds.includes(sourcePlacementId) || !orderedPlacementIds.includes(targetPlacementId)) {
+    return undefined;
+  }
+
+  const movedPlacementIds = collectSubtreePlacementIds(
+    sourcePlacementId,
+    effectiveParentByPlacementId,
+    orderedPlacementIds
+  );
+  if (movedPlacementIds.length === 0) {
+    return undefined;
+  }
+
+  const movedSet = new Set(movedPlacementIds);
+  if (movedSet.has(targetPlacementId)) {
+    return undefined;
+  }
+
+  const nextParentPlacementId =
+    intent === "inside" ? targetPlacementId : effectiveParentByPlacementId[targetPlacementId];
+  if (nextParentPlacementId && movedSet.has(nextParentPlacementId)) {
+    return undefined;
+  }
+
+  const remaining = orderedPlacementIds.filter((placementId) => !movedSet.has(placementId));
+  let insertionIndex = remaining.length;
+
+  if (intent === "before") {
+    const index = remaining.indexOf(targetPlacementId);
+    if (index === -1) {
+      return undefined;
+    }
+    insertionIndex = index;
+  } else {
+    const targetSubtree = collectSubtreePlacementIds(
+      targetPlacementId,
+      effectiveParentByPlacementId,
+      orderedPlacementIds
+    );
+    let anchorPlacementId: string | undefined;
+    for (let index = targetSubtree.length - 1; index >= 0; index -= 1) {
+      const candidate = targetSubtree[index];
+      if (!movedSet.has(candidate)) {
+        anchorPlacementId = candidate;
+        break;
+      }
+    }
+    if (anchorPlacementId) {
+      const anchorIndex = remaining.indexOf(anchorPlacementId);
+      insertionIndex = anchorIndex === -1 ? remaining.length : anchorIndex + 1;
+    }
+  }
+
+  const nextOrdered = [
+    ...remaining.slice(0, insertionIndex),
+    ...movedPlacementIds,
+    ...remaining.slice(insertionIndex)
+  ];
+
+  const orderUnchanged =
+    nextOrdered.length === orderedPlacementIds.length &&
+    nextOrdered.every((placementId, index) => placementId === orderedPlacementIds[index]);
+  const parentUnchanged = effectiveParentByPlacementId[sourcePlacementId] === nextParentPlacementId;
+  if (orderUnchanged && parentUnchanged) {
+    return undefined;
+  }
+
+  return {
+    orderedPlacementIds: nextOrdered,
+    movedPlacementIds,
+    nextParentPlacementId
+  };
 }
 
 export function parseOverlayMode(condition: ConditionRecord | undefined): "person" | "task" | "date" | undefined {

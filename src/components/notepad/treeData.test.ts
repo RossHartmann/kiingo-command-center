@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { activeOverlay, buildTreeData, findSiblingSwapTarget, insertPlacementAfter, sortPlacements } from "./treeData";
+import {
+  activeOverlay,
+  buildTreeData,
+  collectSubtreePlacementIds,
+  findSiblingSwapTarget,
+  insertPlacementAfter,
+  isPlacementDescendant,
+  planPlacementDrop,
+  sortPlacements
+} from "./treeData";
 import type { AtomRecord, BlockRecord, ConditionRecord, PlacementRecord } from "../../lib/types";
 
 function atom(id: string): AtomRecord {
@@ -133,5 +142,73 @@ describe("notepad treeData", () => {
     ];
     const sorted = sortPlacements(items);
     expect(sorted.map((value) => value.id)).toEqual(["p1", "p3", "p2"]);
+  });
+
+  it("collects subtree IDs in display order", () => {
+    const effectiveParentByPlacementId = {
+      a: undefined,
+      b: "a",
+      c: "a",
+      d: undefined,
+      e: "d"
+    } satisfies Record<string, string | undefined>;
+
+    const subtree = collectSubtreePlacementIds(
+      "a",
+      effectiveParentByPlacementId,
+      ["a", "b", "c", "d", "e"]
+    );
+    expect(subtree).toEqual(["a", "b", "c"]);
+    expect(isPlacementDescendant("b", "a", effectiveParentByPlacementId)).toBe(true);
+    expect(isPlacementDescendant("d", "a", effectiveParentByPlacementId)).toBe(false);
+  });
+
+  it("plans subtree drop after a sibling subtree", () => {
+    const effectiveParentByPlacementId = {
+      a: undefined,
+      b: "a",
+      c: "a",
+      d: undefined,
+      e: "d"
+    } satisfies Record<string, string | undefined>;
+
+    const plan = planPlacementDrop({
+      orderedPlacementIds: ["a", "b", "c", "d", "e"],
+      effectiveParentByPlacementId,
+      sourcePlacementId: "a",
+      targetPlacementId: "d",
+      intent: "after"
+    });
+    expect(plan?.orderedPlacementIds).toEqual(["d", "e", "a", "b", "c"]);
+    expect(plan?.nextParentPlacementId).toBeUndefined();
+  });
+
+  it("plans inside-drop as append child and prevents descendant loops", () => {
+    const effectiveParentByPlacementId = {
+      a: undefined,
+      b: "a",
+      c: "a",
+      d: undefined,
+      e: "d"
+    } satisfies Record<string, string | undefined>;
+
+    const insidePlan = planPlacementDrop({
+      orderedPlacementIds: ["a", "b", "c", "d", "e"],
+      effectiveParentByPlacementId,
+      sourcePlacementId: "c",
+      targetPlacementId: "d",
+      intent: "inside"
+    });
+    expect(insidePlan?.orderedPlacementIds).toEqual(["a", "b", "d", "e", "c"]);
+    expect(insidePlan?.nextParentPlacementId).toBe("d");
+
+    const invalidPlan = planPlacementDrop({
+      orderedPlacementIds: ["a", "b", "c", "d", "e"],
+      effectiveParentByPlacementId,
+      sourcePlacementId: "a",
+      targetPlacementId: "b",
+      intent: "inside"
+    });
+    expect(invalidPlan).toBeUndefined();
   });
 });

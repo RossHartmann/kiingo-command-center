@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { FocusEvent, KeyboardEvent, MouseEvent } from "react";
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { InlineBlockEditor } from "./InlineBlockEditor";
 import type { FlatRow } from "./types";
 
@@ -15,6 +16,10 @@ interface NotepadRowProps {
   onEditorChange: (placementId: string, nextText: string) => void;
   onEditorBlur: (placementId: string, event: FocusEvent<HTMLTextAreaElement>) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
+  dragHandleAttributes?: DraggableAttributes;
+  dragHandleListeners?: DraggableSyntheticListeners;
+  setDragHandleRef?: (element: HTMLElement | null) => void;
+  dragging?: boolean;
 }
 
 export function NotepadRow({
@@ -28,7 +33,11 @@ export function NotepadRow({
   onEditorFocus,
   onEditorChange,
   onEditorBlur,
-  onEditorKeyDown
+  onEditorKeyDown,
+  dragHandleAttributes,
+  dragHandleListeners,
+  setDragHandleRef,
+  dragging
 }: NotepadRowProps): JSX.Element {
   const suppressRowClickRef = useRef(false);
   const attentionLayer = row.atom?.facetData.task?.attentionLayer ?? row.atom?.facetData.attention?.layer;
@@ -57,7 +66,7 @@ export function NotepadRow({
 
   return (
     <article
-      className={`notepad-row ${selected ? "selected" : ""}`}
+      className={`notepad-row ${selected ? "selected" : ""}${dragging ? " dragging" : ""}`}
       style={{ paddingLeft: `${0.6 + row.depth * 1.1}rem` }}
       data-placement-id={row.placement.id}
       onMouseDownCapture={handleMouseDownCapture}
@@ -68,6 +77,21 @@ export function NotepadRow({
       aria-level={row.depth + 1}
       aria-expanded={row.hasChildren ? !row.collapsed : undefined}
     >
+      <button
+        type="button"
+        className="notepad-drag-handle"
+        ref={setDragHandleRef}
+        aria-label="Drag row"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        {...dragHandleAttributes}
+        {...dragHandleListeners}
+      >
+        {"\u2261"}
+      </button>
+
       <button
         type="button"
         className="notepad-toggle"
