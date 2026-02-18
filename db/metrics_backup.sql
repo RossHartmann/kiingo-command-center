@@ -1786,41 +1786,46 @@ INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, templat
 
 ## Dependency Input
 You will receive one dependency input:
-1. **weekly-discovery-calls** with values like:
-   - `weeklyData`: array of `{ weekOf, count }`
-   - `currentWeek`, `priorWeek`, `total`, `avgPerWeek`, `trend`
-   - optionally richer fields such as `dailyData` (`{ date, count }`) or `discoveryCalls` (ISO timestamps)
+1. **weekly-discovery-calls** with values including:
+   - `weeklyDiscovery`: array of `{ weekOf, count }` — discovery calls only per week
+   - `weeklyNextSteps`: array of `{ weekOf, count }` — next steps calls only per week
+   - `weeklyData`: array of `{ weekOf, count }` — combined (discovery + next steps) per week
+   - `dailyData`: array of `{ date, count }` — daily counts
+   - `discoveryTotal`, `nextStepsTotal`, `total`
+   - `avgPerWeek`, `currentWeek`, `priorWeek`, `trend`
+   - `flaggedEvents`: borderline events with classification reasoning
 
 ## Computation Steps
 1. Locate dependency input where `slug == "weekly-discovery-calls"` and read its `values`.
-2. Build a trailing-30 weekly series:
-   - Preferred: if `discoveryCalls` or `dailyData` are present, compute exact 30-day windows for each week ending date in chronological order.
-   - Fallback: if only `weeklyData` exists, estimate each trailing 30 value as:
+2. Build a trailing-30 weekly series using `weeklyDiscovery` (discovery-only counts):
+   - Preferred: if `dailyData` is present, compute exact 30-day windows for each week ending date.
+   - Fallback: if only `weeklyDiscovery` exists, estimate each trailing 30 value as:
      current week plus prior 3 full weeks plus (2/7 * week-4), rounded to nearest integer.
 3. Compute summary metrics from that trailing series:
    - `trailing30`: most recent trailing value
    - `peak`, `peakWeek`: max trailing value and week
    - `trough`, `troughWeek`: min trailing value and week
    - `avgTrailing`: average trailing value
-4. Compute total and monthly context:
-   - `total`: use dependency `total` if present, else sum of weekly discovery counts
-   - `byMonth`: if daily timestamps exist, aggregate by month exactly; otherwise derive a best-effort monthly rollup from weekly buckets.
-
-## Narrative Context
-- Discovery calls are an early-funnel leading indicator.
-- This metric is calendar-derived through `weekly-discovery-calls`, anchored to David and Sohrab meeting activity.
-- A sustained trailing decline signals likely pipeline softness 60-90 days ahead.
+4. Also compute next-steps trailing metrics:
+   - `nextStepsTrailing30`: trailing 30-day next steps count
+   - `nextStepsTotal`: total next steps calls
+5. Compute monthly context:
+   - `byMonth`: aggregate discovery counts by month from daily data or weekly buckets
 
 ## Values to Return
-- `trailing30`: current trailing 30-day count
-- `peak`: highest weekly trailing 30 value and which week
+- `trailing30`: current trailing 30-day discovery count
+- `peak`: highest weekly trailing 30 value
 - `peakWeek`: ISO date of peak week
-- `trough`: lowest weekly trailing 30 value and which week
+- `trough`: lowest weekly trailing 30 value
 - `troughWeek`: ISO date of trough week
 - `total`: total discovery calls in dependency lookback
 - `avgTrailing`: average trailing 30 across all weeks
-- `weeklyData`: array of { weekOf, trailing30 } for the chart
-- `byMonth`: object of month -> count', '(() => {
+- `weeklyData`: array of { weekOf, trailing30 } for the chart (discovery only)
+- `byMonth`: object of month -> discovery count
+- `nextStepsTrailing30`: current trailing 30-day next steps count
+- `nextStepsTotal`: total next steps calls
+- `flaggedEvents`: passed through from dependency for audit
+', '(() => {
   const data = DATA_PLACEHOLDER;
   const current = CURRENT_PLACEHOLDER;
   const peak = PEAK_PLACEHOLDER;
@@ -1855,7 +1860,7 @@ You will receive one dependency input:
       <MetricNote>Each point = trailing 30-day discovery calls · Source: Weekly Discovery Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
-})()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["trailing disco","disco calls trailing","discovery trailing"],"dependencies":["weekly-discovery-calls"]}', '2026-02-17T00:57:37+00:00', '2026-02-17T15:59:56.502+00:00');
+})()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["trailing disco","disco calls trailing","discovery trailing"],"dependencies":["weekly-discovery-calls"]}', '2026-02-17T00:57:37+00:00', '2026-02-18T06:23:14+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('32c77dad-2b50-44f9-b9e0-5b4d668d2bca', 'Trailing Follow-Up Calls', 'trailing-followup-calls', 'Compute trailing 30-day follow-up call metrics using dependency input from `weekly-followup-calls`. Do not call calendar APIs in this metric.
 
 ## Dependency Input
@@ -1958,21 +1963,42 @@ Use `mailboxEmailAddress`, `startDateTime`, and `endDateTime` exactly. Do not us
 - Avoid debug loops or large verbose dumps of raw events.
 - Do not call any MCP help/introspection tools for this metric. Use only `calendar.listEvents` with the exact parameter names above.
 
-## Classification Rules
-Primary discovery patterns (must match):
-- Subjects matching Kiingo AI and [Company Name] Consultative Call
-- Subjects matching Kiingo AI and [Company Name]
-- Subjects containing: consultative, discovery, intro, introduction, initial meeting, demo request, exploratory, first call, kickoff
-- Next-step workshops also count: Kiingo AI - Next Steps Workshop - [Person]
+## Classification: Two-Pass Filter
 
-Exclude these (not discovery calls):
-- Internal meetings: Tactical Session, 1:1, check-in, sync, standup, retrospective, planning, pipeline sync, social hour, show-and-tell, training (internal), L10
-- Personal events: PTO, Busy, blocked time
-- Cancelled events (isCancelled = true)
-- All-day events (isAllDay = true)
-- Large webinars or conferences
+### Pass 1: Hard Exclusions (discard immediately)
+- Cancelled events (`isCancelled === true`)
+- All-day events (`isAllDay === true`)
+- Events with NO external attendees (see Pass 2 for definition of external)
+- Personal blocks: subject matches PTO, Busy, Out of Office, Blocked, Focus Time, Lunch
+- Daily standups / recurring internal rhythms: Tactical Session, Standup, Daily Sync
 
-Do not rely on attendee emails for classification.
+### Pass 2: External-Facing Test (MANDATORY)
+An event is **external-facing** ONLY if it has at least one attendee whose email domain is NOT in this internal list:
+  `kiingo.com`, `fireflies.ai`, `promax.com`
+
+If every attendee''s email domain is in that internal list, the event is INTERNAL regardless of its title. Discard it.
+
+Note: `fireflies.ai` is a meeting recorder bot. `promax.com` is an internal team member''s secondary domain. Neither counts as an external participant.
+
+### Pass 3: Classify External-Facing Events
+
+**DISCOVERY CALL** — First or early-stage sales conversation with a prospect. Must match one of:
+- Subject contains "Consultative Call" (the standard Kiingo discovery call format: "Kiingo AI and [Company] Consultative Call")
+- Subject contains any of: discovery, intro call, introduction, initial meeting, demo request, exploratory, first call
+- Subject is "Kiingo AI and [something]" (without "Next Steps" or "Workshop") AND has external attendees — this is the generic format for a discovery meeting
+
+**NEXT STEPS CALL** — Follow-up conversation after an initial discovery call. Must match:
+- Subject contains "Next Steps Workshop" or "Next Steps"
+- Subject contains: follow-up, follow up, second call, proposal review, next step
+
+**EXCLUDE** even if external attendees are present:
+- Internal meetings: 1:1, check-in, sync, standup, retrospective, planning, pipeline sync, social hour, show-and-tell, L10, handoff, training (if subject says "Internal Training")
+- Sales/Marketing Weekly Planning, Sales Pipeline Sync, Sales Handoff Flow
+- Webinars or conferences with 20+ attendees
+- Subject is just "Kiingo AI" with no company name and the context looks like an internal follow-up
+
+### Pass 4: Deduplication
+Deduplicate by normalized key: `date + lowercase(subject)`. If the same meeting appears twice, count it once.
 
 ## Retrieval and Computation Steps
 1. Compute trailing 12-week date range ending today.
@@ -1980,28 +2006,38 @@ Do not rely on attendee emails for classification.
 3. Parse arrays safely:
    - `davidEvents = Array.isArray(davidResult?.events) ? davidResult.events : []`
 4. Parse event start timestamps robustly (support `event.start?.dateTime` and plain string fallback).
-5. (Optional safety) Deduplicate David events by normalized key: start timestamp + normalized subject.
-6. Filter to discovery calls using rules above.
-7. Build outputs in the same execution flow:
-   - weeklyData: { weekOf, count } over trailing 12 weeks (ISO week, Mon-Sun)
+5. Run the 4-pass classification above on every event.
+6. Build outputs in the same execution flow:
+   - weeklyDiscovery: { weekOf, count } — discovery calls per ISO week (Mon-Sun)
+   - weeklyNextSteps: { weekOf, count } — next steps calls per ISO week
+   - weeklyData: { weekOf, count } — total client-facing calls (discovery + next steps) per week
    - dailyData: { date, count } for each date in trailing 12-week range
-   - total, avgPerWeek, currentWeek, priorWeek
+   - discoveryTotal, nextStepsTotal
+   - avgPerWeek (discovery only)
+   - currentWeek, priorWeek (discovery counts)
    - trend from last 4 weeks: increasing, decreasing, flat
+   - flaggedEvents: array of { date, subject, classification, reason } for any events that were borderline or ambiguous (max 10) — this helps the user audit the classification
 
 ## Narrative Context
 - Discovery calls are early-funnel sales conversations with new prospects.
-- David is the primary owner for discovery activity in this metric.
-- Healthy pace is generally 3-5 per week.
+- David is the primary owner for discovery activity.
+- Healthy pace is generally 5-10 discovery calls per week.
+- Next steps calls indicate deals progressing through the pipeline.
 
 ## Values to Return
 - currentWeek: discovery call count for current week
 - priorWeek: discovery call count for prior full week
-- weeklyData: array of { weekOf, count } for trailing 12 weeks
+- weeklyData: array of { weekOf, count } for trailing 12 weeks (discovery + next steps combined)
+- weeklyDiscovery: array of { weekOf, count } for discovery calls only
+- weeklyNextSteps: array of { weekOf, count } for next steps calls only
 - dailyData: array of { date, count } for trailing 12 weeks
-- total: total discovery calls in the period
-- avgPerWeek: average calls per full week
-- trend: increasing, decreasing, or flat based on last 4 weeks
-', '', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["disco calls","weekly disco","discovery"]}', '2026-02-16T23:05:21Z', '2026-02-17T18:37:40.283+00:00');
+- discoveryTotal: total discovery calls in the period
+- nextStepsTotal: total next steps calls in the period
+- total: discoveryTotal + nextStepsTotal
+- avgPerWeek: average discovery calls per full week
+- trend: increasing, decreasing, or flat based on last 4 weeks of discovery
+- flaggedEvents: array of borderline events with classification reasoning
+', '', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["disco calls","weekly disco","discovery"]}', '2026-02-16T23:05:21Z', '2026-02-18T06:22:52+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('65e79c58-154a-5e6d-6a25-ba4610bb1829', 'Weekly Follow-Up Calls', 'weekly-followup-calls', 'Count follow-up and next-step calls per week from Michael''s (michael@kiingo.com) calendar.
 
 ## Data Source
@@ -2113,7 +2149,7 @@ INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layou
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('f2ea539d-ae4d-4c89-42be-6854a05601e2', 'dept-sales', '65e79c58-154a-5e6d-6a25-ba4610bb1829', 4, 'wide', 0, 33, 8, 15);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('21999b7a-9383-4c4f-92b8-83ab27440b01', 'discovery-calls', '5e4a0131-1e16-4ca6-b715-cddf54af01e4', 0, 'wide', 0, 0, 8, 15);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('dc95c390-dc27-4250-970a-d6353b9ed2f6', 'discovery-calls', '5da7296a-4782-45a8-8309-b0b4f9827ce9', 1, 'wide', 0, 15, 8, 15);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('254c02e7-d95a-4d4b-b25f-2814346cc2f5', 'discovery-calls', 'e559abdf-19d9-b054-ee6c-9bb3b88a39f7', 2, 'wide', 0, 28, 8, 15);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('254c02e7-d95a-4d4b-b25f-2814346cc2f5', 'discovery-calls', 'e559abdf-19d9-b054-ee6c-9bb3b88a39f7', 2, 'wide', 0, 30, 8, 15);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('cfdc4da9-bb1d-4b2d-9ee5-715179cc5215', 'efficiency', '329d0e12-f4f9-47a5-81b1-e0ee3207fe1d', 0, 'full', 0, 0, 12, 11);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('3ebf946a-540e-40f2-a304-0f7a89cca49a', 'efficiency', 'f90cc540-c123-44eb-a2e3-20df6049db9b', 1, 'full', 0, 9, 12, 10);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('e1e01a06-51c4-4c0c-b051-325f9af0072a', 'efficiency', 'aabb87b0-1bca-4179-9c6f-20272d1de5dc', 2, 'full', 0, 18, 12, 9);
