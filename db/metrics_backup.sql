@@ -3370,3 +3370,18 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-15T06:34:11+00:00', '2026-02-15T06:30:00+00:00');
+
+-- ============================================
+-- Settings (app config, nav order, migrations)
+-- ============================================
+
+INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('app', '{"codexPath":"codex","claudePath":"claude","conversationThreadsV1":true,"retentionDays":90,"maxStorageMb":1024,"allowAdvancedPolicy":false,"remoteTelemetryOptIn":false,"redactAggressive":true,"storeEncryptedRawArtifacts":false,"navOrder":{"groupOrder":["overview","ceo-training","workspace","business","departments","team","clients","path1","path2","ai-agent","system"],"itemOrder":{"ai-agent":["chat","composer","live","history","queue"],"business":["growth","revenue","efficiency","pipeline","leads-gtm"],"ceo-training":["ceo-training","ceo-principles"],"clients":["client-roi","client-journey","client-health"],"departments":["dept-marketing","dept-engineering","dept-operations","sub:sales"],"overview":["dashboard"],"path1":["path1-bootcamps","path1-champions","path1-accelerator"],"path2":["path2-pipeline","path2-deployed","path2-fde"],"sub:principles":["coo-principles","cmo-principles","cro-principles","cto-principles","cfo-principles","cpo-principles","cco-principles","chro-principles"],"sub:sales":["dept-sales","discovery-calls","follow-up-calls"],"system":["settings","profiles","compatibility","metric-admin"],"team":["team-scorecard","team-rocks","sub:principles"],"workspace":["notepad","tasks"]}}}', '2026-02-17T18:49:15.879218+00:00');
+INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('migration:conversation_threads_v1', '{"completedAt":"2026-02-13T21:05:56.690346+00:00","strategy":"one-run-per-conversation"}', '2026-02-13T21:05:56.690395+00:00');
+INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('migration:grid_rowheight_v2', '"done"', '2026-02-14T23:49:07.612729+00:00');
+INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('migration:screen_metrics_multi_widget', '"done"', '2026-02-15T01:57:43.452153+00:00');
+
+-- ============================================
+-- Workspace Grants
+-- ============================================
+
+INSERT OR REPLACE INTO workspace_grants (id, path, granted_by, granted_at, revoked_at) VALUES ('320f986c-cdfb-45b9-901c-4611d48d96eb', '/Users/rosshartmann/Projects/kiingo-command-center', 'bootstrap', '2026-02-13T01:02:10.679422+00:00', NULL);

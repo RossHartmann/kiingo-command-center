@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Export metric definitions, screen bindings, and latest snapshots to a SQL backup file.
+"""Export metric definitions, screen bindings, latest snapshots, settings,
+and workspace grants to a SQL backup file.
 
 Produces db/metrics_backup.sql with idempotent INSERT OR REPLACE statements.
 Run manually or automatically via the pre-commit git hook.
@@ -106,6 +107,32 @@ def main():
     """
     output_lines += export_rows(conn, "metric_snapshots", snap_query, snap_cols)
 
+    output_lines += [
+        "",
+        "-- ============================================",
+        "-- Settings (app config, nav order, migrations)",
+        "-- ============================================",
+        "",
+    ]
+
+    # --- settings ---
+    st_cols = ["key", "value_json", "updated_at"]
+    st_query = f"SELECT {', '.join(st_cols)} FROM settings ORDER BY key"
+    output_lines += export_rows(conn, "settings", st_query, st_cols)
+
+    output_lines += [
+        "",
+        "-- ============================================",
+        "-- Workspace Grants",
+        "-- ============================================",
+        "",
+    ]
+
+    # --- workspace_grants ---
+    wg_cols = ["id", "path", "granted_by", "granted_at", "revoked_at"]
+    wg_query = f"SELECT {', '.join(wg_cols)} FROM workspace_grants ORDER BY granted_at"
+    output_lines += export_rows(conn, "workspace_grants", wg_query, wg_cols)
+
     output_lines.append("")
 
     conn.close()
@@ -117,8 +144,10 @@ def main():
     count_defs = sum(1 for l in output_lines if l.startswith("INSERT") and "metric_definitions" in l)
     count_binds = sum(1 for l in output_lines if l.startswith("INSERT") and "screen_metrics" in l)
     count_snaps = sum(1 for l in output_lines if l.startswith("INSERT") and "metric_snapshots" in l)
+    count_settings = sum(1 for l in output_lines if l.startswith("INSERT") and "settings" in l)
+    count_grants = sum(1 for l in output_lines if l.startswith("INSERT") and "workspace_grants" in l)
 
-    print(f"Exported {count_defs} definitions, {count_binds} bindings, {count_snaps} snapshots -> db/metrics_backup.sql")
+    print(f"Exported {count_defs} definitions, {count_binds} bindings, {count_snaps} snapshots, {count_settings} settings, {count_grants} grants -> db/metrics_backup.sql")
 
 
 if __name__ == "__main__":
