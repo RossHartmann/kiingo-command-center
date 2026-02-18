@@ -1782,49 +1782,51 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
     </MetricSection>
   );
 })()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["30 day leads","recent leads","trailing leads"]}', '2026-02-14T20:05:31.949129+00:00', '2026-02-14T20:05:31.949129+00:00');
-INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('5da7296a-4782-45a8-8309-b0b4f9827ce9', 'Trailing Discovery Calls', 'trailing-discovery-calls', 'Compute trailing 30-day discovery call metrics using dependency input from `weekly-discovery-calls`. Do not call HubSpot or calendar APIs in this metric.
+INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('5da7296a-4782-45a8-8309-b0b4f9827ce9', 'Trailing Discovery Calls', 'trailing-discovery-calls', 'Compute trailing 30-day first-time discovery call metrics using dependency input from `weekly-discovery-calls`. Do not call any calendar or HubSpot APIs.
 
 ## Dependency Input
 You will receive one dependency input:
 1. **weekly-discovery-calls** with values including:
-   - `weeklyDiscovery`: array of `{ weekOf, count }` — discovery calls only per week
-   - `weeklyNextSteps`: array of `{ weekOf, count }` — next steps calls only per week
-   - `weeklyData`: array of `{ weekOf, count }` — combined (discovery + next steps) per week
-   - `dailyData`: array of `{ date, count }` — daily counts
-   - `discoveryTotal`, `nextStepsTotal`, `total`
+   - `weeklyData`: array of `{ weekOf, count }` — first-time discovery calls per week
+   - `weeklyFollowUps`: array of `{ weekOf, count }` — repeat-company calls per week
+   - `weeklyNextSteps`: array of `{ weekOf, count }` — next-steps calls per week
+   - `dailyData`: array of `{ date, count }` — daily first-time discovery counts
+   - `discoveryTotal`, `followUpTotal`, `nextStepsTotal`, `total`
    - `avgPerWeek`, `currentWeek`, `priorWeek`, `trend`
-   - `flaggedEvents`: borderline events with classification reasoning
+   - `discoveryDetails`: full audit list of counted discovery calls
+   - `excludedRepeats`: sample of excluded repeat-company calls
+   - `excludedNextSteps`: sample of excluded next-steps calls
 
 ## Computation Steps
 1. Locate dependency input where `slug == "weekly-discovery-calls"` and read its `values`.
-2. Build a trailing-30 weekly series using `weeklyDiscovery` (discovery-only counts):
-   - Preferred: if `dailyData` is present, compute exact 30-day windows for each week ending date.
-   - Fallback: if only `weeklyDiscovery` exists, estimate each trailing 30 value as:
+2. Build a trailing-30 weekly series using `weeklyData` (first-time discovery counts only):
+   - Preferred: if `dailyData` is present, compute exact 30-day rolling windows for each week ending date.
+   - Fallback: if only `weeklyData` exists, estimate each trailing-30 value as:
      current week plus prior 3 full weeks plus (2/7 * week-4), rounded to nearest integer.
 3. Compute summary metrics from that trailing series:
-   - `trailing30`: most recent trailing value
-   - `peak`, `peakWeek`: max trailing value and week
-   - `trough`, `troughWeek`: min trailing value and week
-   - `avgTrailing`: average trailing value
-4. Also compute next-steps trailing metrics:
-   - `nextStepsTrailing30`: trailing 30-day next steps count
-   - `nextStepsTotal`: total next steps calls
+   - `trailing30`: most recent trailing-30 value
+   - `peak`, `peakWeek`: max trailing value and which week
+   - `trough`, `troughWeek`: min trailing value and which week
+   - `avgTrailing`: average trailing-30 across all weeks
+4. Also surface follow-up and next-steps totals for context:
+   - `followUpTotal`, `nextStepsTotal` from dependency
 5. Compute monthly context:
-   - `byMonth`: aggregate discovery counts by month from daily data or weekly buckets
+   - `byMonth`: aggregate first-time discovery counts by month from daily data or weekly buckets
 
 ## Values to Return
-- `trailing30`: current trailing 30-day discovery count
-- `peak`: highest weekly trailing 30 value
+- `trailing30`: current trailing 30-day first-time discovery count
+- `peak`: highest weekly trailing-30 value
 - `peakWeek`: ISO date of peak week
-- `trough`: lowest weekly trailing 30 value
+- `trough`: lowest weekly trailing-30 value
 - `troughWeek`: ISO date of trough week
-- `total`: total discovery calls in dependency lookback
-- `avgTrailing`: average trailing 30 across all weeks
-- `weeklyData`: array of { weekOf, trailing30 } for the chart (discovery only)
-- `byMonth`: object of month -> discovery count
-- `nextStepsTrailing30`: current trailing 30-day next steps count
-- `nextStepsTotal`: total next steps calls
-- `flaggedEvents`: passed through from dependency for audit
+- `total`: total first-time discovery calls in dependency lookback
+- `avgTrailing`: average trailing-30 across all weeks
+- `weeklyData`: array of { weekOf, trailing30 } for the chart
+- `byMonth`: object of month -> first-time discovery count
+- `followUpTotal`: total repeat-company calls (context)
+- `nextStepsTotal`: total next-steps calls (context)
+- `discoveryDetails`: passed through from dependency for audit
+- `excludedRepeats`: passed through from dependency for audit
 ', '(() => {
   const data = DATA_PLACEHOLDER;
   const current = CURRENT_PLACEHOLDER;
@@ -1860,7 +1862,7 @@ You will receive one dependency input:
       <MetricNote>Each point = trailing 30-day discovery calls · Source: Weekly Discovery Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
-})()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["trailing disco","disco calls trailing","discovery trailing"],"dependencies":["weekly-discovery-calls"]}', '2026-02-17T00:57:37+00:00', '2026-02-18T06:23:14+00:00');
+})()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["trailing disco","disco calls trailing","discovery trailing"],"dependencies":["weekly-discovery-calls"]}', '2026-02-17T00:57:37+00:00', '2026-02-18T06:35:15+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('32c77dad-2b50-44f9-b9e0-5b4d668d2bca', 'Trailing Follow-Up Calls', 'trailing-followup-calls', 'Compute trailing 30-day follow-up call metrics using dependency input from `weekly-followup-calls`. Do not call calendar APIs in this metric.
 
 ## Dependency Input
@@ -1935,7 +1937,9 @@ You will receive one dependency input:
     </MetricSection>
   );
 })()', 259200, 'claude', NULL, NULL, 1, 0, '{"dependencies":["weekly-followup-calls"]}', '2026-02-17T01:46:35+00:00', '2026-02-17T16:22:19.185+00:00');
-INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('e559abdf-19d9-b054-ee6c-9bb3b88a39f7', 'Weekly Discovery Calls', 'weekly-discovery-calls', 'Count discovery calls per week from David''s calendar (david@kiingo.com).
+INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('e559abdf-19d9-b054-ee6c-9bb3b88a39f7', 'Weekly Discovery Calls', 'weekly-discovery-calls', 'Count first-time discovery calls per week from David''s calendar (david@kiingo.com).
+
+A "discovery call" is the FIRST external-facing sales conversation with a new prospect company. Repeat meetings with the same company and explicit next-steps/follow-up calls are excluded.
 
 ## Data Source
 Microsoft Calendar via Kiingo MCP `calendar.listEvents()`.
@@ -1963,81 +1967,109 @@ Use `mailboxEmailAddress`, `startDateTime`, and `endDateTime` exactly. Do not us
 - Avoid debug loops or large verbose dumps of raw events.
 - Do not call any MCP help/introspection tools for this metric. Use only `calendar.listEvents` with the exact parameter names above.
 
-## Classification: Two-Pass Filter
+## Date Ranges
+- **Reporting window**: trailing 12 weeks from today (this is what gets charted).
+- **Lookback window**: fetch an EXTRA 12 weeks before the reporting window (24 weeks total from today). The earlier 12 weeks are used ONLY to detect whether a company has been seen before. They do NOT appear in the weekly counts or charts.
 
-### Pass 1: Hard Exclusions (discard immediately)
+So if today is Feb 17, 2026:
+- Fetch events from Aug 25, 2025 through Feb 17, 2026 (24 weeks).
+- Report weekly counts only for the trailing 12 weeks (Nov 24, 2025 through Feb 17, 2026).
+- Use the earlier 12 weeks (Aug 25 - Nov 23) solely as "prior history" to detect repeat companies.
+
+## Classification Pipeline
+
+### Step 1: Hard Exclusions (discard immediately)
 - Cancelled events (`isCancelled === true`)
 - All-day events (`isAllDay === true`)
-- Events with NO external attendees (see Pass 2 for definition of external)
 - Personal blocks: subject matches PTO, Busy, Out of Office, Blocked, Focus Time, Lunch
 - Daily standups / recurring internal rhythms: Tactical Session, Standup, Daily Sync
 
-### Pass 2: External-Facing Test (MANDATORY)
+### Step 2: External-Facing Test (MANDATORY)
 An event is **external-facing** ONLY if it has at least one attendee whose email domain is NOT in this internal list:
   `kiingo.com`, `fireflies.ai`, `promax.com`
 
-If every attendee''s email domain is in that internal list, the event is INTERNAL regardless of its title. Discard it.
+If every attendee''s email domain is in that internal list, the event is INTERNAL — discard it.
 
 Note: `fireflies.ai` is a meeting recorder bot. `promax.com` is an internal team member''s secondary domain. Neither counts as an external participant.
 
-### Pass 3: Classify External-Facing Events
+### Step 3: Exclude Next Steps and Follow-Up Calls
+Discard any event whose subject matches any of these patterns (case-insensitive):
+- Contains "Next Steps" (e.g., "Kiingo AI - Next Steps Workshop - ...")
+- Contains "Next Step" (singular)
+- Contains "Follow-up" or "Follow up"
+- Contains "Second Call" or "2nd Call"
+- Contains "Proposal Review"
+- Contains "Workshop" when combined with a person''s name (the standard next-steps format)
+- Contains "Bootcamp" (this is delivery, not discovery)
 
-**DISCOVERY CALL** — First or early-stage sales conversation with a prospect. Must match one of:
-- Subject contains "Consultative Call" (the standard Kiingo discovery call format: "Kiingo AI and [Company] Consultative Call")
-- Subject contains any of: discovery, intro call, introduction, initial meeting, demo request, exploratory, first call
-- Subject is "Kiingo AI and [something]" (without "Next Steps" or "Workshop") AND has external attendees — this is the generic format for a discovery meeting
+These are pipeline-progression meetings, not first-time discovery calls.
 
-**NEXT STEPS CALL** — Follow-up conversation after an initial discovery call. Must match:
-- Subject contains "Next Steps Workshop" or "Next Steps"
-- Subject contains: follow-up, follow up, second call, proposal review, next step
-
-**EXCLUDE** even if external attendees are present:
-- Internal meetings: 1:1, check-in, sync, standup, retrospective, planning, pipeline sync, social hour, show-and-tell, L10, handoff, training (if subject says "Internal Training")
-- Sales/Marketing Weekly Planning, Sales Pipeline Sync, Sales Handoff Flow
+### Step 4: Exclude Internal Meetings (even if external attendees present)
+Discard events matching these patterns (case-insensitive):
+- 1:1, Check-in, Sync, Standup, Retrospective, Planning
+- Pipeline Sync, Pipeline Review, Sales Pipeline
+- Social Hour, Show-and-Tell, L10, Handoff
+- "Internal Training", "HubSpot Training"
+- "Sales/Marketing Weekly", "Sales Handoff"
 - Webinars or conferences with 20+ attendees
-- Subject is just "Kiingo AI" with no company name and the context looks like an internal follow-up
 
-### Pass 4: Deduplication
-Deduplicate by normalized key: `date + lowercase(subject)`. If the same meeting appears twice, count it once.
+### Step 5: Extract Company Domain
+For each remaining external-facing event, extract the **primary external company domain**:
+- Collect all external attendee email domains (excluding kiingo.com, fireflies.ai, promax.com).
+- The primary domain is the most common external domain among attendees.
+- Normalize: lowercase, strip subdomains (e.g., "mail.example.com" → "example.com").
+- Personal email domains (gmail.com, yahoo.com, icloud.com, aol.com, hotmail.com, outlook.com) should be treated as unique per-email — don''t group different gmail users as the same "company."
 
-## Retrieval and Computation Steps
-1. Compute trailing 12-week date range ending today.
-2. Fetch David events with `calendar.listEvents` using exact params above.
-3. Parse arrays safely:
-   - `davidEvents = Array.isArray(davidResult?.events) ? davidResult.events : []`
-4. Parse event start timestamps robustly (support `event.start?.dateTime` and plain string fallback).
-5. Run the 4-pass classification above on every event.
-6. Build outputs in the same execution flow:
-   - weeklyDiscovery: { weekOf, count } — discovery calls per ISO week (Mon-Sun)
-   - weeklyNextSteps: { weekOf, count } — next steps calls per ISO week
-   - weeklyData: { weekOf, count } — total client-facing calls (discovery + next steps) per week
-   - dailyData: { date, count } for each date in trailing 12-week range
-   - discoveryTotal, nextStepsTotal
-   - avgPerWeek (discovery only)
-   - currentWeek, priorWeek (discovery counts)
-   - trend from last 4 weeks: increasing, decreasing, flat
-   - flaggedEvents: array of { date, subject, classification, reason } for any events that were borderline or ambiguous (max 10) — this helps the user audit the classification
+### Step 6: First-Time Company Check (CRITICAL)
+For each event, check whether the primary company domain has appeared in ANY earlier external-facing event (going back to the start of the 24-week fetch window):
+- If this is the **first time** this company domain appears → **DISCOVERY CALL** ✓
+- If this company domain appeared in a **prior event** (earlier date) → **REPEAT CALL** ✗ — exclude from discovery count
+
+Process events in chronological order so the first occurrence is always the one that counts.
+
+### Step 7: Deduplication
+Deduplicate by normalized key: `date + lowercase(subject)`. If the same meeting appears twice on the same day, count it once.
+
+## Output Computation
+After classification, build:
+- **weeklyDiscovery**: `{ weekOf, count }` — first-time discovery calls per ISO week (Mon-Sun), for the trailing 12-week reporting window ONLY
+- **weeklyFollowUps**: `{ weekOf, count }` — repeat company calls per week (events that passed Steps 1-4 but failed Step 6)
+- **weeklyNextSteps**: `{ weekOf, count }` — events excluded at Step 3 (next steps/follow-up calls)
+- **dailyData**: `{ date, count }` — discovery calls per day
+- **discoveryTotal**: total first-time discovery calls in the 12-week reporting window
+- **followUpTotal**: total repeat calls in the 12-week reporting window
+- **nextStepsTotal**: total next-steps calls in the 12-week reporting window
+- **avgPerWeek**: average discovery calls per full week
+- **currentWeek**, **priorWeek**: discovery counts for current and prior week
+- **trend**: increasing, decreasing, or flat based on last 4 weeks of discovery counts
+- **discoveryDetails**: array of { date, subject, companyDomain, classification: "discovery" } for all counted discovery calls (full list, for audit)
+- **excludedRepeats**: array of { date, subject, companyDomain, firstSeenDate } for repeat-company calls (max 20, for audit)
+- **excludedNextSteps**: array of { date, subject } for next-steps calls (max 20, for audit)
 
 ## Narrative Context
-- Discovery calls are early-funnel sales conversations with new prospects.
+- Discovery calls are FIRST-TIME early-funnel sales conversations with new prospects.
 - David is the primary owner for discovery activity.
-- Healthy pace is generally 5-10 discovery calls per week.
-- Next steps calls indicate deals progressing through the pipeline.
+- Healthy pace is generally 5-10 first-time discovery calls per week.
+- Repeat calls with the same company indicate pipeline progression but are NOT new discovery.
+- The 12-week lookback for company history prevents inflating counts with returning prospects.
 
 ## Values to Return
-- currentWeek: discovery call count for current week
-- priorWeek: discovery call count for prior full week
-- weeklyData: array of { weekOf, count } for trailing 12 weeks (discovery + next steps combined)
-- weeklyDiscovery: array of { weekOf, count } for discovery calls only
-- weeklyNextSteps: array of { weekOf, count } for next steps calls only
-- dailyData: array of { date, count } for trailing 12 weeks
-- discoveryTotal: total discovery calls in the period
-- nextStepsTotal: total next steps calls in the period
-- total: discoveryTotal + nextStepsTotal
-- avgPerWeek: average discovery calls per full week
-- trend: increasing, decreasing, or flat based on last 4 weeks of discovery
-- flaggedEvents: array of borderline events with classification reasoning
-', '', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["disco calls","weekly disco","discovery"]}', '2026-02-16T23:05:21Z', '2026-02-18T06:22:52+00:00');
+- currentWeek: first-time discovery count for current week
+- priorWeek: first-time discovery count for prior full week
+- weeklyData: array of { weekOf, count } for trailing 12 weeks (discovery only)
+- weeklyFollowUps: array of { weekOf, count } for repeat-company calls
+- weeklyNextSteps: array of { weekOf, count } for next-steps calls
+- dailyData: array of { date, count } for trailing 12 weeks (discovery only)
+- discoveryTotal: total first-time discovery calls
+- followUpTotal: total repeat-company calls
+- nextStepsTotal: total next-steps calls
+- total: discoveryTotal + followUpTotal + nextStepsTotal (all external-facing)
+- avgPerWeek: average first-time discovery calls per full week
+- trend: increasing, decreasing, or flat
+- discoveryDetails: full list of counted discovery calls with company domain
+- excludedRepeats: sample of excluded repeat-company calls with first-seen date
+- excludedNextSteps: sample of excluded next-steps calls
+', '', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["disco calls","weekly disco","discovery"]}', '2026-02-16T23:05:21Z', '2026-02-18T06:34:55+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('65e79c58-154a-5e6d-6a25-ba4610bb1829', 'Weekly Follow-Up Calls', 'weekly-followup-calls', 'Count follow-up and next-step calls per week from Michael''s (michael@kiingo.com) calendar.
 
 ## Data Source
@@ -3278,66 +3310,53 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
   );
 })()', 'completed', '2026-02-17T23:34:33+00:00', '2026-02-17T23:34:33+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('df922d65-5adb-4ee6-858e-297771c600c4', 'd6fe7a31-00ad-41e4-9379-b4ec83a346b7', '{"teamWorkload":[{"dueThisWeek":8,"name":"Becky Clark","open":33,"overdue":3},{"dueThisWeek":10,"name":"Isabelle Coloma","open":101,"overdue":5},{"dueThisWeek":25,"name":"James Hill-Jiang","open":98,"overdue":9},{"dueThisWeek":15,"name":"Jordan McDaniel","open":112,"overdue":15},{"dueThisWeek":5,"name":"Josh Sullivan","open":113,"overdue":4},{"dueThisWeek":3,"name":"Ross Hartmann","open":107,"overdue":1},{"dueThisWeek":27,"name":"Sohrab Azad","open":130,"overdue":1},{"dueThisWeek":0,"name":"Andy Woods","open":0,"overdue":0},{"dueThisWeek":0,"name":"David Rodriguez","open":0,"overdue":0},{"dueThisWeek":0,"name":"Jess Hartmann","open":1,"overdue":0},{"dueThisWeek":0,"name":"Kym Parodo","open":2,"overdue":2},{"dueThisWeek":0,"name":"Liesel Hartmann","open":0,"overdue":0},{"dueThisWeek":0,"name":"mich@kiingo.com","open":0,"overdue":0},{"dueThisWeek":0,"name":"Michael Glaser","open":0,"overdue":0},{"dueThisWeek":0,"name":"Ryan Keiper","open":0,"overdue":0},{"dueThisWeek":0,"name":"Schuyler Dragoo","open":0,"overdue":0},{"dueThisWeek":0,"name":"Taylor Hartmann","open":0,"overdue":0}],"totalOpenTasks":697,"totalOverdue":40}', '(() => { const data = [{"name":"Sohrab Azad","open":130,"dueThisWeek":27,"overdue":1},{"name":"Josh Sullivan","open":113,"dueThisWeek":5,"overdue":4},{"name":"Jordan McDaniel","open":112,"dueThisWeek":15,"overdue":15},{"name":"Ross Hartmann","open":107,"dueThisWeek":3,"overdue":1},{"name":"Isabelle Coloma","open":101,"dueThisWeek":10,"overdue":5},{"name":"James Hill-Jiang","open":98,"dueThisWeek":25,"overdue":9},{"name":"Becky Clark","open":33,"dueThisWeek":8,"overdue":3},{"name":"Kym Parodo","open":2,"dueThisWeek":0,"overdue":2},{"name":"Jess Hartmann","open":1,"dueThisWeek":0,"overdue":0}].filter(d => d.open > 0); const totalOpen = 697; const totalOverdue = 40; return ( <MetricSection> <MetricRow> <StatCard label="Total Open Tasks" value={totalOpen} subtitle="Across team" /> <StatCard label="Overdue" value={totalOverdue} subtitle="Past due date" trendDirection={totalOverdue > 5 ? ''down'' : ''flat''} /> </MetricRow> <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}> <ResponsiveContainer width="100%" height="100%"> <BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 110, bottom: 5 }}> <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} /> <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} /> <YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={105} /> <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} /> <Bar dataKey="open" name="Open" fill={theme.accent} radius={[0,4,4,0]} /> <Bar dataKey="overdue" name="Overdue" fill={theme.danger} radius={[0,4,4,0]} /> </BarChart> </ResponsiveContainer> </div> <MetricNote>Source: Asana Tasks via Kiingo MCP • As of Feb 15, 2026</MetricNote> </MetricSection> ); })()', 'completed', '2026-02-15T19:28:47.450515+00:00', '2026-02-15T19:29:43.477586+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('d9df9007-2ea9-481f-9865-e0891be1915d', 'e559abdf-19d9-b054-ee6c-9bb3b88a39f7', '{"avgPerWeek":12.6,"currentWeek":0,"priorWeek":14,"total":153,"trend":"decreasing","weeklyData":[{"count":6,"weekOf":"2025-11-24"},{"count":13,"weekOf":"2025-12-01"},{"count":18,"weekOf":"2025-12-08"},{"count":10,"weekOf":"2025-12-15"},{"count":8,"weekOf":"2025-12-22"},{"count":3,"weekOf":"2025-12-29"},{"count":18,"weekOf":"2026-01-05"},{"count":18,"weekOf":"2026-01-12"},{"count":19,"weekOf":"2026-01-19"},{"count":15,"weekOf":"2026-01-26"},{"count":9,"weekOf":"2026-02-02"},{"count":14,"weekOf":"2026-02-09"}]}', '(() => {
- const weeklyData = [{"weekOf":"2025-11-24","count":6},{"weekOf":"2025-12-01","count":13},{"weekOf":"2025-12-08","count":18},{"weekOf":"2025-12-15","count":10},{"weekOf":"2025-12-22","count":8},{"weekOf":"2025-12-29","count":3},{"weekOf":"2026-01-05","count":18},{"weekOf":"2026-01-12","count":18},{"weekOf":"2026-01-19","count":19},{"weekOf":"2026-01-26","count":15},{"weekOf":"2026-02-02","count":9},{"weekOf":"2026-02-09","count":14}];
- const total = 153;
- const avgPerWeek = 12.6;
- const currentWeek = 0;
- const priorWeek = 14;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('70e886e2-bbb5-43b8-9bcf-6be058f77852', 'e559abdf-19d9-b054-ee6c-9bb3b88a39f7', '{"avgPerWeek":10.8,"currentWeek":1,"discoveryTotal":123,"nextStepsTotal":38,"priorWeek":12,"total":161,"trend":"decreasing","weeklyData":[{"count":10,"weekOf":"2025-12-01"},{"count":22,"weekOf":"2025-12-08"},{"count":13,"weekOf":"2025-12-15"},{"count":8,"weekOf":"2025-12-22"},{"count":3,"weekOf":"2025-12-29"},{"count":21,"weekOf":"2026-01-05"},{"count":23,"weekOf":"2026-01-12"},{"count":21,"weekOf":"2026-01-19"},{"count":11,"weekOf":"2026-01-26"},{"count":10,"weekOf":"2026-02-02"},{"count":15,"weekOf":"2026-02-09"},{"count":1,"weekOf":"2026-02-16"}],"weeklyDiscovery":[{"count":7,"weekOf":"2025-12-01"},{"count":17,"weekOf":"2025-12-08"},{"count":10,"weekOf":"2025-12-15"},{"count":6,"weekOf":"2025-12-22"},{"count":2,"weekOf":"2025-12-29"},{"count":17,"weekOf":"2026-01-05"},{"count":18,"weekOf":"2026-01-12"},{"count":16,"weekOf":"2026-01-19"},{"count":7,"weekOf":"2026-01-26"},{"count":7,"weekOf":"2026-02-02"},{"count":12,"weekOf":"2026-02-09"},{"count":1,"weekOf":"2026-02-16"}],"weeklyNextSteps":[{"count":3,"weekOf":"2025-12-01"},{"count":5,"weekOf":"2025-12-08"},{"count":3,"weekOf":"2025-12-15"},{"count":2,"weekOf":"2025-12-22"},{"count":1,"weekOf":"2025-12-29"},{"count":4,"weekOf":"2026-01-05"},{"count":5,"weekOf":"2026-01-12"},{"count":5,"weekOf":"2026-01-19"},{"count":4,"weekOf":"2026-01-26"},{"count":3,"weekOf":"2026-02-02"},{"count":3,"weekOf":"2026-02-09"},{"count":0,"weekOf":"2026-02-16"}]}', '(() => {
+ const weeklyDiscovery = [{"weekOf":"2025-12-01","count":7},{"weekOf":"2025-12-08","count":17},{"weekOf":"2025-12-15","count":10},{"weekOf":"2025-12-22","count":6},{"weekOf":"2025-12-29","count":2},{"weekOf":"2026-01-05","count":17},{"weekOf":"2026-01-12","count":18},{"weekOf":"2026-01-19","count":16},{"weekOf":"2026-01-26","count":7},{"weekOf":"2026-02-02","count":7},{"weekOf":"2026-02-09","count":12},{"weekOf":"2026-02-16","count":1}];
+ const weeklyNextSteps = [{"weekOf":"2025-12-01","count":3},{"weekOf":"2025-12-08","count":5},{"weekOf":"2025-12-15","count":3},{"weekOf":"2025-12-22","count":2},{"weekOf":"2025-12-29","count":1},{"weekOf":"2026-01-05","count":4},{"weekOf":"2026-01-12","count":5},{"weekOf":"2026-01-19","count":5},{"weekOf":"2026-01-26","count":4},{"weekOf":"2026-02-02","count":3},{"weekOf":"2026-02-09","count":3},{"weekOf":"2026-02-16","count":0}];
+ const chartData = weeklyDiscovery.map((d, i) => ({ weekOf: d.weekOf, label: d.weekOf.slice(5), discovery: d.count, nextSteps: weeklyNextSteps[i].count }));
+ const currentWeek = 1;
+ const priorWeek = 12;
+ const discoveryTotal = 123;
+ const nextStepsTotal = 38;
+ const avgPerWeek = 10.8;
  const trend = ''decreasing'';
-
- const formatWeek = (iso) => {
- const d = new Date(iso + ''T00:00:00Z'');
- return d.toLocaleDateString(''en-US'', { month: ''short'', day: ''numeric'', timeZone: ''UTC'' });
- };
-
- const wowDelta = currentWeek - priorWeek;
- const wowLabel = wowDelta > 0 ? `+${wowDelta} vs last week` : wowDelta < 0 ? `${wowDelta} vs last week` : ''flat vs last week'';
- const trendIcon = trend === ''increasing'' ? ''↑'' : trend === ''decreasing'' ? ''↓'' : ''→'';
- const trendColor = trend === ''increasing'' ? theme.accent : trend === ''decreasing'' ? theme.danger : theme.inkMuted;
-
- const HEALTHY_MIN = 3;
- const HEALTHY_MAX = 5;
-
- const chartData = weeklyData.map(w => ({ ...w, label: formatWeek(w.weekOf) }));
-
+ const weekDelta = currentWeek - priorWeek;
+ const trendDir = trend === ''increasing'' ? ''up'' : trend === ''decreasing'' ? ''down'' : ''flat'';
+ const priorLabel = weekDelta >= 0 ? `+${weekDelta} vs last week` : `${weekDelta} vs last week`;
  return (
  <MetricSection title="Weekly Discovery Calls">
  <MetricRow>
- <StatCard label="This Week" value={currentWeek} subtitle="Mon–Sun" trend={wowLabel} trendDirection={wowDelta >= 0 ? ''up'' : ''down''} />
- <StatCard label="Prior Week" value={priorWeek} subtitle="Feb 9–15" />
- <StatCard label="12-Week Total" value={total} subtitle="153 calls" />
- <StatCard label="Avg / Week" value={avgPerWeek} subtitle="completed weeks" />
+ <StatCard label="This Week" value={currentWeek} subtitle={priorLabel} trend={priorLabel} trendDirection={weekDelta >= 0 ? ''up'' : ''down''} />
+ <StatCard label="Last Week" value={priorWeek} subtitle="Full week" />
+ <StatCard label="12-Wk Total" value={discoveryTotal} subtitle="Discovery calls" />
+ <StatCard label="Avg / Week" value={avgPerWeek.toFixed(1)} subtitle="Discovery (excl. current)" />
+ <StatCard label="Next Steps" value={nextStepsTotal} subtitle="12-week total" />
  </MetricRow>
-
- <div style={{ marginTop: 24, height: 240 }}>
- <ResponsiveContainer width="100%" height="100%">
- <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+ <div style={{ marginTop: 24 }}>
+ <div style={{ fontSize: 13, fontWeight: 600, color: theme.inkMuted, marginBottom: 12, textTransform: ''uppercase'', letterSpacing: ''0.05em'' }}>Discovery &amp; Next Steps Calls — Trailing 12 Weeks</div>
+ <ResponsiveContainer width="100%" height={260}>
+ <BarChart data={chartData} barGap={2} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
  <defs>
- <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
- <stop offset="0%" stopColor={theme.accent} stopOpacity={0.9} />
- <stop offset="100%" stopColor={theme.accent} stopOpacity={0.5} />
+ <linearGradient id="discoveryGrad" x1="0" y1="0" x2="0" y2="1">
+ <stop offset="0%" stopColor={theme.accent} stopOpacity={0.95} />
+ <stop offset="100%" stopColor={theme.gradientFrom} stopOpacity={0.6} />
  </linearGradient>
  </defs>
  <CartesianGrid stroke={theme.gridStroke} vertical={false} />
- <XAxis dataKey="label" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} interval={0} angle={-30} textAnchor="end" height={48} />
- <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} allowDecimals={false} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v) => [v, ''Discovery Calls'']} labelFormatter={(l) => `Week of ${l}`} />
- <ReferenceLine y={HEALTHY_MAX} stroke={theme.accent} strokeDasharray="4 3" strokeOpacity={0.4} label={{ value: ''Healthy max'', fill: theme.inkMuted, fontSize: 10, position: ''insideTopRight'' }} />
- <Bar dataKey="count" fill="url(#barGrad)" radius={[4, 4, 0, 0]} maxBarSize={36} />
+ <XAxis dataKey="label" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickLine={false} />
+ <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickLine={false} axisLine={false} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(val, name) => [val, name === ''discovery'' ? ''Discovery'' : ''Next Steps'']} labelFormatter={l => `Week of ${l}`} />
+ <Legend formatter={v => v === ''discovery'' ? ''Discovery'' : ''Next Steps''} wrapperStyle={{ fontSize: 12, color: theme.inkMuted }} />
+ <ReferenceLine y={10} stroke={theme.accent} strokeDasharray="4 3" strokeOpacity={0.4} label={{ value: ''Target (10)'', position: ''insideTopRight'', fill: theme.inkMuted, fontSize: 11 }} />
+ <Bar dataKey="discovery" fill="url(#discoveryGrad)" radius={[4, 4, 0, 0]} maxBarSize={32} />
+ <Bar dataKey="nextSteps" fill={theme.accentStrong} radius={[4, 4, 0, 0]} maxBarSize={32} fillOpacity={0.75} />
  </BarChart>
  </ResponsiveContainer>
  </div>
-
- <div style={{ display: ''flex'', alignItems: ''center'', gap: 8, marginTop: 12 }}>
- <span style={{ color: trendColor, fontWeight: 700, fontSize: 15 }}>{trendIcon} {trend.charAt(0).toUpperCase() + trend.slice(1)}</span>
- <span style={{ color: theme.inkMuted, fontSize: 13 }}>trend over last 4 weeks</span>
- </div>
-
- <MetricNote>David''s calendar · Trailing 12 weeks (Nov 24, 2025 – Feb 17, 2026) · 312 events scanned · Cancelled and all-day events excluded</MetricNote>
+ <MetricNote>David''s calendar · 2025-12-01 → 2026-02-17 · {discoveryTotal} discovery + {nextStepsTotal} next steps = {discoveryTotal + nextStepsTotal} total client calls · 4-week trend: {trend}</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-17T18:59:26.210054+00:00', '2026-02-17T19:02:08.476607+00:00');
+})()', 'completed', '2026-02-18T06:26:26.443506+00:00', '2026-02-18T06:28:02.965271+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('8a64b74d-c0fb-42e1-adbc-094ef1f6a0f7', 'eac7d43a-5003-48aa-9165-fc869d8597f2', '{"ltmRevenue":1949261.97,"momGrowth":-27.38,"netMargin":34.47,"openPipeline":1895070,"trailing3Avg":160779.95,"winRate":37.76}', '(() => { const ltmRevenue = 1949261.97; const openPipeline = 1895070; const winRate = 37.76; const netMargin = 34.47; const momGrowth = -27.38; return ( <MetricSection> <MetricRow> <StatCard label="LTM Revenue" value={''$'' + (ltmRevenue / 1000).toFixed(0) + ''K''} subtitle="Invoiced (12 mo)" trend={momGrowth.toFixed(1) + ''% MoM''} trendDirection="down" /> <StatCard label="Open Pipeline" value={''$'' + (openPipeline / 1000).toFixed(0) + ''K''} subtitle="Active deals" /> <StatCard label="Win Rate" value={winRate.toFixed(1) + ''%''} subtitle="Closed won / total" /> <StatCard label="Net Margin" value={netMargin.toFixed(1) + ''%''} subtitle="LTM accrual" /> </MetricRow> </MetricSection> ); })()', 'completed', '2026-02-16T16:16:54.131503+00:00', '2026-02-16T16:22:03.839053+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('8cde9fee-a00c-42d3-aecc-30d0f52cb031', 'ebc99ea9-2609-4b9c-bcf0-71d191cae36a', '{"avgDealSize": 3783, "avgDaysToClose": 12, "pipelineCoverage": 3.9, "dealsClosedLTM": 415}', '(() => {
   const avgSize = 3783;
