@@ -846,7 +846,6 @@ impl Default for EncryptionScope {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskFacet {
-    pub title: String,
     pub status: TaskStatus,
     pub priority: i32,
     pub soft_due_at: Option<DateTime<Utc>>,

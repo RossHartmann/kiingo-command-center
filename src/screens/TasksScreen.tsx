@@ -21,6 +21,7 @@ import {
   workSessionsList
 } from "../lib/tauriClient";
 import type { AtomRecord, ConditionRecord, DecisionPrompt, FeatureFlag, TaskStatus, WorkSessionRecord } from "../lib/types";
+import { taskDisplayTitle } from "../lib/taskTitle";
 import { useAppActions, useAppState } from "../state/appState";
 
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
@@ -87,8 +88,7 @@ function loadTasksSectionCollapsePreference(): TasksSectionCollapseState {
 }
 
 function taskTitle(atom: AtomRecord): string {
-  const fallback = atom.rawText.trim();
-  return atom.facetData.task?.title ?? (fallback || "Untitled");
+  return taskDisplayTitle(atom, "Untitled task");
 }
 
 function priorityLabel(priority: number): string {

@@ -1,25 +1,27 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    ArchiveAtomRequest, AtomFacets, AtomRecord, AtomRelations, BodyPatch, BooleanResponse,
-    BlockRecord, CreateBlockInNotepadRequest,
-    ClassificationResult, ClassificationSource, CreateAtomRequest, EncryptionScope, FacetKind,
-    DeleteAtomRequest,
-    ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest,
-    ConditionSetDateRequest, ConditionSetPersonRequest, ConditionSetTaskRequest, GovernanceMeta, ListAtomsRequest,
-    ListBlocksRequest, ListConditionsRequest, ListEventsRequest, ListPlacementsRequest, NotepadFilter,
-    NotepadSort, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest,
-    SaveNotepadViewRequest, SensitivityLevel, SetTaskStatusRequest, TaskFacet, TaskReopenRequest,
-    TaskStatus, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord, WorkspaceHealth,
-    AtomRelationsPatch, AttentionUpdateRequest, AttentionUpdateResponse, DecisionGenerateRequest,
-    DecisionGenerateResponse, DecisionMutationPayload, DecisionPrompt, FeatureFlag, GovernancePoliciesResponse,
-    JobDefinition, JobMutationPayload, JobRunRecord, MigrationPlan, MigrationRun, NotificationDeliveryRecord,
-    NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint, ProjectionDefinition,
-    ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
-    RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate,
-    RegistrySuggestionsResponse, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload,
-    SemanticChunk, SemanticReindexResponse, SemanticSearchHit, SemanticSearchRequest, SemanticSearchResponse,
-    WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord,
-    WorkSessionStartRequest, WorkspaceCapabilitySnapshot, WorkspaceMutationPayload, ObsidianTaskSyncResult,
+    ArchiveAtomRequest, AtomFacets, AtomRecord, AtomRelations, AtomRelationsPatch,
+    AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord, BodyPatch, BooleanResponse,
+    ClassificationResult, ClassificationSource, ConditionCancelRequest, ConditionFollowupRequest,
+    ConditionRecord, ConditionResolveRequest, ConditionSetDateRequest, ConditionSetPersonRequest,
+    ConditionSetTaskRequest, CreateAtomRequest, CreateBlockInNotepadRequest,
+    DecisionGenerateRequest, DecisionGenerateResponse, DecisionMutationPayload, DecisionPrompt,
+    DeleteAtomRequest, EncryptionScope, FacetKind, FeatureFlag, GovernanceMeta,
+    GovernancePoliciesResponse, JobDefinition, JobMutationPayload, JobRunRecord, ListAtomsRequest,
+    ListBlocksRequest, ListConditionsRequest, ListEventsRequest, ListPlacementsRequest,
+    MigrationPlan, MigrationRun, NotepadFilter, NotepadSort, NotepadViewDefinition,
+    NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload,
+    ObsidianTaskSyncResult, PageResponse, PlacementRecord, PlacementReorderRequest,
+    ProjectionCheckpoint, ProjectionDefinition, ProjectionMutationPayload,
+    ProjectionRebuildResponse, RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse,
+    RecurrenceTemplate, RegistryEntry, RegistryMutationPayload, RegistrySuggestionsResponse,
+    RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload,
+    SaveNotepadViewRequest, SemanticChunk, SemanticReindexResponse, SemanticSearchHit,
+    SemanticSearchRequest, SemanticSearchResponse, SensitivityLevel, SetTaskStatusRequest,
+    TaskFacet, TaskReopenRequest, TaskStatus, UpdateAtomRequest, WorkSessionCancelRequest,
+    WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord, WorkSessionStartRequest,
+    WorkspaceCapabilities, WorkspaceCapabilitySnapshot, WorkspaceEventRecord, WorkspaceHealth,
+    WorkspaceMutationPayload,
 };
 use chrono::{DateTime, Datelike, NaiveDate, Utc, Weekday};
 use once_cell::sync::Lazy;
@@ -27,17 +29,17 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 use std::time::Duration;
-use wait_timeout::ChildExt;
 use uuid::Uuid;
+use wait_timeout::ChildExt;
 
 const ROOT_DIRS: &[&str] = &[
     "atoms/active",
@@ -116,7 +118,8 @@ pub fn capabilities(root: &Path) -> AppResult<WorkspaceCapabilities> {
     Ok(WorkspaceCapabilities {
         obsidian_cli_available: detect_obsidian_cli(),
         base_query_available: false,
-        selected_vault: detect_obsidian_vault_name().or_else(|| Some(root.to_string_lossy().to_string())),
+        selected_vault: detect_obsidian_vault_name()
+            .or_else(|| Some(root.to_string_lossy().to_string())),
         supported_commands: vec![
             "workspace_capabilities_get".to_string(),
             "workspace_health_get".to_string(),
@@ -238,7 +241,6 @@ pub fn health(root: &Path) -> AppResult<WorkspaceHealth> {
 struct ImportedObsidianTask {
     source_ref: String,
     raw_text: String,
-    title: String,
     status: TaskStatus,
 }
 
@@ -252,7 +254,10 @@ pub fn obsidian_tasks_sync(root: &Path) -> AppResult<ObsidianTaskSyncResult> {
     obsidian_tasks_sync_for_vault(root, &vault_root)
 }
 
-fn obsidian_tasks_sync_for_vault(root: &Path, vault_root: &Path) -> AppResult<ObsidianTaskSyncResult> {
+fn obsidian_tasks_sync_for_vault(
+    root: &Path,
+    vault_root: &Path,
+) -> AppResult<ObsidianTaskSyncResult> {
     let _suppress_cli_writes = suppress_obsidian_cli_writes();
     let (candidates, scanned_files) = collect_importable_obsidian_tasks(root, vault_root)?;
     let discovered_tasks = candidates.len();
@@ -309,7 +314,6 @@ fn obsidian_tasks_sync_for_vault(root: &Path, vault_root: &Path) -> AppResult<Ob
             facets: vec![FacetKind::Task],
             facet_data: AtomFacets {
                 task: Some(TaskFacet {
-                    title: candidate.title.clone(),
                     status: candidate.status,
                     priority: 3,
                     completed_at: if candidate.status == TaskStatus::Done {
@@ -437,10 +441,6 @@ fn apply_imported_task_candidate(
     }
     upsert_task_facet(atom);
     if let Some(task) = atom.facet_data.task.as_mut() {
-        if task.title != candidate.title {
-            task.title = candidate.title.clone();
-            changed = true;
-        }
         if task.status != candidate.status {
             task.status = candidate.status;
             changed = true;
@@ -507,7 +507,10 @@ fn collect_importable_obsidian_tasks(
             let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
             let path = entry.path();
             if path.is_dir() {
-                let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+                let name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default();
                 if name.eq_ignore_ascii_case(".obsidian") || name.eq_ignore_ascii_case(".git") {
                     continue;
                 }
@@ -632,8 +635,11 @@ fn parse_importable_task_line(
     out.push(ImportedObsidianTask {
         source_ref: format!("obsidian:{}#L{}", rel_path, line_no),
         raw_text: raw_text.clone(),
-        title: derive_title(&raw_text),
-        status: if done { TaskStatus::Done } else { TaskStatus::Todo },
+        status: if done {
+            TaskStatus::Done
+        } else {
+            TaskStatus::Todo
+        },
     });
 }
 
@@ -658,10 +664,16 @@ pub fn atom_get(root: &Path, atom_id: &str) -> AppResult<Option<AtomRecord>> {
 pub fn atom_create(root: &Path, request: CreateAtomRequest) -> AppResult<AtomRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
-    with_idempotency(root, "atom.create", key.as_deref(), &request, || atom_create_inner(root, request.clone()))
+    with_idempotency(root, "atom.create", key.as_deref(), &request, || {
+        atom_create_inner(root, request.clone())
+    })
 }
 
-pub fn atom_update(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> AppResult<AtomRecord> {
+pub fn atom_update(
+    root: &Path,
+    atom_id: &str,
+    request: UpdateAtomRequest,
+) -> AppResult<AtomRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(
@@ -673,7 +685,11 @@ pub fn atom_update(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> Ap
     )
 }
 
-pub fn atom_archive(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -> AppResult<AtomRecord> {
+pub fn atom_archive(
+    root: &Path,
+    atom_id: &str,
+    request: ArchiveAtomRequest,
+) -> AppResult<AtomRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(
@@ -685,7 +701,11 @@ pub fn atom_archive(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -> 
     )
 }
 
-pub fn atom_delete(root: &Path, atom_id: &str, request: DeleteAtomRequest) -> AppResult<BooleanResponse> {
+pub fn atom_delete(
+    root: &Path,
+    atom_id: &str,
+    request: DeleteAtomRequest,
+) -> AppResult<BooleanResponse> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(
@@ -714,7 +734,11 @@ pub fn atom_unarchive(
     )
 }
 
-fn atom_unarchive_inner(root: &Path, atom_id: &str, expected_revision: i64) -> AppResult<AtomRecord> {
+fn atom_unarchive_inner(
+    root: &Path,
+    atom_id: &str,
+    expected_revision: i64,
+) -> AppResult<AtomRecord> {
     let mut atom = get_required_atom(root, atom_id)?;
     assert_revision(&atom, expected_revision)?;
 
@@ -732,13 +756,24 @@ fn atom_unarchive_inner(root: &Path, atom_id: &str, expected_revision: i64) -> A
     atom.updated_at = now;
 
     write_atom(root, Some(previous_status), &atom)?;
-    append_event(root, build_event("atom.updated", Some(&atom.id), json!({"atom": atom.clone()})))?;
+    append_event(
+        root,
+        build_event(
+            "atom.updated",
+            Some(&atom.id),
+            json!({"atom": atom.clone()}),
+        ),
+    )?;
     let _ = upsert_block_from_atom(root, &atom)?;
 
     Ok(atom)
 }
 
-fn atom_delete_inner(root: &Path, atom_id: &str, request: DeleteAtomRequest) -> AppResult<BooleanResponse> {
+fn atom_delete_inner(
+    root: &Path,
+    atom_id: &str,
+    request: DeleteAtomRequest,
+) -> AppResult<BooleanResponse> {
     let atom = get_required_atom(root, atom_id)?;
     assert_revision(&atom, request.expected_revision)?;
     if atom.archived_at.is_none() {
@@ -748,7 +783,8 @@ fn atom_delete_inner(root: &Path, atom_id: &str, request: DeleteAtomRequest) -> 
     }
     if !atom_has_no_meaningful_content(&atom) {
         return Err(AppError::Policy(
-            "POLICY_DENIED: atom_delete only permits archived atoms with no text/body content".to_string(),
+            "POLICY_DENIED: atom_delete only permits archived atoms with no text/body content"
+                .to_string(),
         ));
     }
 
@@ -812,7 +848,11 @@ fn atom_delete_inner(root: &Path, atom_id: &str, request: DeleteAtomRequest) -> 
     Ok(BooleanResponse { success: true })
 }
 
-pub fn task_status_set(root: &Path, atom_id: &str, request: SetTaskStatusRequest) -> AppResult<AtomRecord> {
+pub fn task_status_set(
+    root: &Path,
+    atom_id: &str,
+    request: SetTaskStatusRequest,
+) -> AppResult<AtomRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(
@@ -842,7 +882,11 @@ pub fn task_complete(
     )
 }
 
-pub fn task_reopen(root: &Path, atom_id: &str, request: TaskReopenRequest) -> AppResult<AtomRecord> {
+pub fn task_reopen(
+    root: &Path,
+    atom_id: &str,
+    request: TaskReopenRequest,
+) -> AppResult<AtomRecord> {
     task_status_set(
         root,
         atom_id,
@@ -860,7 +904,9 @@ pub fn notepads_list(root: &Path) -> AppResult<Vec<NotepadViewDefinition>> {
     ensure_now_notepad(root)?;
 
     let mut items = Vec::new();
-    for entry in fs::read_dir(root.join("notepads")).map_err(|error| AppError::Io(error.to_string()))? {
+    for entry in
+        fs::read_dir(root.join("notepads")).map_err(|error| AppError::Io(error.to_string()))?
+    {
         let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
         let path = entry.path();
         if !is_workspace_doc_file(&path) {
@@ -880,7 +926,11 @@ pub fn notepads_list(root: &Path) -> AppResult<Vec<NotepadViewDefinition>> {
         items.push(now);
     }
 
-    items.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
+    items.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
     Ok(items)
 }
 
@@ -895,7 +945,10 @@ pub fn notepad_get(root: &Path, notepad_id: &str) -> AppResult<Option<NotepadVie
     read_notepad_file(root, &path).map(Some)
 }
 
-pub fn notepad_save(root: &Path, request: SaveNotepadViewRequest) -> AppResult<NotepadViewDefinition> {
+pub fn notepad_save(
+    root: &Path,
+    request: SaveNotepadViewRequest,
+) -> AppResult<NotepadViewDefinition> {
     ensure_topology(root)?;
     ensure_now_notepad(root)?;
     let key = request.idempotency_key.clone();
@@ -918,7 +971,9 @@ pub fn notepad_delete(
         &json!({"notepadId": notepad_id}),
         || {
             if notepad_id == "now" {
-                return Err(AppError::Policy("Cannot delete system notepad 'now'".to_string()));
+                return Err(AppError::Policy(
+                    "Cannot delete system notepad 'now'".to_string(),
+                ));
             }
 
             let path = resolve_notepad_path(root, notepad_id);
@@ -1045,7 +1100,6 @@ fn notepad_block_create_inner(
 
     let task_facet = if initial_facets.contains(&FacetKind::Task) {
         Some(TaskFacet {
-            title: derive_title(&request.raw_text),
             status: task_status,
             priority: task_priority,
             commitment_level: capture_defaults.commitment_level,
@@ -1086,7 +1140,10 @@ fn notepad_block_create_inner(
     Ok(block)
 }
 
-pub fn blocks_list(root: &Path, request: ListBlocksRequest) -> AppResult<PageResponse<BlockRecord>> {
+pub fn blocks_list(
+    root: &Path,
+    request: ListBlocksRequest,
+) -> AppResult<PageResponse<BlockRecord>> {
     ensure_topology(root)?;
     backfill_blocks_from_atoms(root)?;
     let mut blocks = load_all_blocks(root)?;
@@ -1097,7 +1154,11 @@ pub fn blocks_list(root: &Path, request: ListBlocksRequest) -> AppResult<PageRes
     if let Some(lifecycle) = request.lifecycle.as_ref() {
         blocks.retain(|block| block.lifecycle.eq_ignore_ascii_case(lifecycle));
     }
-    if let Some(query) = request.text_query.as_ref().map(|value| value.to_ascii_lowercase()) {
+    if let Some(query) = request
+        .text_query
+        .as_ref()
+        .map(|value| value.to_ascii_lowercase())
+    {
         blocks.retain(|block| block.text.to_ascii_lowercase().contains(&query));
     }
     if let Some(notepad_id) = request.notepad_id.as_ref() {
@@ -1144,7 +1205,10 @@ pub fn placements_list(
     paginate(placements, request.limit, request.cursor)
 }
 
-pub fn placement_save(root: &Path, placement: WorkspaceMutationPayload) -> AppResult<PlacementRecord> {
+pub fn placement_save(
+    root: &Path,
+    placement: WorkspaceMutationPayload,
+) -> AppResult<PlacementRecord> {
     ensure_topology(root)?;
     let mut placement = mutation_payload_to_value(placement);
     let idempotency_key = extract_required_idempotency_key(&mut placement, "placement.save")?;
@@ -1160,16 +1224,26 @@ pub fn placement_save(root: &Path, placement: WorkspaceMutationPayload) -> AppRe
             let view_id = object
                 .get("viewId")
                 .and_then(Value::as_str)
-                .ok_or_else(|| AppError::Policy("VALIDATION_ERROR: placement viewId required".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::Policy("VALIDATION_ERROR: placement viewId required".to_string())
+                })?;
             let block_id = object
                 .get("blockId")
                 .and_then(Value::as_str)
-                .ok_or_else(|| AppError::Policy("VALIDATION_ERROR: placement blockId required".to_string()))?;
+                .ok_or_else(|| {
+                    AppError::Policy("VALIDATION_ERROR: placement blockId required".to_string())
+                })?;
             if !resolve_notepad_path(root, view_id).exists() {
-                return Err(AppError::NotFound(format!("Notepad '{}' not found", view_id)));
+                return Err(AppError::NotFound(format!(
+                    "Notepad '{}' not found",
+                    view_id
+                )));
             }
             if find_block(root, block_id)?.is_none() {
-                return Err(AppError::NotFound(format!("Block '{}' not found", block_id)));
+                return Err(AppError::NotFound(format!(
+                    "Block '{}' not found",
+                    block_id
+                )));
             }
             object
                 .entry("schemaVersion".to_string())
@@ -1187,10 +1261,7 @@ pub fn placement_save(root: &Path, placement: WorkspaceMutationPayload) -> AppRe
                 placement.clone(),
                 expected_revision,
             )?;
-            append_event(
-                root,
-                build_event("placement.saved", None, saved.clone()),
-            )?;
+            append_event(root, build_event("placement.saved", None, saved.clone()))?;
             deserialize_entity(saved, "placement")
         },
     )
@@ -1263,7 +1334,8 @@ fn placements_reorder_inner(
     }
     if request.ordered_placement_ids.len() != by_id.len() {
         return Err(AppError::Policy(
-            "VALIDATION_ERROR: placement reorder requires a full ordered placement id list".to_string(),
+            "VALIDATION_ERROR: placement reorder requires a full ordered placement id list"
+                .to_string(),
         ));
     }
 
@@ -1354,7 +1426,10 @@ pub fn condition_get(root: &Path, condition_id: &str) -> AppResult<Option<Condit
     deserialize_optional_entity(value, "condition")
 }
 
-pub fn condition_set_date(root: &Path, request: ConditionSetDateRequest) -> AppResult<ConditionRecord> {
+pub fn condition_set_date(
+    root: &Path,
+    request: ConditionSetDateRequest,
+) -> AppResult<ConditionRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(root, "condition.set_date", key.as_deref(), &request, || {
@@ -1367,12 +1442,21 @@ pub fn condition_set_date(root: &Path, request: ConditionSetDateRequest) -> AppR
             "blockedUntil": request.until_at,
         });
         let saved = upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
-        if let Some(atom) = atom_get(root, saved.get("atomId").and_then(Value::as_str).unwrap_or_default())? {
+        if let Some(atom) = atom_get(
+            root,
+            saved
+                .get("atomId")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )? {
             apply_blocking_to_atom(
                 root,
                 &atom.id,
                 "date",
-                saved.get("blockedUntil").and_then(Value::as_str).map(|value| value.to_string()),
+                saved
+                    .get("blockedUntil")
+                    .and_then(Value::as_str)
+                    .map(|value| value.to_string()),
                 None,
                 None,
                 None,
@@ -1380,50 +1464,80 @@ pub fn condition_set_date(root: &Path, request: ConditionSetDateRequest) -> AppR
         }
         append_event(
             root,
-            build_event("condition.set", saved.get("atomId").and_then(Value::as_str), saved.clone()),
+            build_event(
+                "condition.set",
+                saved.get("atomId").and_then(Value::as_str),
+                saved.clone(),
+            ),
         )?;
         deserialize_entity(saved, "condition")
     })
 }
 
-pub fn condition_set_person(root: &Path, request: ConditionSetPersonRequest) -> AppResult<ConditionRecord> {
+pub fn condition_set_person(
+    root: &Path,
+    request: ConditionSetPersonRequest,
+) -> AppResult<ConditionRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
-    with_idempotency(root, "condition.set_person", key.as_deref(), &request, || {
-        let now = Utc::now();
-        let cadence = request.cadence_days.max(1);
-        let condition = json!({
-            "id": condition_id_for_atom_mode(&request.atom_id, "person"),
-            "schemaVersion": 1,
-            "atomId": request.atom_id,
-            "status": "active",
-            "mode": "person",
-            "waitingOnPerson": request.waiting_on_person,
-            "waitingCadenceDays": cadence,
-            "lastFollowupAt": now,
-            "nextFollowupAt": now + chrono::Duration::days(i64::from(cadence)),
-        });
-        let saved = upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
-        if let Some(atom) = atom_get(root, saved.get("atomId").and_then(Value::as_str).unwrap_or_default())? {
-            apply_blocking_to_atom(
+    with_idempotency(
+        root,
+        "condition.set_person",
+        key.as_deref(),
+        &request,
+        || {
+            let now = Utc::now();
+            let cadence = request.cadence_days.max(1);
+            let condition = json!({
+                "id": condition_id_for_atom_mode(&request.atom_id, "person"),
+                "schemaVersion": 1,
+                "atomId": request.atom_id,
+                "status": "active",
+                "mode": "person",
+                "waitingOnPerson": request.waiting_on_person,
+                "waitingCadenceDays": cadence,
+                "lastFollowupAt": now,
+                "nextFollowupAt": now + chrono::Duration::days(i64::from(cadence)),
+            });
+            let saved =
+                upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
+            if let Some(atom) = atom_get(
                 root,
-                &atom.id,
-                "person",
-                None,
-                saved.get("waitingOnPerson").and_then(Value::as_str).map(|value| value.to_string()),
-                Some(cadence),
-                None,
+                saved
+                    .get("atomId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )? {
+                apply_blocking_to_atom(
+                    root,
+                    &atom.id,
+                    "person",
+                    None,
+                    saved
+                        .get("waitingOnPerson")
+                        .and_then(Value::as_str)
+                        .map(|value| value.to_string()),
+                    Some(cadence),
+                    None,
+                )?;
+            }
+            append_event(
+                root,
+                build_event(
+                    "condition.set",
+                    saved.get("atomId").and_then(Value::as_str),
+                    saved.clone(),
+                ),
             )?;
-        }
-        append_event(
-            root,
-            build_event("condition.set", saved.get("atomId").and_then(Value::as_str), saved.clone()),
-        )?;
-        deserialize_entity(saved, "condition")
-    })
+            deserialize_entity(saved, "condition")
+        },
+    )
 }
 
-pub fn condition_set_task(root: &Path, request: ConditionSetTaskRequest) -> AppResult<ConditionRecord> {
+pub fn condition_set_task(
+    root: &Path,
+    request: ConditionSetTaskRequest,
+) -> AppResult<ConditionRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(root, "condition.set_task", key.as_deref(), &request, || {
@@ -1436,7 +1550,13 @@ pub fn condition_set_task(root: &Path, request: ConditionSetTaskRequest) -> AppR
             "blockerAtomId": request.blocker_atom_id,
         });
         let saved = upsert_json_entity(root, "conditions/active", "condition", condition, None)?;
-        if let Some(atom) = atom_get(root, saved.get("atomId").and_then(Value::as_str).unwrap_or_default())? {
+        if let Some(atom) = atom_get(
+            root,
+            saved
+                .get("atomId")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )? {
             apply_blocking_to_atom(
                 root,
                 &atom.id,
@@ -1449,7 +1569,11 @@ pub fn condition_set_task(root: &Path, request: ConditionSetTaskRequest) -> AppR
         }
         append_event(
             root,
-            build_event("condition.set", saved.get("atomId").and_then(Value::as_str), saved.clone()),
+            build_event(
+                "condition.set",
+                saved.get("atomId").and_then(Value::as_str),
+                saved.clone(),
+            ),
         )?;
         deserialize_entity(saved, "condition")
     })
@@ -1469,8 +1593,13 @@ pub fn condition_followup_log(
         &json!({"conditionId": condition_id, "request": request}),
         || {
             let mut condition = get_json_entity(root, "conditions/active", condition_id)?
-                .ok_or_else(|| AppError::NotFound(format!("Condition '{}' not found", condition_id)))?;
-            let current_revision = condition.get("revision").and_then(Value::as_i64).unwrap_or(0);
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("Condition '{}' not found", condition_id))
+                })?;
+            let current_revision = condition
+                .get("revision")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             if current_revision != request.expected_revision {
                 return Err(conflict_payload_error(
                     "condition",
@@ -1481,7 +1610,8 @@ pub fn condition_followup_log(
             }
             if condition.get("mode").and_then(Value::as_str) != Some("person") {
                 return Err(AppError::Policy(
-                    "VALIDATION_ERROR: followup can only be logged on person conditions".to_string(),
+                    "VALIDATION_ERROR: followup can only be logged on person conditions"
+                        .to_string(),
                 ));
             }
             let now = request.followed_up_at.unwrap_or_else(Utc::now);
@@ -1490,13 +1620,19 @@ pub fn condition_followup_log(
                 .and_then(Value::as_i64)
                 .unwrap_or(7);
             let obj = get_object_mut(&mut condition)?;
-            obj.insert("lastFollowupAt".to_string(), Value::String(now.to_rfc3339()));
+            obj.insert(
+                "lastFollowupAt".to_string(),
+                Value::String(now.to_rfc3339()),
+            );
             obj.insert(
                 "nextFollowupAt".to_string(),
                 Value::String((now + chrono::Duration::days(cadence_days)).to_rfc3339()),
             );
             bump_json_revision(obj, Utc::now());
-            write_json_file(&json_entity_path(root, "conditions/active", condition_id), &condition)?;
+            write_json_file(
+                &json_entity_path(root, "conditions/active", condition_id),
+                &condition,
+            )?;
             append_event(
                 root,
                 build_event(
@@ -1515,7 +1651,14 @@ pub fn condition_resolve(
     condition_id: &str,
     request: ConditionResolveRequest,
 ) -> AppResult<ConditionRecord> {
-    transition_condition(root, condition_id, request.expected_revision, "satisfied", None, request.idempotency_key)
+    transition_condition(
+        root,
+        condition_id,
+        request.expected_revision,
+        "satisfied",
+        None,
+        request.idempotency_key,
+    )
 }
 
 pub fn condition_cancel(
@@ -1550,8 +1693,13 @@ fn transition_condition(
         &json!({"conditionId": condition_id, "expectedRevision": expected_revision, "reason": reason}),
         || {
             let mut condition = get_json_entity(root, "conditions/active", condition_id)?
-                .ok_or_else(|| AppError::NotFound(format!("Condition '{}' not found", condition_id)))?;
-            let current_revision = condition.get("revision").and_then(Value::as_i64).unwrap_or(0);
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("Condition '{}' not found", condition_id))
+                })?;
+            let current_revision = condition
+                .get("revision")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
             if current_revision != expected_revision {
                 return Err(conflict_payload_error(
                     "condition",
@@ -1566,7 +1714,10 @@ fn transition_condition(
                 .and_then(Value::as_str)
                 .map(|value| value.to_string());
             let obj = get_object_mut(&mut condition)?;
-            obj.insert("status".to_string(), Value::String(target_status.to_string()));
+            obj.insert(
+                "status".to_string(),
+                Value::String(target_status.to_string()),
+            );
             if target_status == "cancelled" {
                 obj.insert("canceledAt".to_string(), Value::String(now.to_rfc3339()));
             } else {
@@ -1600,7 +1751,10 @@ fn transition_condition(
     )
 }
 
-pub fn events_list(root: &Path, request: ListEventsRequest) -> AppResult<PageResponse<WorkspaceEventRecord>> {
+pub fn events_list(
+    root: &Path,
+    request: ListEventsRequest,
+) -> AppResult<PageResponse<WorkspaceEventRecord>> {
     ensure_topology(root)?;
 
     let mut events = load_all_events(root)?;
@@ -1677,7 +1831,6 @@ fn atom_classify_inner(
             }
             if atom.facet_data.task.is_none() {
                 atom.facet_data.task = Some(TaskFacet {
-                    title: derive_title(&atom.raw_text),
                     status: TaskStatus::Todo,
                     priority: 3,
                     ..TaskFacet::default()
@@ -1737,9 +1890,7 @@ fn atom_create_inner(root: &Path, request: CreateAtomRequest) -> AppResult<AtomR
 
     let mut facet_data = facet_data.unwrap_or_default();
     if facets.contains(&FacetKind::Task) && facet_data.task.is_none() {
-        let title = derive_title(&raw_text);
         facet_data.task = Some(TaskFacet {
-            title,
             status: TaskStatus::Todo,
             priority: 3,
             ..TaskFacet::default()
@@ -1764,13 +1915,24 @@ fn atom_create_inner(root: &Path, request: CreateAtomRequest) -> AppResult<AtomR
     };
 
     write_atom(root, None, &atom)?;
-    append_event(root, build_event("atom.created", Some(&atom.id), json!({"atom": atom.clone()})))?;
+    append_event(
+        root,
+        build_event(
+            "atom.created",
+            Some(&atom.id),
+            json!({"atom": atom.clone()}),
+        ),
+    )?;
     let block = upsert_block_from_atom(root, &atom)?;
     let _ = ensure_placement_for_view(root, &block.id, "now", None)?;
     Ok(atom)
 }
 
-fn atom_update_inner(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> AppResult<AtomRecord> {
+fn atom_update_inner(
+    root: &Path,
+    atom_id: &str,
+    request: UpdateAtomRequest,
+) -> AppResult<AtomRecord> {
     let mut atom = get_required_atom(root, atom_id)?;
     assert_revision(&atom, request.expected_revision)?;
 
@@ -1809,7 +1971,11 @@ fn atom_update_inner(root: &Path, atom_id: &str, request: UpdateAtomRequest) -> 
     Ok(atom)
 }
 
-fn atom_archive_inner(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -> AppResult<AtomRecord> {
+fn atom_archive_inner(
+    root: &Path,
+    atom_id: &str,
+    request: ArchiveAtomRequest,
+) -> AppResult<AtomRecord> {
     let mut atom = get_required_atom(root, atom_id)?;
     assert_revision(&atom, request.expected_revision)?;
 
@@ -1838,7 +2004,11 @@ fn atom_archive_inner(root: &Path, atom_id: &str, request: ArchiveAtomRequest) -
     Ok(atom)
 }
 
-fn task_status_set_inner(root: &Path, atom_id: &str, request: SetTaskStatusRequest) -> AppResult<AtomRecord> {
+fn task_status_set_inner(
+    root: &Path,
+    atom_id: &str,
+    request: SetTaskStatusRequest,
+) -> AppResult<AtomRecord> {
     let mut atom = get_required_atom(root, atom_id)?;
     assert_revision(&atom, request.expected_revision)?;
 
@@ -1877,7 +2047,11 @@ fn task_status_set_inner(root: &Path, atom_id: &str, request: SetTaskStatusReque
     if request.status == TaskStatus::Done {
         append_event(
             root,
-            build_event("task.completed", Some(&atom.id), json!({"completedAt": now})),
+            build_event(
+                "task.completed",
+                Some(&atom.id),
+                json!({"completedAt": now}),
+            ),
         )?;
     }
     let _ = upsert_block_from_atom(root, &atom)?;
@@ -1885,7 +2059,10 @@ fn task_status_set_inner(root: &Path, atom_id: &str, request: SetTaskStatusReque
     Ok(atom)
 }
 
-fn notepad_save_inner(root: &Path, request: SaveNotepadViewRequest) -> AppResult<NotepadViewDefinition> {
+fn notepad_save_inner(
+    root: &Path,
+    request: SaveNotepadViewRequest,
+) -> AppResult<NotepadViewDefinition> {
     let SaveNotepadViewRequest {
         expected_revision,
         idempotency_key: _,
@@ -1921,13 +2098,23 @@ fn notepad_save_inner(root: &Path, request: SaveNotepadViewRequest) -> AppResult
         }
     }
 
-    let created_at = existing.as_ref().map(|value| value.created_at).unwrap_or(now);
-    let revision = existing.as_ref().map(|value| value.revision + 1).unwrap_or(1);
+    let created_at = existing
+        .as_ref()
+        .map(|value| value.created_at)
+        .unwrap_or(now);
+    let revision = existing
+        .as_ref()
+        .map(|value| value.revision + 1)
+        .unwrap_or(1);
 
     let id = input.id.clone();
     let definition = NotepadViewDefinition {
         id,
-        schema_version: if input.schema_version <= 0 { 1 } else { input.schema_version },
+        schema_version: if input.schema_version <= 0 {
+            1
+        } else {
+            input.schema_version
+        },
         name: input.name,
         description: input.description,
         is_system: input.is_system || input.id == "now",
@@ -2203,7 +2390,6 @@ fn upsert_task_facet(atom: &mut AtomRecord) {
     }
     if atom.facet_data.task.is_none() {
         atom.facet_data.task = Some(TaskFacet {
-            title: derive_title(&atom.raw_text),
             status: TaskStatus::Todo,
             priority: 3,
             ..TaskFacet::default()
@@ -2239,11 +2425,13 @@ fn status_rel_dir(status: TaskStatus) -> &'static str {
 }
 
 fn atom_path(root: &Path, atom_id: &str, status: TaskStatus) -> PathBuf {
-    root.join(status_rel_dir(status)).join(format!("{}.md", sanitize_component(atom_id)))
+    root.join(status_rel_dir(status))
+        .join(format!("{}.md", sanitize_component(atom_id)))
 }
 
 fn notepad_path(root: &Path, notepad_id: &str) -> PathBuf {
-    root.join("notepads").join(format!("{}.md", sanitize_component(notepad_id)))
+    root.join("notepads")
+        .join(format!("{}.md", sanitize_component(notepad_id)))
 }
 
 fn resolve_notepad_path(root: &Path, notepad_id: &str) -> PathBuf {
@@ -2251,7 +2439,9 @@ fn resolve_notepad_path(root: &Path, notepad_id: &str) -> PathBuf {
     if primary.exists() {
         return primary;
     }
-    let legacy = root.join("notepads").join(format!("{}.json", sanitize_component(notepad_id)));
+    let legacy = root
+        .join("notepads")
+        .join(format!("{}.json", sanitize_component(notepad_id)));
     if legacy.exists() {
         return legacy;
     }
@@ -2259,7 +2449,10 @@ fn resolve_notepad_path(root: &Path, notepad_id: &str) -> PathBuf {
 }
 
 fn is_workspace_doc_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|value| value.to_str()), Some("json" | "md"))
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("json" | "md")
+    )
 }
 
 fn sanitize_component(input: &str) -> String {
@@ -2325,8 +2518,14 @@ fn read_markdown_frontmatter(_root: &Path, path: &Path) -> AppResult<(Value, Str
     let metadata: Value = match serde_json::from_str(frontmatter) {
         Ok(value) => value,
         Err(_) => {
-            let yaml_value: serde_yaml::Value = serde_yaml::from_str(frontmatter)
-                .map_err(|error| AppError::Policy(format!("Invalid frontmatter in {}: {}", path.to_string_lossy(), error)))?;
+            let yaml_value: serde_yaml::Value =
+                serde_yaml::from_str(frontmatter).map_err(|error| {
+                    AppError::Policy(format!(
+                        "Invalid frontmatter in {}: {}",
+                        path.to_string_lossy(),
+                        error
+                    ))
+                })?;
             serde_json::to_value(yaml_value)?
         }
     };
@@ -2334,12 +2533,18 @@ fn read_markdown_frontmatter(_root: &Path, path: &Path) -> AppResult<(Value, Str
     Ok((metadata, body))
 }
 
-fn write_markdown_frontmatter(_root: &Path, path: &Path, metadata: &Value, body: &str) -> AppResult<()> {
+fn write_markdown_frontmatter(
+    _root: &Path,
+    path: &Path,
+    metadata: &Value,
+    body: &str,
+) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| AppError::Io(error.to_string()))?;
     }
 
-    let metadata_yaml = serde_yaml::to_string(metadata).map_err(|error| AppError::Internal(error.to_string()))?;
+    let metadata_yaml =
+        serde_yaml::to_string(metadata).map_err(|error| AppError::Internal(error.to_string()))?;
     let rendered = format!("---\n{}---\n\n{}", metadata_yaml, body);
     if try_obsidian_cli_write_or_fail(path, &rendered)? {
         return Ok(());
@@ -2407,7 +2612,11 @@ fn read_notepad_file(root: &Path, path: &Path) -> AppResult<NotepadViewDefinitio
     }
 }
 
-fn write_notepad_file(root: &Path, path: &Path, definition: &NotepadViewDefinition) -> AppResult<()> {
+fn write_notepad_file(
+    root: &Path,
+    path: &Path,
+    definition: &NotepadViewDefinition,
+) -> AppResult<()> {
     let metadata = serde_json::to_value(definition)?;
     write_markdown_frontmatter(root, path, &metadata, "")
 }
@@ -2488,7 +2697,11 @@ fn normalize_newlines(input: &str) -> String {
     input.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn obsidian_cli_write_applied(path: &Path, expected_content: &str, previous_content: Option<&str>) -> bool {
+fn obsidian_cli_write_applied(
+    path: &Path,
+    expected_content: &str,
+    previous_content: Option<&str>,
+) -> bool {
     let Ok(actual_content) = fs::read_to_string(path) else {
         return false;
     };
@@ -2505,7 +2718,12 @@ fn obsidian_cli_write_applied(path: &Path, expected_content: &str, previous_cont
 
 fn run_obsidian_cli_status(bin: &str, args: &[&str], root: &Path) -> bool {
     let mut command = prepare_obsidian_command(bin, root);
-    let mut child = match command.args(args).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
+    let mut child = match command
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
         Ok(child) => child,
         Err(error) => {
             tracing::warn!(binary = %bin, error = %error, "obsidian command spawn failed");
@@ -2611,13 +2829,11 @@ fn detect_obsidian_vault_name() -> Option<String> {
 
 fn detect_obsidian_vault_path_from_config() -> Option<PathBuf> {
     let mut config_candidates = Vec::new();
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USER")
-                .map(PathBuf::from)
-                .map(|user| PathBuf::from("/Users").join(user))
-        });
+    let home = std::env::var_os("HOME").map(PathBuf::from).or_else(|| {
+        std::env::var_os("USER")
+            .map(PathBuf::from)
+            .map(|user| PathBuf::from("/Users").join(user))
+    });
     if let Some(home) = home {
         config_candidates.push(
             home.join("Library")
@@ -2637,7 +2853,11 @@ fn detect_obsidian_vault_path_from_config() -> Option<PathBuf> {
         config_candidates.push(PathBuf::from(xdg).join("obsidian").join("obsidian.json"));
     }
     if let Some(app_data) = std::env::var_os("APPDATA") {
-        config_candidates.push(PathBuf::from(app_data).join("obsidian").join("obsidian.json"));
+        config_candidates.push(
+            PathBuf::from(app_data)
+                .join("obsidian")
+                .join("obsidian.json"),
+        );
     }
 
     for config in config_candidates {
@@ -2714,7 +2934,11 @@ fn get_required_atom(root: &Path, atom_id: &str) -> AppResult<AtomRecord> {
     read_atom_file(root, &path)
 }
 
-fn write_atom(root: &Path, previous_status: Option<TaskStatus>, atom: &AtomRecord) -> AppResult<()> {
+fn write_atom(
+    root: &Path,
+    previous_status: Option<TaskStatus>,
+    atom: &AtomRecord,
+) -> AppResult<()> {
     let current_status = atom_status(atom);
     let next_path = atom_path(root, &atom.id, current_status);
 
@@ -2848,7 +3072,9 @@ fn atom_to_block_record(atom: &AtomRecord) -> BlockRecord {
             .as_ref()
             .map(|parent| block_id_for_atom(parent)),
         thread_ids: atom.relations.thread_ids.clone(),
-        labels: meta.and_then(|value| value.labels.clone()).unwrap_or_default(),
+        labels: meta
+            .and_then(|value| value.labels.clone())
+            .unwrap_or_default(),
         categories: meta
             .and_then(|value| value.categories.clone())
             .unwrap_or_default(),
@@ -2947,16 +3173,18 @@ fn ensure_placement_for_view(
         "orderKey": new_order_key(next_index),
         "pinned": false
     });
-    let saved = upsert_json_entity(root, "placements/by-view", "placement", placement_value, None)?;
+    let saved = upsert_json_entity(
+        root,
+        "placements/by-view",
+        "placement",
+        placement_value,
+        None,
+    )?;
     deserialize_entity(saved, "placement")
 }
 
 fn new_order_key(index: i64) -> String {
-    format!(
-        "{:08}-{}",
-        index.max(0),
-        Uuid::new_v4().simple()
-    )
+    format!("{:08}-{}", index.max(0), Uuid::new_v4().simple())
 }
 
 fn condition_id_for_atom_mode(atom_id: &str, mode: &str) -> String {
@@ -2984,9 +3212,11 @@ fn apply_blocking_to_atom(
     }
     atom.facet_data.blocking = Some(crate::models::BlockingFacet {
         mode: mode.to_string(),
-        blocked_until: blocked_until
-            .as_deref()
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok().map(|value| value.with_timezone(&Utc))),
+        blocked_until: blocked_until.as_deref().and_then(|value| {
+            DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|value| value.with_timezone(&Utc))
+        }),
         waiting_on_person,
         waiting_cadence_days,
         blocked_by_atom_id,
@@ -3039,7 +3269,10 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
     let thread_ids = filter.thread_ids.clone();
     let labels = filter.labels.clone();
     let categories = filter.categories.clone();
-    let text_query = filter.text_query.as_ref().map(|value| value.to_ascii_lowercase());
+    let text_query = filter
+        .text_query
+        .as_ref()
+        .map(|value| value.to_ascii_lowercase());
     let attention_layers = filter.attention_layers.clone();
     let commitment_levels = filter.commitment_levels.clone();
     let due_from = filter.due_from.as_deref().and_then(parse_filter_date);
@@ -3127,7 +3360,12 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
                 .task
                 .as_ref()
                 .and_then(|task| task.attention_layer)
-                .or_else(|| atom.facet_data.attention.as_ref().map(|attention| attention.layer));
+                .or_else(|| {
+                    atom.facet_data
+                        .attention
+                        .as_ref()
+                        .map(|attention| attention.layer)
+                });
             let Some(actual_layer) = actual_layer else {
                 return false;
             };
@@ -3142,7 +3380,12 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
                 .task
                 .as_ref()
                 .and_then(|task| task.commitment_level)
-                .or_else(|| atom.facet_data.commitment.as_ref().map(|commitment| commitment.level));
+                .or_else(|| {
+                    atom.facet_data
+                        .commitment
+                        .as_ref()
+                        .map(|commitment| commitment.level)
+                });
             let Some(actual_level) = actual_level else {
                 return false;
             };
@@ -3152,16 +3395,12 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
         }
 
         if due_from.is_some() || due_to.is_some() {
-            let due = atom
-                .facet_data
-                .task
-                .as_ref()
-                .and_then(|task| {
-                    task.hard_due_at
-                        .as_ref()
-                        .or(task.soft_due_at.as_ref())
-                        .map(|value| value.date_naive())
-                });
+            let due = atom.facet_data.task.as_ref().and_then(|task| {
+                task.hard_due_at
+                    .as_ref()
+                    .or(task.soft_due_at.as_ref())
+                    .map(|value| value.date_naive())
+            });
             let Some(due) = due else {
                 return false;
             };
@@ -3182,9 +3421,7 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
             if let Some(body) = atom.body.as_ref() {
                 haystacks.push(body.to_ascii_lowercase());
             }
-            if let Some(task) = atom.facet_data.task.as_ref() {
-                haystacks.push(task.title.to_ascii_lowercase());
-            }
+            haystacks.push(derive_title(&atom.raw_text).to_ascii_lowercase());
             if !haystacks.iter().any(|value| value.contains(query)) {
                 return false;
             }
@@ -3202,53 +3439,43 @@ fn sort_atoms(atoms: &mut [AtomRecord], sort: Option<&Vec<NotepadSort>>) {
 fn compare_atoms(a: &AtomRecord, b: &AtomRecord, sorts: Option<&Vec<NotepadSort>>) -> Ordering {
     if let Some(sorts) = sorts {
         for sort in sorts {
-            let ordering = match sort.field.as_str() {
-                "createdAt" => a.created_at.cmp(&b.created_at),
-                "updatedAt" => a.updated_at.cmp(&b.updated_at),
-                "priority" => a
-                    .facet_data
-                    .task
-                    .as_ref()
-                    .map(|task| task.priority)
-                    .unwrap_or(99)
-                    .cmp(&b.facet_data.task.as_ref().map(|task| task.priority).unwrap_or(99)),
-                "softDueAt" => compare_optional_datetime(
-                    a.facet_data
+            let ordering =
+                match sort.field.as_str() {
+                    "createdAt" => a.created_at.cmp(&b.created_at),
+                    "updatedAt" => a.updated_at.cmp(&b.updated_at),
+                    "priority" => a
+                        .facet_data
                         .task
                         .as_ref()
-                        .and_then(|task| task.soft_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
-                    b.facet_data
-                        .task
-                        .as_ref()
-                        .and_then(|task| task.soft_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
-                ),
-                "hardDueAt" => compare_optional_datetime(
-                    a.facet_data
-                        .task
-                        .as_ref()
-                        .and_then(|task| task.hard_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
-                    b.facet_data
-                        .task
-                        .as_ref()
-                        .and_then(|task| task.hard_due_at.as_ref().map(DateTime::<Utc>::timestamp)),
-                ),
-                "attentionLayer" => attention_rank(a)
-                    .cmp(&attention_rank(b)),
-                "title" => a
-                    .facet_data
-                    .task
-                    .as_ref()
-                    .map(|task| task.title.as_str())
-                    .unwrap_or("")
-                    .cmp(
-                        &b.facet_data
-                            .task
-                            .as_ref()
-                            .map(|task| task.title.as_str())
-                            .unwrap_or(""),
+                        .map(|task| task.priority)
+                        .unwrap_or(99)
+                        .cmp(
+                            &b.facet_data
+                                .task
+                                .as_ref()
+                                .map(|task| task.priority)
+                                .unwrap_or(99),
+                        ),
+                    "softDueAt" => compare_optional_datetime(
+                        a.facet_data.task.as_ref().and_then(|task| {
+                            task.soft_due_at.as_ref().map(DateTime::<Utc>::timestamp)
+                        }),
+                        b.facet_data.task.as_ref().and_then(|task| {
+                            task.soft_due_at.as_ref().map(DateTime::<Utc>::timestamp)
+                        }),
                     ),
-                _ => Ordering::Equal,
-            };
+                    "hardDueAt" => compare_optional_datetime(
+                        a.facet_data.task.as_ref().and_then(|task| {
+                            task.hard_due_at.as_ref().map(DateTime::<Utc>::timestamp)
+                        }),
+                        b.facet_data.task.as_ref().and_then(|task| {
+                            task.hard_due_at.as_ref().map(DateTime::<Utc>::timestamp)
+                        }),
+                    ),
+                    "attentionLayer" => attention_rank(a).cmp(&attention_rank(b)),
+                    "title" => derive_title(&a.raw_text).cmp(&derive_title(&b.raw_text)),
+                    _ => Ordering::Equal,
+                };
 
             let ordering = if sort.direction.eq_ignore_ascii_case("desc") {
                 ordering.reverse()
@@ -3275,7 +3502,12 @@ fn attention_rank(atom: &AtomRecord) -> i32 {
         .task
         .as_ref()
         .and_then(|task| task.attention_layer)
-        .or_else(|| atom.facet_data.attention.as_ref().map(|attention| attention.layer));
+        .or_else(|| {
+            atom.facet_data
+                .attention
+                .as_ref()
+                .map(|attention| attention.layer)
+        });
     match layer {
         Some(crate::models::AttentionLayer::L3) => 0,
         Some(crate::models::AttentionLayer::Ram) => 1,
@@ -3300,7 +3532,11 @@ fn parse_filter_date(input: &str) -> Option<NaiveDate> {
         })
 }
 
-fn paginate<T>(items: Vec<T>, limit: Option<u32>, cursor: Option<String>) -> AppResult<PageResponse<T>> {
+fn paginate<T>(
+    items: Vec<T>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> AppResult<PageResponse<T>> {
     let total = items.len();
     let offset = parse_cursor(cursor)?;
     let page_size = limit.unwrap_or(100).clamp(1, 500) as usize;
@@ -3325,9 +3561,12 @@ fn parse_cursor(cursor: Option<String>) -> AppResult<usize> {
     let Some(value) = cursor else {
         return Ok(0);
     };
-    value
-        .parse::<usize>()
-        .map_err(|_| AppError::Policy(format!("Invalid cursor '{}': expected numeric offset", value)))
+    value.parse::<usize>().map_err(|_| {
+        AppError::Policy(format!(
+            "Invalid cursor '{}': expected numeric offset",
+            value
+        ))
+    })
 }
 
 fn append_event(root: &Path, event: WorkspaceEventRecord) -> AppResult<()> {
@@ -3437,7 +3676,11 @@ fn default_now_notepad(now: DateTime<Utc>) -> NotepadViewDefinition {
         is_system: true,
         filters: NotepadFilter {
             facet: Some(FacetKind::Task),
-            statuses: Some(vec![TaskStatus::Todo, TaskStatus::Doing, TaskStatus::Blocked]),
+            statuses: Some(vec![
+                TaskStatus::Todo,
+                TaskStatus::Doing,
+                TaskStatus::Blocked,
+            ]),
             include_archived: Some(false),
             ..NotepadFilter::default()
         },
@@ -3475,7 +3718,9 @@ fn deserialize_optional_entity<T: DeserializeOwned>(
     value: Option<Value>,
     entity: &str,
 ) -> AppResult<Option<T>> {
-    value.map(|inner| deserialize_entity(inner, entity)).transpose()
+    value
+        .map(|inner| deserialize_entity(inner, entity))
+        .transpose()
 }
 
 fn deserialize_page<T: DeserializeOwned>(
@@ -3527,7 +3772,13 @@ pub fn rule_save(root: &Path, rule: RuleMutationPayload) -> AppResult<RuleDefini
         Some(idempotency_key.as_str()),
         &payload,
         || {
-            let saved = upsert_json_entity(root, "rules/definitions", "rule", rule.clone(), expected_revision)?;
+            let saved = upsert_json_entity(
+                root,
+                "rules/definitions",
+                "rule",
+                rule.clone(),
+                expected_revision,
+            )?;
             deserialize_entity(saved, "rule")
         },
     )
@@ -3660,7 +3911,13 @@ pub fn job_save(root: &Path, job: JobMutationPayload) -> AppResult<JobDefinition
         Some(idempotency_key.as_str()),
         &payload,
         || {
-            let saved = upsert_json_entity(root, "jobs/schedules", "job", job.clone(), expected_revision)?;
+            let saved = upsert_json_entity(
+                root,
+                "jobs/schedules",
+                "job",
+                job.clone(),
+                expected_revision,
+            )?;
             deserialize_entity(saved, "job")
         },
     )
@@ -3727,26 +3984,25 @@ pub fn job_run(
                 "payload": payload,
                 "jobSnapshot": job
             });
-            upsert_json_entity(root, "jobs/runs", "jobrun", run, None)
-                .and_then(|saved| {
-                    append_event(
-                        root,
-                        build_event(
-                            "job.run.started",
-                            None,
-                            json!({"jobRunId": saved.get("id"), "jobId": job_id}),
-                        ),
-                    )?;
-                    append_event(
-                        root,
-                        build_event(
-                            "job.run.completed",
-                            None,
-                            json!({"jobRunId": saved.get("id"), "jobId": job_id}),
-                        ),
-                    )?;
-                    deserialize_entity(saved, "job run")
-                })
+            upsert_json_entity(root, "jobs/runs", "jobrun", run, None).and_then(|saved| {
+                append_event(
+                    root,
+                    build_event(
+                        "job.run.started",
+                        None,
+                        json!({"jobRunId": saved.get("id"), "jobId": job_id}),
+                    ),
+                )?;
+                append_event(
+                    root,
+                    build_event(
+                        "job.run.completed",
+                        None,
+                        json!({"jobRunId": saved.get("id"), "jobId": job_id}),
+                    ),
+                )?;
+                deserialize_entity(saved, "job run")
+            })
         },
     )
 }
@@ -3806,13 +4062,23 @@ pub fn decision_create(root: &Path, prompt: DecisionMutationPayload) -> AppResul
         Some(idempotency_key.as_str()),
         &payload,
         || {
-            let mut saved = upsert_json_entity(root, "prompts/pending", "decision", prompt.clone(), expected_revision)?;
+            let mut saved = upsert_json_entity(
+                root,
+                "prompts/pending",
+                "decision",
+                prompt.clone(),
+                expected_revision,
+            )?;
             if let Some(obj) = saved.as_object_mut() {
                 if !obj.contains_key("status") {
                     obj.insert("status".to_string(), Value::String("pending".to_string()));
                 }
             }
-            let id = saved.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+            let id = saved
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             write_json_file(&json_entity_path(root, "prompts/pending", &id), &saved)?;
             append_event(
                 root,
@@ -3851,7 +4117,10 @@ pub fn decision_resolve(
             let obj = get_object_mut(&mut decision)?;
             let now = Utc::now();
             obj.insert("status".to_string(), Value::String("resolved".to_string()));
-            obj.insert("resolvedOptionId".to_string(), Value::String(option_id.clone()));
+            obj.insert(
+                "resolvedOptionId".to_string(),
+                Value::String(option_id.clone()),
+            );
             if let Some(notes) = notes.clone() {
                 obj.insert("resolutionNotes".to_string(), Value::String(notes));
             }
@@ -3895,7 +4164,10 @@ pub fn decision_snooze(
             let now = Utc::now();
             obj.insert("status".to_string(), Value::String("snoozed".to_string()));
             if let Some(until) = snoozed_until {
-                obj.insert("snoozedUntil".to_string(), Value::String(until.to_rfc3339()));
+                obj.insert(
+                    "snoozedUntil".to_string(),
+                    Value::String(until.to_rfc3339()),
+                );
             } else {
                 obj.remove("snoozedUntil");
             }
@@ -3962,7 +4234,10 @@ pub fn work_session_get(root: &Path, session_id: &str) -> AppResult<Option<WorkS
     deserialize_optional_entity(item, "work session")
 }
 
-pub fn work_session_start(root: &Path, request: WorkSessionStartRequest) -> AppResult<WorkSessionRecord> {
+pub fn work_session_start(
+    root: &Path,
+    request: WorkSessionStartRequest,
+) -> AppResult<WorkSessionRecord> {
     ensure_topology(root)?;
     let key = request.idempotency_key.clone();
     with_idempotency(root, "work.session.start", key.as_deref(), &request, || {
@@ -3977,7 +4252,11 @@ pub fn work_session_start(root: &Path, request: WorkSessionStartRequest) -> AppR
         let saved = upsert_json_entity(root, "sessions/work", "work_session", session, None)?;
         append_event(
             root,
-            build_event("work.session.started", None, json!({"sessionId": saved.get("id")})),
+            build_event(
+                "work.session.started",
+                None,
+                json!({"sessionId": saved.get("id")}),
+            ),
         )?;
         deserialize_entity(saved, "work session")
     })
@@ -3996,8 +4275,10 @@ pub fn work_session_note(
         key.as_deref(),
         &json!({"sessionId": session_id, "request": request}),
         || {
-            let mut session = get_json_entity(root, "sessions/work", session_id)?
-                .ok_or_else(|| AppError::NotFound(format!("Work session '{}' not found", session_id)))?;
+            let mut session =
+                get_json_entity(root, "sessions/work", session_id)?.ok_or_else(|| {
+                    AppError::NotFound(format!("Work session '{}' not found", session_id))
+                })?;
             let current_revision = session.get("revision").and_then(Value::as_i64).unwrap_or(0);
             if current_revision != request.expected_revision {
                 return Err(conflict_payload_error(
@@ -4016,7 +4297,10 @@ pub fn work_session_note(
                 items.push(Value::String(request.note.clone()));
             }
             bump_json_revision(obj, Utc::now());
-            write_json_file(&json_entity_path(root, "sessions/work", session_id), &session)?;
+            write_json_file(
+                &json_entity_path(root, "sessions/work", session_id),
+                &session,
+            )?;
             append_event(
                 root,
                 build_event(
@@ -4139,7 +4423,8 @@ pub fn recurrence_template_save(
 ) -> AppResult<RecurrenceTemplate> {
     ensure_topology(root)?;
     let mut template = mutation_payload_to_value(template);
-    let idempotency_key = extract_required_idempotency_key(&mut template, "recurrence.template.save")?;
+    let idempotency_key =
+        extract_required_idempotency_key(&mut template, "recurrence.template.save")?;
     let expected_revision = pop_expected_revision(&mut template);
     with_idempotency(
         root,
@@ -4179,7 +4464,8 @@ pub fn recurrence_template_update(
 ) -> AppResult<RecurrenceTemplate> {
     ensure_topology(root)?;
     let mut patch = mutation_payload_to_value(patch);
-    let idempotency_key = extract_required_idempotency_key(&mut patch, "recurrence.template.update")?;
+    let idempotency_key =
+        extract_required_idempotency_key(&mut patch, "recurrence.template.update")?;
     let expected_revision = pop_expected_revision(&mut patch);
     with_idempotency(
         root,
@@ -4210,7 +4496,9 @@ pub fn recurrence_instances_list(
     ensure_topology(root)?;
     let mut items = list_json_entities(root, "recurrence/instances")?;
     if let Some(template_id) = template_id.as_ref() {
-        items.retain(|item| item.get("templateId").and_then(Value::as_str) == Some(template_id.as_str()));
+        items.retain(|item| {
+            item.get("templateId").and_then(Value::as_str) == Some(template_id.as_str())
+        });
     }
     if let Some(status) = status.as_ref() {
         items.retain(|item| item.get("status").and_then(Value::as_str) == Some(status.as_str()));
@@ -4231,10 +4519,15 @@ pub fn recurrence_spawn(
     })
 }
 
-fn recurrence_spawn_inner(root: &Path, request: RecurrenceSpawnRequest) -> AppResult<RecurrenceSpawnResponse> {
+fn recurrence_spawn_inner(
+    root: &Path,
+    request: RecurrenceSpawnRequest,
+) -> AppResult<RecurrenceSpawnResponse> {
     let now = request.now.unwrap_or_else(Utc::now);
-    let allowed_ids: Option<HashSet<String>> = request.template_ids.map(|ids| ids.into_iter().collect());
-    let templates = recurrence_templates_list(root, Some("active".to_string()), Some(500), None)?.items;
+    let allowed_ids: Option<HashSet<String>> =
+        request.template_ids.map(|ids| ids.into_iter().collect());
+    let templates =
+        recurrence_templates_list(root, Some("active".to_string()), Some(500), None)?.items;
     let mut spawned_instance_ids = Vec::new();
     let mut touched_template_ids = Vec::new();
 
@@ -4254,13 +4547,17 @@ fn recurrence_spawn_inner(root: &Path, request: RecurrenceSpawnRequest) -> AppRe
                 root,
                 format!("recurrence-missed-cycle-{}", template.id),
                 format!("Missed recurrence cycle: {}", template.title_template),
-                "One or more recurrence cycles were missed. Decide whether to backfill or skip.".to_string(),
+                "One or more recurrence cycles were missed. Decide whether to backfill or skip."
+                    .to_string(),
                 Vec::new(),
             )?;
         }
 
         let capture = CreateBlockInNotepadRequest {
-            notepad_id: template.default_notepad_id.clone().unwrap_or_else(|| "now".to_string()),
+            notepad_id: template
+                .default_notepad_id
+                .clone()
+                .unwrap_or_else(|| "now".to_string()),
             raw_text: if template.raw_text_template.trim().is_empty() {
                 template.title_template.clone()
             } else {
@@ -4280,7 +4577,13 @@ fn recurrence_spawn_inner(root: &Path, request: RecurrenceSpawnRequest) -> AppRe
             "atomId": block.atom_id,
             "blockId": block.id,
         });
-        let instance = upsert_json_entity(root, "recurrence/instances", "recurrence_instance", instance_value, None)?;
+        let instance = upsert_json_entity(
+            root,
+            "recurrence/instances",
+            "recurrence_instance",
+            instance_value,
+            None,
+        )?;
         if let Some(id) = instance.get("id").and_then(Value::as_str) {
             spawned_instance_ids.push(id.to_string());
         }
@@ -4330,7 +4633,13 @@ fn system_apply_attention_update_inner(
     let mut atoms = load_all_atoms(root)?;
     let active_conditions = load_active_conditions_by_atom(root)?;
     let mut updated_atom_ids = Vec::new();
-    let mut candidates: Vec<(String, f64, bool, crate::models::AttentionLayer, Option<String>)> = Vec::new();
+    let mut candidates: Vec<(
+        String,
+        f64,
+        bool,
+        crate::models::AttentionLayer,
+        Option<String>,
+    )> = Vec::new();
 
     for atom in &atoms {
         if atom.archived_at.is_some() {
@@ -4391,7 +4700,9 @@ fn system_apply_attention_update_inner(
                 layer = crate::models::AttentionLayer::L3;
             } else if ram_allowed.contains(&atom.id) {
                 layer = crate::models::AttentionLayer::Ram;
-            } else if layer == crate::models::AttentionLayer::L3 || layer == crate::models::AttentionLayer::Ram {
+            } else if layer == crate::models::AttentionLayer::L3
+                || layer == crate::models::AttentionLayer::Ram
+            {
                 layer = crate::models::AttentionLayer::Short;
             }
         }
@@ -4504,8 +4815,9 @@ fn system_generate_decision_cards_inner(
                 let decision_id = upsert_system_decision(
                     root,
                     format!("overdue-hard-due-{}", atom.id),
-                    format!("Overdue task: {}", task.title),
-                    "Hard due date has passed. Choose whether to do now, reschedule, or de-scope.".to_string(),
+                    format!("Overdue task: {}", derive_title(&atom.raw_text)),
+                    "Hard due date has passed. Choose whether to do now, reschedule, or de-scope."
+                        .to_string(),
                     vec![atom.id.clone()],
                 )?;
                 created_or_updated_ids.push(decision_id);
@@ -4516,7 +4828,10 @@ fn system_generate_decision_cards_inner(
             let decision_id = upsert_system_decision(
                 root,
                 format!("blocked-missing-condition-{}", atom.id),
-                format!("Blocked task missing condition: {}", task.title),
+                format!(
+                    "Blocked task missing condition: {}",
+                    derive_title(&atom.raw_text)
+                ),
                 "Task is blocked but no explicit unblock condition is set.".to_string(),
                 vec![atom.id.clone()],
             )?;
@@ -4550,7 +4865,13 @@ pub fn notification_send(
         Some(idempotency_key.as_str()),
         &message,
         || {
-            let mut saved = upsert_json_entity(root, "notifications/messages", "message", message.clone(), None)?;
+            let mut saved = upsert_json_entity(
+                root,
+                "notifications/messages",
+                "message",
+                message.clone(),
+                None,
+            )?;
             let message_id = saved
                 .get("id")
                 .and_then(Value::as_str)
@@ -4559,8 +4880,12 @@ pub fn notification_send(
             if let Some(obj) = saved.as_object_mut() {
                 obj.entry("channel".to_string())
                     .or_insert_with(|| Value::String("in_app".to_string()));
-                obj.entry("priority".to_string()).or_insert_with(|| Value::from(3));
-                write_json_file(&json_entity_path(root, "notifications/messages", &message_id), &saved)?;
+                obj.entry("priority".to_string())
+                    .or_insert_with(|| Value::from(3));
+                write_json_file(
+                    &json_entity_path(root, "notifications/messages", &message_id),
+                    &saved,
+                )?;
             }
 
             let delivery = json!({
@@ -4570,7 +4895,8 @@ pub fn notification_send(
                 "attemptedAt": Utc::now(),
                 "providerMessageId": format!("inapp_{}", Uuid::new_v4().simple()),
             });
-            let _ = upsert_json_entity(root, "notifications/deliveries", "delivery", delivery, None)?;
+            let _ =
+                upsert_json_entity(root, "notifications/deliveries", "delivery", delivery, None)?;
             append_event(
                 root,
                 build_event(
@@ -4603,8 +4929,15 @@ pub fn notification_deliveries_list(
         let messages = list_json_entities(root, "notifications/messages")?;
         let allowed_ids: HashSet<String> = messages
             .into_iter()
-            .filter(|message| message.get("channel").and_then(Value::as_str) == Some(channel.as_str()))
-            .filter_map(|message| message.get("id").and_then(Value::as_str).map(|value| value.to_string()))
+            .filter(|message| {
+                message.get("channel").and_then(Value::as_str) == Some(channel.as_str())
+            })
+            .filter_map(|message| {
+                message
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|value| value.to_string())
+            })
             .collect();
         items.retain(|item| {
             item.get("messageId")
@@ -4663,7 +4996,10 @@ pub fn projection_save(
     )
 }
 
-pub fn projection_checkpoint_get(root: &Path, projection_id: &str) -> AppResult<ProjectionCheckpoint> {
+pub fn projection_checkpoint_get(
+    root: &Path,
+    projection_id: &str,
+) -> AppResult<ProjectionCheckpoint> {
     ensure_topology(root)?;
     let path = json_entity_path(root, "projections/snapshots", projection_id);
     if path.exists() {
@@ -4672,9 +5008,9 @@ pub fn projection_checkpoint_get(root: &Path, projection_id: &str) -> AppResult<
     }
     deserialize_entity(
         json!({
-        "projectionId": projection_id,
-        "status": "healthy"
-    }),
+            "projectionId": projection_id,
+            "status": "healthy"
+        }),
         "projection checkpoint",
     )
 }
@@ -4738,7 +5074,12 @@ pub fn projection_rebuild(
             } else {
                 list_json_entities(root, "projections/manifests")?
                     .into_iter()
-                    .filter_map(|value| value.get("id").and_then(Value::as_str).map(|value| value.to_string()))
+                    .filter_map(|value| {
+                        value
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(|value| value.to_string())
+                    })
                     .collect()
             };
             let mut job_run_ids = Vec::new();
@@ -4764,10 +5105,13 @@ pub fn projection_rebuild(
                     Some(format!("projection-refresh-{}", projection_id)),
                 )?;
             }
-            deserialize_entity(json!({
-                "accepted": true,
-                "jobRunIds": job_run_ids
-            }), "projection rebuild response")
+            deserialize_entity(
+                json!({
+                    "accepted": true,
+                    "jobRunIds": job_run_ids
+                }),
+                "projection rebuild response",
+            )
         },
     )
 }
@@ -4837,7 +5181,13 @@ pub fn registry_entry_save(
         Some(idempotency_key.as_str()),
         &payload,
         || {
-            let saved = upsert_json_entity(root, "registry", "registry", entry.clone(), expected_revision)?;
+            let saved = upsert_json_entity(
+                root,
+                "registry",
+                "registry",
+                entry.clone(),
+                expected_revision,
+            )?;
             deserialize_entity(saved, "registry entry")
         },
     )
@@ -4856,7 +5206,8 @@ pub fn registry_entry_update(
         .ok_or_else(|| AppError::NotFound(format!("registry '{}' not found", entry_id)))?;
     merge_json_values(&mut existing, patch.clone());
     validate_registry_uniqueness(root, &existing, Some(entry_id))?;
-    let payload = json!({"entryId": entry_id, "patch": patch, "expectedRevision": expected_revision});
+    let payload =
+        json!({"entryId": entry_id, "patch": patch, "expectedRevision": expected_revision});
     with_idempotency(
         root,
         "registry.entry.update",
@@ -4904,7 +5255,14 @@ pub fn registry_suggestions_list(
     text: String,
     kind: Option<String>,
 ) -> AppResult<RegistrySuggestionsResponse> {
-    let entries = registry_entries_list(root, kind, Some("active".to_string()), None, Some(100), None)?;
+    let entries = registry_entries_list(
+        root,
+        kind,
+        Some("active".to_string()),
+        None,
+        Some(100),
+        None,
+    )?;
     let needle = text.to_ascii_lowercase();
     let mut suggestions = BTreeSet::new();
     for item in entries.items {
@@ -4922,14 +5280,20 @@ pub fn registry_suggestions_list(
     })
 }
 
-pub fn semantic_search(root: &Path, request: SemanticSearchRequest) -> AppResult<SemanticSearchResponse> {
+pub fn semantic_search(
+    root: &Path,
+    request: SemanticSearchRequest,
+) -> AppResult<SemanticSearchResponse> {
     ensure_topology(root)?;
     let query = request.query.trim().to_ascii_lowercase();
     let top_k = request.top_k.clamp(1, 100) as usize;
     let mut hits = Vec::new();
     if !query.is_empty() {
         for chunk in list_json_entities(root, "semantic/chunks")? {
-            let text = chunk.get("text").and_then(Value::as_str).unwrap_or_default();
+            let text = chunk
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let lowered = text.to_ascii_lowercase();
             if lowered.contains(&query) {
                 let score = lexical_score(&lowered, &query);
@@ -5060,7 +5424,12 @@ fn semantic_reindex_inner(
     let persisted_chunks = list_json_entities(root, "semantic/chunks")?;
     let persisted_ids: Vec<String> = persisted_chunks
         .iter()
-        .filter_map(|chunk| chunk.get("id").and_then(Value::as_str).map(|value| value.to_string()))
+        .filter_map(|chunk| {
+            chunk
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string())
+        })
         .collect();
     let index = json!({
         "id": "semantic-index",
@@ -5104,10 +5473,13 @@ pub fn governance_policies_get(root: &Path) -> AppResult<GovernancePoliciesRespo
         })
         .unwrap_or_else(|| "internal".to_string());
 
-    deserialize_entity(json!({
-        "retentionPolicies": retention_policies,
-        "defaultSensitivity": default_sensitivity
-    }), "governance policies")
+    deserialize_entity(
+        json!({
+            "retentionPolicies": retention_policies,
+            "defaultSensitivity": default_sensitivity
+        }),
+        "governance policies",
+    )
 }
 
 pub fn atom_governance_update(
@@ -5218,14 +5590,17 @@ pub fn capability_snapshot_get(root: &Path) -> AppResult<WorkspaceCapabilitySnap
         .map_err(|error| AppError::Io(error.to_string()))?
         .flatten()
         .any(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"));
-    deserialize_entity(json!({
-        "capturedAt": Utc::now(),
-        "obsidianCliAvailable": capabilities.obsidian_cli_available,
-        "baseQueryAvailable": capabilities.base_query_available,
-        "semanticAvailable": semantic_available,
-        "notificationChannels": ["in_app"],
-        "featureFlags": feature_flags
-    }), "workspace capability snapshot")
+    deserialize_entity(
+        json!({
+            "capturedAt": Utc::now(),
+            "obsidianCliAvailable": capabilities.obsidian_cli_available,
+            "baseQueryAvailable": capabilities.base_query_available,
+            "semanticAvailable": semantic_available,
+            "notificationChannels": ["in_app"],
+            "featureFlags": feature_flags
+        }),
+        "workspace capability snapshot",
+    )
 }
 
 pub fn migration_plan_create(
@@ -5295,7 +5670,10 @@ pub fn migration_run_start(
         &json!({"planId": plan_id}),
         || {
             let Some(plan) = get_json_entity(root, "migrations/plans", plan_id)? else {
-                return Err(AppError::NotFound(format!("Migration plan '{}' not found", plan_id)));
+                return Err(AppError::NotFound(format!(
+                    "Migration plan '{}' not found",
+                    plan_id
+                )));
             };
             let domain = plan
                 .get("domain")
@@ -5325,11 +5703,12 @@ pub fn migration_run_start(
                     json!({"runId": saved.get("id"), "domain": domain}),
                 ),
             )?;
-            let completed_event = if saved.get("status").and_then(Value::as_str) == Some("succeeded") {
-                "migration.run.completed"
-            } else {
-                "migration.run.failed"
-            };
+            let completed_event =
+                if saved.get("status").and_then(Value::as_str) == Some("succeeded") {
+                    "migration.run.completed"
+                } else {
+                    "migration.run.failed"
+                };
             append_event(
                 root,
                 build_event(
@@ -5370,7 +5749,14 @@ pub fn migration_run_rollback(
             if let Some(reason) = reason.clone() {
                 patch["errorMessage"] = Value::String(reason);
             }
-            let saved = patch_json_entity(root, "migrations/runs", "migration_run", run_id, patch, None)?;
+            let saved = patch_json_entity(
+                root,
+                "migrations/runs",
+                "migration_run",
+                run_id,
+                patch,
+                None,
+            )?;
             deserialize_entity(saved, "migration run")
         },
     )
@@ -5407,7 +5793,11 @@ fn evaluate_rule_condition(context: &Value, condition: &Value) -> bool {
         "matches" => actual
             .and_then(Value::as_str)
             .zip(expected.and_then(Value::as_str))
-            .and_then(|(actual, pattern)| regex::Regex::new(pattern).ok().map(|regex| regex.is_match(actual)))
+            .and_then(|(actual, pattern)| {
+                regex::Regex::new(pattern)
+                    .ok()
+                    .map(|regex| regex.is_match(actual))
+            })
             .unwrap_or(false),
         _ => false,
     }
@@ -5485,13 +5875,18 @@ fn execute_migration_plan(
     }
 }
 
-fn list_notepads_for_migration(root: &Path, dry_run: bool) -> AppResult<Vec<NotepadViewDefinition>> {
+fn list_notepads_for_migration(
+    root: &Path,
+    dry_run: bool,
+) -> AppResult<Vec<NotepadViewDefinition>> {
     if !dry_run {
         return notepads_list(root);
     }
 
     let mut items = Vec::new();
-    for entry in fs::read_dir(root.join("notepads")).map_err(|error| AppError::Io(error.to_string()))? {
+    for entry in
+        fs::read_dir(root.join("notepads")).map_err(|error| AppError::Io(error.to_string()))?
+    {
         let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
         let path = entry.path();
         if !is_workspace_doc_file(&path) {
@@ -5541,7 +5936,11 @@ fn execute_schema_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>
                 block.updated_at = Utc::now();
                 block.revision += 1;
                 write_json_file(
-                    &json_entity_path(root, block_rel_dir_for_lifecycle(&block.lifecycle), &block.id),
+                    &json_entity_path(
+                        root,
+                        block_rel_dir_for_lifecycle(&block.lifecycle),
+                        &block.id,
+                    ),
                     &block,
                 )?;
             }
@@ -5589,7 +5988,10 @@ fn execute_schema_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>
             .into_iter()
             .filter_map(|block| block.atom_id)
             .collect();
-        atoms.iter().filter(|atom| mapped_ids.contains(&atom.id)).count()
+        atoms
+            .iter()
+            .filter(|atom| mapped_ids.contains(&atom.id))
+            .count()
     };
 
     let unmapped_atoms = atom_count.saturating_sub(mapped_atoms);
@@ -5660,7 +6062,11 @@ fn execute_rule_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>> 
     Ok(logs)
 }
 
-fn derive_attention_layer(task: &TaskFacet, heat: f64, now: DateTime<Utc>) -> crate::models::AttentionLayer {
+fn derive_attention_layer(
+    task: &TaskFacet,
+    heat: f64,
+    now: DateTime<Utc>,
+) -> crate::models::AttentionLayer {
     if task.status == TaskStatus::Doing || task.hard_due_at.map(|due| due <= now).unwrap_or(false) {
         return crate::models::AttentionLayer::L3;
     }
@@ -5733,8 +6139,17 @@ fn compute_heat_score(atom: &AtomRecord, now: DateTime<Utc>) -> f64 {
     heat.clamp(0.0, 100.0)
 }
 
-fn should_preserve_dwell(atom: &AtomRecord, next_layer: crate::models::AttentionLayer, now: DateTime<Utc>) -> bool {
-    let Some(current_layer) = atom.facet_data.task.as_ref().and_then(|task| task.attention_layer) else {
+fn should_preserve_dwell(
+    atom: &AtomRecord,
+    next_layer: crate::models::AttentionLayer,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(current_layer) = atom
+        .facet_data
+        .task
+        .as_ref()
+        .and_then(|task| task.attention_layer)
+    else {
         return false;
     };
     if current_layer == next_layer {
@@ -5766,7 +6181,9 @@ fn load_active_conditions_by_atom(root: &Path) -> AppResult<HashMap<String, Vec<
     for value in list_json_entities(root, "conditions/active")? {
         if let Ok(condition) = deserialize_entity::<ConditionRecord>(value, "condition") {
             if condition.status == "active" {
-                map.entry(condition.atom_id.clone()).or_default().push(condition);
+                map.entry(condition.atom_id.clone())
+                    .or_default()
+                    .push(condition);
             }
         }
     }
@@ -6144,11 +6561,7 @@ fn merge_json_values(base: &mut Value, patch: Value) {
 }
 
 fn bump_json_revision(object: &mut Map<String, Value>, now: DateTime<Utc>) {
-    let revision = object
-        .get("revision")
-        .and_then(Value::as_i64)
-        .unwrap_or(0)
-        + 1;
+    let revision = object.get("revision").and_then(Value::as_i64).unwrap_or(0) + 1;
     object.insert("revision".to_string(), Value::from(revision));
     object.insert("updatedAt".to_string(), Value::String(now.to_rfc3339()));
     object
@@ -6164,8 +6577,14 @@ fn get_object_mut(value: &mut Value) -> AppResult<&mut Map<String, Value>> {
 
 fn sort_json_by_updated_at_desc(items: &mut [Value]) {
     items.sort_by(|a, b| {
-        let a_updated = a.get("updatedAt").and_then(Value::as_str).unwrap_or_default();
-        let b_updated = b.get("updatedAt").and_then(Value::as_str).unwrap_or_default();
+        let a_updated = a
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let b_updated = b
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         b_updated.cmp(a_updated)
     });
 }
@@ -6185,10 +6604,17 @@ fn load_required_decision(root: &Path, decision_id: &str) -> AppResult<(Value, P
     )))
 }
 
-fn validate_registry_uniqueness(root: &Path, candidate: &Value, current_id: Option<&str>) -> AppResult<()> {
-    let candidate_id = current_id
-        .map(|value| value.to_string())
-        .or_else(|| candidate.get("id").and_then(Value::as_str).map(|value| value.to_string()));
+fn validate_registry_uniqueness(
+    root: &Path,
+    candidate: &Value,
+    current_id: Option<&str>,
+) -> AppResult<()> {
+    let candidate_id = current_id.map(|value| value.to_string()).or_else(|| {
+        candidate
+            .get("id")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string())
+    });
     let candidate_kind = candidate
         .get("kind")
         .and_then(Value::as_str)
@@ -6266,7 +6692,8 @@ fn validate_registry_uniqueness(root: &Path, candidate: &Value, current_id: Opti
             })
             .unwrap_or_default();
 
-        let name_conflict = candidate_name == existing_name || existing_aliases.contains(&candidate_name);
+        let name_conflict =
+            candidate_name == existing_name || existing_aliases.contains(&candidate_name);
         let alias_conflict = candidate_aliases
             .iter()
             .any(|alias| alias == &existing_name || existing_aliases.contains(alias));
@@ -6391,7 +6818,8 @@ mod tests {
             "---\nid: bad\nrevision: nope\n---\n",
         )
         .expect("write malformed notepad");
-        fs::write(root.path().join("events/2026-02-15.ndjson"), "{bad json}\n").expect("write malformed events");
+        fs::write(root.path().join("events/2026-02-15.ndjson"), "{bad json}\n")
+            .expect("write malformed events");
 
         let atoms = atoms_list(root.path(), ListAtomsRequest::default()).expect("atoms list");
         let notepads = notepads_list(root.path()).expect("notepads list");
@@ -6424,11 +6852,7 @@ mod tests {
             .expect("atom get")
             .expect("atom exists");
         assert_eq!(
-            blocked
-                .facet_data
-                .task
-                .as_ref()
-                .map(|task| task.status),
+            blocked.facet_data.task.as_ref().map(|task| task.status),
             Some(TaskStatus::Blocked)
         );
         assert_eq!(
@@ -6503,7 +6927,11 @@ mod tests {
                     is_system: false,
                     filters: NotepadFilter {
                         facet: Some(FacetKind::Task),
-                        statuses: Some(vec![TaskStatus::Todo, TaskStatus::Doing, TaskStatus::Blocked]),
+                        statuses: Some(vec![
+                            TaskStatus::Todo,
+                            TaskStatus::Doing,
+                            TaskStatus::Blocked,
+                        ]),
                         include_archived: Some(false),
                         ..NotepadFilter::default()
                     },
@@ -6528,8 +6956,12 @@ mod tests {
         )
         .expect("migration plan create");
 
-        let run = migration_run_start(root.path(), &plan.id, Some("schema-migration-run-key".to_string()))
-            .expect("migration run start");
+        let run = migration_run_start(
+            root.path(),
+            &plan.id,
+            Some("schema-migration-run-key".to_string()),
+        )
+        .expect("migration run start");
         assert_eq!(run.status, "succeeded");
         assert!(run.logs.iter().any(|line| line.contains("blocks migrated")));
 
@@ -6542,7 +6974,10 @@ mod tests {
             },
         )
         .expect("focus placements");
-        assert!(focus.items.iter().any(|placement| placement.block_id == block_id));
+        assert!(focus
+            .items
+            .iter()
+            .any(|placement| placement.block_id == block_id));
     }
 
     #[test]
@@ -6563,7 +6998,11 @@ mod tests {
                     is_system: false,
                     filters: NotepadFilter {
                         facet: Some(FacetKind::Task),
-                        statuses: Some(vec![TaskStatus::Todo, TaskStatus::Doing, TaskStatus::Blocked]),
+                        statuses: Some(vec![
+                            TaskStatus::Todo,
+                            TaskStatus::Doing,
+                            TaskStatus::Blocked,
+                        ]),
                         include_archived: Some(false),
                         ..NotepadFilter::default()
                     },
@@ -6588,7 +7027,8 @@ mod tests {
         .expect("placements before materialization");
         assert!(before.items.is_empty());
 
-        let listed = notepad_atoms_list(root.path(), "focus", Some(50), None).expect("notepad atoms list");
+        let listed =
+            notepad_atoms_list(root.path(), "focus", Some(50), None).expect("notepad atoms list");
         assert!(listed.items.iter().any(|item| item.id == atom.id));
 
         let after = placements_list(
@@ -6609,7 +7049,8 @@ mod tests {
 
         let now_definition = default_now_notepad(Utc::now());
         let legacy_now_path = root.path().join("notepads").join("now.json");
-        write_notepad_file(root.path(), &legacy_now_path, &now_definition).expect("write legacy now notepad");
+        write_notepad_file(root.path(), &legacy_now_path, &now_definition)
+            .expect("write legacy now notepad");
         let markdown_now_path = notepad_path(root.path(), "now");
         if markdown_now_path.exists() {
             fs::remove_file(markdown_now_path).expect("remove markdown now");
@@ -6682,7 +7123,9 @@ mod tests {
         )
         .expect("placements after delete");
         assert!(after_placements.items.is_empty());
-        assert!(find_block(root.path(), &block_id).expect("find block").is_none());
+        assert!(find_block(root.path(), &block_id)
+            .expect("find block")
+            .is_none());
     }
 
     #[test]
@@ -6711,9 +7154,9 @@ mod tests {
         )
         .expect_err("non-empty archived atom must be rejected");
 
-        assert!(error
-            .to_string()
-            .contains("POLICY_DENIED: atom_delete only permits archived atoms with no text/body content"));
+        assert!(error.to_string().contains(
+            "POLICY_DENIED: atom_delete only permits archived atoms with no text/body content"
+        ));
     }
 
     #[test]
@@ -6739,7 +7182,8 @@ mod tests {
         )
         .expect("write system-managed atom");
 
-        let first = obsidian_tasks_sync_for_vault(&command_center_root, vault.path()).expect("first sync");
+        let first =
+            obsidian_tasks_sync_for_vault(&command_center_root, vault.path()).expect("first sync");
         assert_eq!(first.discovered_tasks, 2);
         assert_eq!(first.created_atoms, 2);
 
@@ -6757,17 +7201,30 @@ mod tests {
             },
         )
         .expect("atoms list");
-        assert!(first_page.items.iter().any(|atom| atom.raw_text.contains("call client")));
-        assert!(first_page.items.iter().any(|atom| atom.raw_text.contains("shipped release")));
-        assert!(!first_page.items.iter().any(|atom| atom.raw_text.contains("should stay out of sync")));
-        assert!(!first_page.items.iter().any(|atom| atom.raw_text.contains("system-managed task")));
+        assert!(first_page
+            .items
+            .iter()
+            .any(|atom| atom.raw_text.contains("call client")));
+        assert!(first_page
+            .items
+            .iter()
+            .any(|atom| atom.raw_text.contains("shipped release")));
+        assert!(!first_page
+            .items
+            .iter()
+            .any(|atom| atom.raw_text.contains("should stay out of sync")));
+        assert!(!first_page
+            .items
+            .iter()
+            .any(|atom| atom.raw_text.contains("system-managed task")));
 
         fs::write(
             command_center_root.join("tasks").join("inbox.md"),
             "- [x] call client\n",
         )
         .expect("rewrite inbox");
-        let second = obsidian_tasks_sync_for_vault(&command_center_root, vault.path()).expect("second sync");
+        let second =
+            obsidian_tasks_sync_for_vault(&command_center_root, vault.path()).expect("second sync");
         assert_eq!(second.discovered_tasks, 1);
         assert!(second.updated_atoms + second.created_atoms >= 1);
         assert!(second.archived_atoms >= 1);
@@ -6822,14 +7279,17 @@ mod tests {
 
         let rule = rule_save(
             root.path(),
-            mutation_with_key(json!({
-                "name": "Rule",
-                "enabled": true,
-                "scope": "system",
-                "trigger": {"kind": "manual"},
-                "conditions": [{"field": "a", "op": "eq", "value": 1}],
-                "actions": []
-            }), "rule-save-key"),
+            mutation_with_key(
+                json!({
+                    "name": "Rule",
+                    "enabled": true,
+                    "scope": "system",
+                    "trigger": {"kind": "manual"},
+                    "conditions": [{"field": "a", "op": "eq", "value": 1}],
+                    "actions": []
+                }),
+                "rule-save-key",
+            ),
         )
         .expect("rule saved");
         let rule_id = rule.id.as_str();
@@ -6846,14 +7306,17 @@ mod tests {
 
         let job = job_save(
             root.path(),
-            mutation_with_key(json!({
-                "type": "triage.enqueue",
-                "enabled": true,
-                "schedule": {"kind":"manual"},
-                "timeoutMs": 1000,
-                "maxRetries": 0,
-                "retryBackoffMs": 1000
-            }), "job-save-key"),
+            mutation_with_key(
+                json!({
+                    "type": "triage.enqueue",
+                    "enabled": true,
+                    "schedule": {"kind":"manual"},
+                    "timeoutMs": 1000,
+                    "maxRetries": 0,
+                    "retryBackoffMs": 1000
+                }),
+                "job-save-key",
+            ),
         )
         .expect("job saved");
         let job_id = job.id.as_str();
@@ -6868,12 +7331,15 @@ mod tests {
 
         let decision = decision_create(
             root.path(),
-            mutation_with_key(json!({
-                "title": "Choose",
-                "body": "pick one",
-                "atomIds": [atom.id],
-                "options": [{"id":"opt_1","label":"Do it","actionKind":"task.do_now"}]
-            }), "decision-create-key"),
+            mutation_with_key(
+                json!({
+                    "title": "Choose",
+                    "body": "pick one",
+                    "atomIds": [atom.id],
+                    "options": [{"id":"opt_1","label":"Do it","actionKind":"task.do_now"}]
+                }),
+                "decision-create-key",
+            ),
         )
         .expect("decision create");
         let decision_id = decision.id.as_str();
@@ -6956,7 +7422,10 @@ mod tests {
             Some("atom-governance-key".to_string()),
         )
         .expect("atom governance update");
-        assert_eq!(updated_atom.governance.sensitivity, SensitivityLevel::Confidential);
+        assert_eq!(
+            updated_atom.governance.sensitivity,
+            SensitivityLevel::Confidential
+        );
 
         let flags = feature_flags_list(root.path()).expect("feature flags");
         assert!(!flags.is_empty());

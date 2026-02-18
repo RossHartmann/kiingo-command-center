@@ -476,7 +476,6 @@ export type SensitivityLevel = "public" | "internal" | "confidential" | "restric
 export type EncryptionScope = "none" | "vault" | "field";
 
 export interface TaskFacet {
-  title: string;
   status: TaskStatus;
   priority: 1 | 2 | 3 | 4 | 5;
   softDueAt?: IsoDateTime;

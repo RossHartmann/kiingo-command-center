@@ -1,5 +1,6 @@
 import { KeyboardEvent, useEffect, useMemo, useState } from "react";
 import type { AtomRecord, DecisionPrompt } from "../../lib/types";
+import { taskDisplayTitle } from "../../lib/taskTitle";
 
 interface DecisionQueuePanelProps {
   decisions: DecisionPrompt[];
@@ -37,7 +38,7 @@ function relatedTitles(decision: DecisionPrompt, atomsById: Record<string, AtomR
   return decision.atomIds
     .map((atomId) => atomsById[atomId])
     .filter((atom): atom is AtomRecord => !!atom)
-    .map((atom) => atom.facetData.task?.title?.trim() || atom.rawText.trim() || atom.id)
+    .map((atom) => taskDisplayTitle(atom, atom.id))
     .slice(0, 3);
 }
 

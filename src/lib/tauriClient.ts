@@ -109,6 +109,7 @@ import type {
   MigrationPlanCreateRequest,
   EntityId
 } from "./types";
+import { deriveTaskTitle, taskDisplayTitle } from "./taskTitle";
 
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const LOCAL_STORAGE_KEY = "local-cli-control-center-mock";
@@ -208,11 +209,6 @@ function classifyRawText(rawText: string): ClassificationResult {
   return { primaryFacet: "meta", confidence: 0.55, source: "heuristic", reasoning: "default freeform classification" };
 }
 
-function deriveTaskTitle(rawText: string): string {
-  const first = rawText.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Untitled task";
-  return first.replace(/^- \[[ xX]\]\s*/, "").replace(/^[-*]\s*/, "").slice(0, 120);
-}
-
 function atomHasNoMeaningfulContent(atom: AtomRecord): boolean {
   const text = atom.rawText.trim();
   const body = (atom.body ?? "").trim();
@@ -285,7 +281,6 @@ function getMockAtomOrThrow(atomIdValue: string): AtomRecord {
 function ensureTaskFacet(atom: AtomRecord): NonNullable<AtomRecord["facetData"]["task"]> {
   if (!atom.facetData.task) {
     atom.facetData.task = {
-      title: deriveTaskTitle(atom.rawText),
       status: "todo",
       priority: 3
     };
@@ -1618,8 +1613,7 @@ function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomR
     const q = filter.textQuery.toLowerCase();
     result = result.filter((atom) => {
       const body = atom.body ?? "";
-      const title = atom.facetData.task?.title ?? "";
-      return `${atom.rawText}\n${body}\n${title}`.toLowerCase().includes(q);
+      return `${atom.rawText}\n${body}`.toLowerCase().includes(q);
     });
   }
   return result;
@@ -1665,7 +1659,7 @@ function sortAtoms(atoms: AtomRecord[], request?: ListAtomsRequest): AtomRecord[
           break;
         }
         case "title":
-          compare = (a.facetData.task?.title ?? "").localeCompare(b.facetData.task?.title ?? "");
+          compare = deriveTaskTitle(a.rawText).localeCompare(deriveTaskTitle(b.rawText));
           break;
         default:
           compare = 0;
@@ -1735,7 +1729,6 @@ export async function atomCreate(payload: CreateAtomRequest): Promise<AtomRecord
       task:
         facets.includes("task")
           ? {
-              title: request.facetData?.task?.title ?? deriveTaskTitle(request.rawText),
               status: request.facetData?.task?.status ?? "todo",
               priority: request.facetData?.task?.priority ?? 3,
               ...request.facetData?.task
@@ -1823,7 +1816,6 @@ export async function taskStatusSet(atomIdValue: string, payload: SetTaskStatusR
   }
   const from = atom.facetData.task?.status ?? "todo";
   atom.facetData.task = {
-    title: atom.facetData.task?.title ?? deriveTaskTitle(atom.rawText),
     status: request.status,
     priority: atom.facetData.task?.priority ?? 3,
     ...atom.facetData.task
@@ -2028,7 +2020,6 @@ export async function notepadBlockCreate(request: CreateBlockInNotepadRequest): 
     relations: { threadIds: capture?.threadIds ?? [] },
     facetData: {
       task: {
-        title: deriveTaskTitle(payload.rawText),
         status: capture?.taskStatus ?? "todo",
         priority: capture?.taskPriority ?? 3,
         commitmentLevel: capture?.commitmentLevel,
@@ -2577,7 +2568,6 @@ export async function atomClassify(
   }
   if (result.primaryFacet === "task" && !atom.facetData.task) {
     atom.facetData.task = {
-      title: deriveTaskTitle(atom.rawText),
       status: "todo",
       priority: 3
     };
@@ -3989,7 +3979,7 @@ export async function systemGenerateDecisionCards(
       const decision = await upsertDecisionPrompt({
         type: "overdue_hard_due",
         dedupeKey: buildDecisionDedupeKey("overdue_hard_due", [atom.id]),
-        title: `Overdue hard due: ${task.title}`,
+        title: `Overdue hard due: ${taskDisplayTitle(atom)}`,
         body: "Hard due date has passed. Choose the next move.",
         atomIds: [atom.id],
         priority: 1,
@@ -4014,7 +4004,7 @@ export async function systemGenerateDecisionCards(
       const decision = await upsertDecisionPrompt({
         type: "hard_commitment_review",
         dedupeKey: buildDecisionDedupeKey("hard_commitment_review", [atom.id]),
-        title: `Hard commitment check: ${task.title}`,
+        title: `Hard commitment check: ${taskDisplayTitle(atom)}`,
         body: "This hard commitment is near boundary. Recommit, reschedule, or release it.",
         atomIds: [atom.id],
         priority: 2,
@@ -4036,7 +4026,7 @@ export async function systemGenerateDecisionCards(
         const decision = await upsertDecisionPrompt({
           type: "boundary_drift_review",
           dedupeKey: buildDecisionDedupeKey("boundary_drift_review", [atom.id]),
-          title: `Drifting soon: ${task.title}`,
+          title: `Drifting soon: ${taskDisplayTitle(atom)}`,
           body: "This task is near attention decay. Keep it hot or let it drift.",
           atomIds: [atom.id],
           priority: 3,
@@ -4067,7 +4057,7 @@ export async function systemGenerateDecisionCards(
       continue;
     }
     const atom = mockStore.atoms.find((entry) => entry.id === condition.atomId);
-    const title = atom?.facetData.task?.title ?? atom?.rawText ?? condition.atomId;
+    const title = atom ? taskDisplayTitle(atom, condition.atomId) : condition.atomId;
     const decision = await upsertDecisionPrompt({
       type: "blocked_followup",
       dedupeKey: buildDecisionDedupeKey("blocked_followup", [condition.atomId], condition.id),
@@ -4128,7 +4118,7 @@ export async function systemGenerateDecisionCards(
       const decision = await upsertDecisionPrompt({
         type: "recurrence_missed",
         dedupeKey: buildDecisionDedupeKey("recurrence_missed", [atom.id]),
-        title: `Recurring task missed: ${task.title}`,
+        title: `Recurring task missed: ${taskDisplayTitle(atom)}`,
         body: "A recurring task instance appears missed. Decide whether to do now or re-time the cadence.",
         atomIds: [atom.id],
         priority: 2,
@@ -4196,7 +4186,7 @@ export async function systemGenerateDecisionCards(
     const decision = await upsertDecisionPrompt({
       type: "confession_suggestion",
       dedupeKey: buildDecisionDedupeKey("confession_suggestion", [atom.id]),
-      title: `Stuck? ${task.title}`,
+      title: `Stuck? ${taskDisplayTitle(atom)}`,
       body: "This task looks avoided. Name the blocker, do a first step, or safely defer.",
       atomIds: [atom.id],
       priority: 3,
@@ -4285,12 +4275,7 @@ const DEFAULT_WORKSPACE_PROJECTION_IDS: Record<"tasks.waiting" | "focus.queue" |
 };
 
 function projectionTitleForAtom(atom: AtomRecord): string {
-  const taskTitle = atom.facetData.task?.title?.trim();
-  if (taskTitle && taskTitle.length > 0) {
-    return taskTitle;
-  }
-  const raw = atom.rawText.trim();
-  return raw.length > 0 ? raw : atom.id;
+  return taskDisplayTitle(atom, atom.id);
 }
 
 function projectionTaskLayer(atom: AtomRecord): AttentionLayer {

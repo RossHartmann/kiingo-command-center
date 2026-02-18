@@ -43,6 +43,7 @@ import type {
   WorkspaceCapabilities,
   WorkspaceHealth
 } from "../lib/types";
+import { taskDisplayTitle } from "../lib/taskTitle";
 import { NotepadToolbar } from "../components/notepad/NotepadToolbar";
 import { NotepadTree } from "../components/notepad/NotepadTree";
 import {
@@ -142,9 +143,8 @@ function priorityLabel(priority: number): string {
 }
 
 function rowTitle(row: FlatRow): string {
-  const taskTitle = row.atom?.facetData.task?.title?.trim();
-  if (taskTitle) {
-    return taskTitle;
+  if (row.atom) {
+    return taskDisplayTitle(row.atom, "Untitled");
   }
   const fallback = row.block.text.trim();
   return fallback.length > 0 ? fallback : "Untitled";

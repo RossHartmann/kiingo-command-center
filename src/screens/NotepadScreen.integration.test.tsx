@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { notepadBlockCreate, notepadSave } from "../lib/tauriClient";
+import { notepadAtomsList, notepadBlockCreate, notepadSave } from "../lib/tauriClient";
 import { NotepadScreen } from "./NotepadScreen";
 
 function uniqueNotepadId(prefix: string): string {
@@ -297,5 +297,27 @@ describe("NotepadScreen integration", () => {
       .filter((value) => value.length > 0);
     expect(available).not.toContain(targetNotepadId);
     expect(available).toContain(destinationAfter.value);
+  });
+
+  it("persists inline row text changes to atom rawText", async () => {
+    const notepadId = uniqueNotepadId("itest-title-sync");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    const editor = selectedEditor();
+    fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "Recruit speakers for webinar" } });
+
+    await waitFor(
+      async () => {
+        const page = await notepadAtomsList(notepadId, 50);
+        const atom = page.items.find((candidate) => candidate.rawText.includes("Recruit speakers for webinar"));
+        expect(atom).toBeTruthy();
+        expect(atom?.rawText).toContain("Recruit speakers for webinar");
+        expect(atom?.facetData.task?.status).toBe("todo");
+      },
+      { timeout: 5000 }
+    );
   });
 });

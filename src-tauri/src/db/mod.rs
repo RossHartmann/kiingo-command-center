@@ -1088,7 +1088,7 @@ impl Database {
 
         let provider = payload.provider.unwrap_or(Provider::Claude);
         let template_html = payload.template_html.unwrap_or_default();
-        let ttl_seconds = payload.ttl_seconds.unwrap_or(3600);
+        let ttl_seconds = payload.ttl_seconds.unwrap_or(259200);
         let enabled = payload.enabled.unwrap_or(true);
         let proactive = payload.proactive.unwrap_or(false);
         let metadata = payload.metadata_json.unwrap_or_else(|| serde_json::json!({}));
