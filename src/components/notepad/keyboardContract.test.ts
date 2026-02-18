@@ -63,6 +63,18 @@ describe("keyboardContract", () => {
         selectionEnd: 0
       })
     ).toEqual({ type: "delete_empty_row" });
+
+    expect(
+      resolveEditorKeyAction({
+        key: "Delete",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        rowText: "hello",
+        selectionStart: 5,
+        selectionEnd: 5
+      })
+    ).toEqual({ type: "merge_with_next_sibling" });
   });
 
   it("maps editor arrow behavior to row movement only at boundaries", () => {

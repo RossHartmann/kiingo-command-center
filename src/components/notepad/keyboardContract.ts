@@ -31,6 +31,7 @@ export type EditorKeyAction =
   | { type: "indent" }
   | { type: "outdent" }
   | { type: "delete_empty_row" }
+  | { type: "merge_with_next_sibling" }
   | { type: "exit_edit_mode" };
 
 export type ContainerKeyAction =
@@ -141,6 +142,17 @@ export function resolveEditorKeyAction(ctx: EditorKeyContext): EditorKeyAction {
 
   if (ctx.key === "Backspace" && ctx.rowText.trim().length === 0) {
     return { type: "delete_empty_row" };
+  }
+
+  if (
+    ctx.key === "Delete" &&
+    !modifier &&
+    !ctx.shiftKey &&
+    !hasSelection &&
+    ctx.selectionStart === ctx.rowText.length &&
+    ctx.selectionEnd === ctx.rowText.length
+  ) {
+    return { type: "merge_with_next_sibling" };
   }
 
   return { type: "none" };

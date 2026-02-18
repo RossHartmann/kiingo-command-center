@@ -61,7 +61,7 @@ import {
   sortPlacements,
   type PlacementDropIntent
 } from "../components/notepad/treeData";
-import type { FlatRow } from "../components/notepad/types";
+import { ROOT_KEY, type FlatRow } from "../components/notepad/types";
 import { OMNI_OPEN_PROJECT } from "../components/OmniSearch";
 import { useOptionalAppActions } from "../state/appState";
 import { useNotepadUiState } from "../state/notepadState";
@@ -166,6 +166,15 @@ function rowText(row: FlatRow, draft: string | undefined): string {
   return draft ?? row.block.text;
 }
 
+function mergeRowText(current: string, next: string): string {
+  if (current.length === 0) return next;
+  if (next.length === 0) return current;
+  if (/\s$/.test(current) || /^\s/.test(next)) {
+    return `${current}${next}`;
+  }
+  return `${current} ${next}`;
+}
+
 function atomHasNoMeaningfulContent(atom: AtomRecord): boolean {
   const text = atom.rawText.trim();
   const body = (atom.body ?? "").trim();
@@ -205,6 +214,12 @@ function workspaceFlagEnabled(featureFlags: FeatureFlag[], key: FeatureFlag["key
 function placeCaretAtEnd(element: HTMLTextAreaElement): void {
   const length = element.value.length;
   element.setSelectionRange(length, length);
+}
+
+interface PendingEditorSelection {
+  placementId: string;
+  start: number;
+  end: number;
 }
 
 export function NotepadScreen(): JSX.Element {
@@ -261,6 +276,7 @@ export function NotepadScreen(): JSX.Element {
   const saveTimersRef = useRef<Map<string, number>>(new Map());
   const dragUndoTimerRef = useRef<number>();
   const pendingEditorFocusPlacementIdRef = useRef<string | undefined>(undefined);
+  const pendingEditorSelectionRef = useRef<PendingEditorSelection>();
   const selectedPlacementRef = useRef<string | undefined>(undefined);
   const quickTargetSelectRef = useRef<HTMLSelectElement | null>(null);
   const pointerEditorInteractionRef = useRef<{ active: boolean; placementId?: string }>({
@@ -792,7 +808,13 @@ export function NotepadScreen(): JSX.Element {
         const editor = document.querySelector<HTMLTextAreaElement>(`textarea[data-placement-id="${placementId}"]`);
         if (editor) {
           editor.focus();
-          placeCaretAtEnd(editor);
+          const pendingSelection = pendingEditorSelectionRef.current;
+          if (pendingSelection?.placementId === placementId) {
+            editor.setSelectionRange(pendingSelection.start, pendingSelection.end);
+            pendingEditorSelectionRef.current = undefined;
+          } else {
+            placeCaretAtEnd(editor);
+          }
           pendingEditorFocusPlacementIdRef.current = undefined;
           uiDispatch({ type: "set_interaction_mode", mode: "edit" });
           return;
@@ -995,6 +1017,84 @@ export function NotepadScreen(): JSX.Element {
     const page = await placementsList({ viewId, blockId, limit: 25 });
     return sortPlacements(page.items)[0];
   }, []);
+
+  const insertSiblingBeforeAndKeepFocus = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!uiState.activeNotepadId || !isGateOpen) {
+        return;
+      }
+      await flushDraft(row.placement.id);
+      const parentPlacementId = row.effectiveParentPlacementId;
+      const parentRow = parentPlacementId ? treeData.rowByPlacementId[parentPlacementId] : undefined;
+      const parentAtomId = parentRow?.atom?.id;
+
+      await runMutation(async () => {
+        const created = await notepadBlockCreate({
+          notepadId: uiState.activeNotepadId,
+          rawText: ""
+        });
+        let createdPlacement = await findPlacementForBlockInView(created.id, uiState.activeNotepadId);
+        if (!createdPlacement) {
+          throw new Error("Unable to locate placement for newly created row");
+        }
+
+        if (createdPlacement.parentPlacementId !== parentPlacementId) {
+          createdPlacement = await placementSave({
+            id: createdPlacement.id,
+            viewId: createdPlacement.viewId,
+            blockId: createdPlacement.blockId,
+            parentPlacementId,
+            orderKey: createdPlacement.orderKey,
+            pinned: createdPlacement.pinned,
+            expectedRevision: createdPlacement.revision,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+
+        const reordered = treeData.orderedPlacementIds.filter((placementId) => placementId !== createdPlacement.id);
+        const insertionIndex = reordered.indexOf(row.placement.id);
+        if (insertionIndex === -1) {
+          reordered.push(createdPlacement.id);
+        } else {
+          reordered.splice(insertionIndex, 0, createdPlacement.id);
+        }
+        if (reordered.length > 1) {
+          await placementsReorder(uiState.activeNotepadId, {
+            orderedPlacementIds: reordered,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+
+        if (created.atomId && parentAtomId) {
+          const createdAtom = await atomGet(created.atomId);
+          if (createdAtom) {
+            await updateCanonicalParent(createdAtom, parentAtomId);
+          }
+        }
+
+        selectedPlacementRef.current = row.placement.id;
+        pendingEditorFocusPlacementIdRef.current = row.placement.id;
+        pendingEditorSelectionRef.current = {
+          placementId: row.placement.id,
+          start: 0,
+          end: 0
+        };
+        uiDispatch({ type: "set_selected_placement", placementId: row.placement.id });
+        uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+      });
+    },
+    [
+      findPlacementForBlockInView,
+      flushDraft,
+      isGateOpen,
+      runMutation,
+      treeData.orderedPlacementIds,
+      treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.activeNotepadId,
+      updateCanonicalParent
+    ]
+  );
 
   const createRow = useCallback(
     async (
@@ -2034,6 +2134,12 @@ export function NotepadScreen(): JSX.Element {
           return;
         case "create_sibling":
           event.preventDefault();
+          if (selectionStart === 0 && selectionEnd === 0) {
+            // Split-at-start semantics: insert an empty sibling above and keep caret at start of current row.
+            target.blur();
+            void insertSiblingBeforeAndKeepFocus(row);
+            return;
+          }
           // Blur the current editor first so stale focus does not re-select the previous row
           // while we are creating and focusing the new sibling row.
           target.blur();
@@ -2051,6 +2157,104 @@ export function NotepadScreen(): JSX.Element {
           event.preventDefault();
           void deleteRow(row, { preferPrevious: true, focusEditor: true });
           return;
+        case "merge_with_next_sibling":
+          event.preventDefault();
+          void (async () => {
+            if (!isGateOpen || !row.atom || !uiState.activeNotepadId) {
+              return;
+            }
+            const parentKey = row.effectiveParentPlacementId ?? ROOT_KEY;
+            const siblings = treeData.childrenByParentKey[parentKey] ?? [];
+            const rowIndex = siblings.indexOf(row.placement.id);
+            if (rowIndex === -1) {
+              return;
+            }
+            const nextSiblingPlacementId = siblings[rowIndex + 1];
+            if (!nextSiblingPlacementId) {
+              return;
+            }
+            const nextSiblingRow = treeData.rowByPlacementId[nextSiblingPlacementId];
+            if (!nextSiblingRow || !nextSiblingRow.atom) {
+              return;
+            }
+
+            const currentText = rowText(row, uiState.draftsByPlacement[row.placement.id]);
+            const nextText = rowText(nextSiblingRow, uiState.draftsByPlacement[nextSiblingRow.placement.id]);
+            const mergedText = mergeRowText(currentText, nextText);
+
+            await flushDraft(row.placement.id);
+            await flushDraft(nextSiblingRow.placement.id);
+
+            pendingEditorFocusPlacementIdRef.current = row.placement.id;
+            selectedPlacementRef.current = row.placement.id;
+            uiDispatch({ type: "set_selected_placement", placementId: row.placement.id });
+            uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+
+            await runMutation(async () => {
+              const latestRowAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+              await atomUpdate(latestRowAtom.id, {
+                expectedRevision: latestRowAtom.revision,
+                rawText: mergedText
+              });
+
+              const nextSiblingDirectChildPlacementIds = treeData.orderedPlacementIds.filter(
+                (placementId) => treeData.effectiveParentByPlacementId[placementId] === nextSiblingRow.placement.id
+              );
+
+              if (nextSiblingDirectChildPlacementIds.length > 0) {
+                const [allPlacements, allBlocks] = await Promise.all([
+                  listAllPages((cursor) => placementsList({ viewId: uiState.activeNotepadId, limit: 250, cursor })),
+                  listAllPages((cursor) => blocksList({ notepadId: uiState.activeNotepadId, limit: 250, cursor }))
+                ]);
+                const placementById = new Map(allPlacements.map((placement) => [placement.id, placement]));
+                const blockById = new Map(allBlocks.map((block) => [block.id, block]));
+
+                for (const childPlacementId of nextSiblingDirectChildPlacementIds) {
+                  const childPlacement = placementById.get(childPlacementId);
+                  if (!childPlacement) {
+                    continue;
+                  }
+                  await placementSave({
+                    id: childPlacement.id,
+                    viewId: childPlacement.viewId,
+                    blockId: childPlacement.blockId,
+                    parentPlacementId: row.placement.id,
+                    orderKey: childPlacement.orderKey,
+                    pinned: childPlacement.pinned,
+                    expectedRevision: childPlacement.revision,
+                    idempotencyKey: idempotencyKey()
+                  });
+
+                  const childBlock = blockById.get(childPlacement.blockId);
+                  if (!childBlock?.atomId) {
+                    continue;
+                  }
+                  const childAtom = await atomGet(childBlock.atomId);
+                  if (!childAtom) {
+                    continue;
+                  }
+                  await updateCanonicalParent(childAtom, latestRowAtom.id);
+                }
+              }
+
+              await placementDelete(nextSiblingRow.placement.id, idempotencyKey());
+              const remainingPlacements = await listAllPages((cursor) =>
+                placementsList({ blockId: nextSiblingRow.block.id, limit: 250, cursor })
+              );
+              const latestSiblingAtom = await atomGet(nextSiblingRow.atom!.id);
+              if (!latestSiblingAtom) {
+                return;
+              }
+              if (remainingPlacements.length > 0) {
+                return;
+              }
+              await atomArchive(latestSiblingAtom.id, {
+                expectedRevision: latestSiblingAtom.revision,
+                reason: "notepad_merged_into_previous_sibling"
+              });
+            });
+          })();
+          return;
         case "exit_edit_mode":
           event.preventDefault();
           uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
@@ -2065,14 +2269,24 @@ export function NotepadScreen(): JSX.Element {
       createRow,
       deleteRow,
       dismissHint,
+      flushDraft,
       indentSelected,
+      insertSiblingBeforeAndKeepFocus,
+      isGateOpen,
       moveEditorSelection,
       openQuickActions,
       outdentSelected,
       pasteAfterSelected,
       reorderSelected,
+      runMutation,
+      treeData.childrenByParentKey,
+      treeData.effectiveParentByPlacementId,
+      treeData.orderedPlacementIds,
+      treeData.rowByPlacementId,
       uiDispatch,
-      uiState.draftsByPlacement
+      uiState.activeNotepadId,
+      uiState.draftsByPlacement,
+      updateCanonicalParent
     ]
   );
 
@@ -2295,7 +2509,7 @@ export function NotepadScreen(): JSX.Element {
           )}
           {!hintDismissed && (
             <small className="settings-hint">
-              Keyboard-first tip: use Enter to create, Tab to indent, and Backspace on empty rows to remove.
+              Keyboard-first tip: Enter creates (or inserts above at line start), Tab indents, Backspace removes empty rows, Delete merges with next sibling.
             </small>
           )}
           <NotepadTree

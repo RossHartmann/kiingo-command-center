@@ -100,6 +100,8 @@ describe("NotepadScreen integration", () => {
     expect(firstCreatedPlacementId).toBeTruthy();
 
     fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "enter-second" } });
+    editor.setSelectionRange(editor.value.length, editor.value.length);
     fireEvent.keyDown(editor, { key: "Enter" });
     await settleNotepad();
     editor = selectedEditor();
@@ -108,6 +110,33 @@ describe("NotepadScreen integration", () => {
 
     const editors = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea.notepad-editor"));
     expect(editors.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("inserts an empty sibling above when Enter is pressed at line start", async () => {
+    const notepadId = uniqueNotepadId("itest-enter-start");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    const original = selectedEditor();
+    const originalPlacementId = original.dataset.placementId;
+    expect(originalPlacementId).toBeTruthy();
+    fireEvent.focus(original);
+    fireEvent.change(original, { target: { value: "moved-down-line" } });
+
+    const sourceEditor = editorByPlacementId(originalPlacementId!);
+    sourceEditor.setSelectionRange(0, 0);
+    fireEvent.keyDown(sourceEditor, { key: "Enter" });
+    await settleNotepad();
+
+    const focused = selectedEditor();
+    expect(focused.dataset.placementId).toBe(originalPlacementId);
+    expect(focused.value).toBe("moved-down-line");
+    expect(focused.selectionStart).toBe(0);
+    expect(focused.selectionEnd).toBe(0);
+
+    const visibleEditors = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea.notepad-editor")).map((e) => e.value);
+    expect(visibleEditors.slice(0, 2)).toEqual(["", "moved-down-line"]);
   });
 
   it("deletes an empty row on Backspace and focuses previous row", async () => {
@@ -133,6 +162,91 @@ describe("NotepadScreen integration", () => {
     expect(editor.value).toBe("keep-row");
     await waitFor(() => {
       expect(screen.queryAllByRole("treeitem").length).toBe(1);
+    });
+  });
+
+  it("merges with next sibling when pressing Delete at end of row", async () => {
+    const notepadId = uniqueNotepadId("itest-delete-merge");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    let first = selectedEditor();
+    const firstPlacementId = first.dataset.placementId;
+    expect(firstPlacementId).toBeTruthy();
+    fireEvent.focus(first);
+    fireEvent.change(first, { target: { value: "Alpha" } });
+
+    fireEvent.keyDown(first, { key: "Enter" });
+    await settleNotepad();
+
+    const second = selectedEditor();
+    fireEvent.focus(second);
+    fireEvent.change(second, { target: { value: "Beta" } });
+
+    first = editorByPlacementId(firstPlacementId!);
+    fireEvent.focus(first);
+    first.setSelectionRange(first.value.length, first.value.length);
+    fireEvent.keyDown(first, { key: "Delete" });
+    await settleNotepad();
+
+    expect(selectedEditor().value).toBe("Alpha Beta");
+    await waitFor(() => {
+      expect(screen.queryAllByRole("treeitem").length).toBe(1);
+    });
+  });
+
+  it("reparents next sibling children when merging with Delete", async () => {
+    const notepadId = uniqueNotepadId("itest-delete-merge-children");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    let first = selectedEditor();
+    const firstPlacementId = first.dataset.placementId;
+    expect(firstPlacementId).toBeTruthy();
+    fireEvent.focus(first);
+    fireEvent.change(first, { target: { value: "Alpha" } });
+
+    fireEvent.keyDown(first, { key: "Enter" });
+    await settleNotepad();
+
+    let second = selectedEditor();
+    const secondPlacementId = second.dataset.placementId;
+    expect(secondPlacementId).toBeTruthy();
+    fireEvent.focus(second);
+    fireEvent.change(second, { target: { value: "Beta" } });
+
+    fireEvent.keyDown(second, { key: "Enter" });
+    await settleNotepad();
+    let child = selectedEditor();
+    fireEvent.focus(child);
+    fireEvent.keyDown(child, { key: "Tab" });
+    await settleNotepad();
+    child = selectedEditor();
+    const childPlacementId = child.dataset.placementId;
+    expect(childPlacementId).toBeTruthy();
+    fireEvent.focus(child);
+    fireEvent.change(child, { target: { value: "Child of beta" } });
+
+    first = editorByPlacementId(firstPlacementId!);
+    fireEvent.focus(first);
+    first.setSelectionRange(first.value.length, first.value.length);
+    fireEvent.keyDown(first, { key: "Delete" });
+    await settleNotepad();
+
+    const selected = selectedEditor();
+    expect(selected.dataset.placementId).toBe(firstPlacementId);
+    expect(selected.value).toBe("Alpha Beta");
+
+    const childEditor = editorByPlacementId(childPlacementId!);
+    expect(childEditor.value).toBe("Child of beta");
+    const childRow = childEditor.closest(".notepad-row") as HTMLElement;
+    expect(childRow.getAttribute("aria-level")).toBe("2");
+
+    expect(document.querySelector(`textarea.notepad-editor[data-placement-id="${secondPlacementId}"]`)).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryAllByRole("treeitem").length).toBe(2);
     });
   });
 

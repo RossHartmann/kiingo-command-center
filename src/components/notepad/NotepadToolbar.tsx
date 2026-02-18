@@ -246,8 +246,10 @@ export function NotepadToolbar({
                 <summary>Shortcuts</summary>
                 <ul>
                   <li>`Enter`: new sibling row</li>
+                  <li>`Enter` at line start: insert empty sibling above and keep cursor at line start</li>
                   <li>`Shift+Enter`: newline in row (scrolls in compact editor)</li>
                   <li>`Backspace` on empty row: delete row</li>
+                  <li>`Delete` at end of row: merge with next sibling row</li>
                   <li>`ArrowUp`/`ArrowDown`: move between rows at line boundaries</li>
                   <li>`ArrowLeft`/`ArrowRight` (tree): collapse/expand</li>
                   <li>`Tab` / `Shift+Tab`: indent / outdent</li>
