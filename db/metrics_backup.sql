@@ -1863,45 +1863,43 @@ You will receive one dependency input:
     </MetricSection>
   );
 })()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["trailing disco","disco calls trailing","discovery trailing"],"dependencies":["weekly-discovery-calls"]}', '2026-02-17T00:57:37+00:00', '2026-02-18T06:35:15+00:00');
-INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('32c77dad-2b50-44f9-b9e0-5b4d668d2bca', 'Trailing Follow-Up Calls', 'trailing-followup-calls', 'Compute trailing 30-day follow-up call metrics using dependency input from `weekly-followup-calls`. Do not call calendar APIs in this metric.
+INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('32c77dad-2b50-44f9-b9e0-5b4d668d2bca', 'Trailing Follow-Up Calls', 'trailing-followup-calls', 'Compute trailing 30-day follow-up call metrics using dependency input from `weekly-followup-calls`. Do not call any calendar or HubSpot APIs.
 
 ## Dependency Input
 You will receive one dependency input:
-1. **weekly-followup-calls** with values like:
-   - `weeklyData`: array of `{ weekOf, count }`
-   - `currentWeek`, `priorWeek`, `total`, `avgPerWeek`, `trend`
-   - optionally richer fields such as `dailyData` (`{ date, count }`) or `followupCalls` (ISO timestamps)
+1. **weekly-followup-calls** with values including:
+   - `weeklyData`: array of `{ weekOf, count }` — external-facing follow-up calls per week
+   - `dailyData`: array of `{ date, count }` — daily follow-up counts
+   - `total`, `avgPerWeek`, `currentWeek`, `priorWeek`, `trend`
+   - `followUpDetails`: audit list of counted follow-up calls
+   - `excludedInternal`: sample of excluded internal meetings
 
 ## Computation Steps
 1. Locate dependency input where `slug == "weekly-followup-calls"` and read its `values`.
-2. Build a trailing-30 weekly series:
-   - Preferred: if `followupCalls` or `dailyData` are present, compute exact 30-day windows for each week ending date in chronological order.
-   - Fallback: if only `weeklyData` exists, estimate each trailing 30 value as:
+2. Build a trailing-30 weekly series using `weeklyData`:
+   - Preferred: if `dailyData` is present, compute exact 30-day rolling windows for each week ending date.
+   - Fallback: if only `weeklyData` exists, estimate each trailing-30 value as:
      current week plus prior 3 full weeks plus (2/7 * week-4), rounded to nearest integer.
 3. Compute summary metrics from that trailing series:
-   - `trailing30`: most recent trailing value
-   - `peak`, `peakWeek`: max trailing value and week
-   - `trough`, `troughWeek`: min trailing value and week
-   - `avgTrailing`: average trailing value
-4. Compute total and monthly context:
-   - `total`: use dependency `total` if present, else sum of weekly follow-up counts
-   - `byMonth`: if daily timestamps exist, aggregate by month exactly; otherwise derive a best-effort monthly rollup from weekly buckets.
-
-## Narrative Context
-- Follow-up calls are a leading indicator of account engagement and pipeline progression.
-- This metric is calendar-derived through `weekly-followup-calls`, anchored to Michael''s ongoing account engagement activity.
-- A sustained trailing decline signals relationship or execution gaps.
+   - `trailing30`: most recent trailing-30 value
+   - `peak`, `peakWeek`: max trailing value and which week
+   - `trough`, `troughWeek`: min trailing value and which week
+   - `avgTrailing`: average trailing-30 across all weeks
+4. Compute monthly context:
+   - `byMonth`: aggregate follow-up counts by month from daily data or weekly buckets
 
 ## Values to Return
-- `trailing30`: current trailing 30-day count
-- `peak`: highest weekly trailing 30 value
+- `trailing30`: current trailing 30-day follow-up count
+- `peak`: highest weekly trailing-30 value
 - `peakWeek`: ISO date of peak week
-- `trough`: lowest weekly trailing 30 value
+- `trough`: lowest weekly trailing-30 value
 - `troughWeek`: ISO date of trough week
 - `total`: total follow-up calls in dependency lookback
-- `avgTrailing`: average trailing 30 across all weeks
+- `avgTrailing`: average trailing-30 across all weeks
 - `weeklyData`: array of { weekOf, trailing30 } for the chart
-- `byMonth`: object of month -> count', '(() => {
+- `byMonth`: object of month -> follow-up count
+- `followUpDetails`: passed through from dependency for audit
+', '(() => {
   const data = DATA_PLACEHOLDER;
   const current = CURRENT_PLACEHOLDER;
   const peak = PEAK_PLACEHOLDER;
@@ -1936,7 +1934,7 @@ You will receive one dependency input:
       <MetricNote>Each point = trailing 30-day follow-up calls · Source: Weekly Follow-Up Calls dependency (calendar-derived)</MetricNote>
     </MetricSection>
   );
-})()', 259200, 'claude', NULL, NULL, 1, 0, '{"dependencies":["weekly-followup-calls"]}', '2026-02-17T01:46:35+00:00', '2026-02-17T16:22:19.185+00:00');
+})()', 259200, 'claude', NULL, NULL, 1, 0, '{"dependencies":["weekly-followup-calls"]}', '2026-02-17T01:46:35+00:00', '2026-02-18T07:15:09+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('e559abdf-19d9-b054-ee6c-9bb3b88a39f7', 'Weekly Discovery Calls', 'weekly-discovery-calls', 'Count first-time discovery calls per week from David''s calendar (david@kiingo.com).
 
 A "discovery call" is the FIRST external-facing sales conversation with a new prospect company. Repeat meetings with the same company and explicit next-steps/follow-up calls are excluded.
@@ -2120,56 +2118,153 @@ After classification, build:
     </MetricSection>
   );
 })()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["disco calls","weekly disco","discovery"]}', '2026-02-16T23:05:21Z', '2026-02-18T06:44:02+00:00');
-INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('65e79c58-154a-5e6d-6a25-ba4610bb1829', 'Weekly Follow-Up Calls', 'weekly-followup-calls', 'Count follow-up and next-step calls per week from Michael''s (michael@kiingo.com) calendar.
+INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('65e79c58-154a-5e6d-6a25-ba4610bb1829', 'Weekly Follow-Up Calls', 'weekly-followup-calls', 'Count client follow-up calls per week from Michael''s calendar (michael@kiingo.com).
+
+A "follow-up call" is any external-facing meeting that is NOT a first-time discovery call. This includes next-steps workshops, onboarding sessions, account reviews, second/third meetings, implementation calls, training sessions (client-facing), and any repeat engagement with a prospect or client company.
 
 ## Data Source
-Microsoft Calendar via Kiingo MCP calendar.listEvents().
+Microsoft Calendar via Kiingo MCP `calendar.listEvents()`.
 
-IMPORTANT - Response Shape: calendar.listEvents() returns { events: CalendarEventSummary[], totalCount: number }. Access the array of events via .events, not .value.
+IMPORTANT - Response Shape: `calendar.listEvents()` returns `{ events: CalendarEventSummary[], totalCount: number }`. Access events via `.events`, not `.value`.
 
-Each CalendarEventSummary has: subject, start, end, attendees, organizer, bodyPreview, isAllDay, isCancelled, etc.
+IMPORTANT - Use this exact API shape (do not improvise parameter names):
+```js
+await calendar.listEvents({
+  mailboxEmailAddress: ''michael@kiingo.com'',
+  startDateTime: ''<ISO datetime>'',
+  endDateTime: ''<ISO datetime>'',
+  useCalendarView: true,
+  maxResults: 1000,
+  timeZone: ''UTC''
+});
+```
+Use `mailboxEmailAddress`, `startDateTime`, and `endDateTime` exactly.
 
-IMPORTANT - Attendee emails are not available: The trimmed CalendarEventSummary does not reliably populate attendee email addresses. Do not use attendee emails to determine internal vs external meetings.
+## Reliability Requirements (must follow)
+- Use a single end-to-end computation flow.
+- Do not rely on cross-call memory or store persistence across tool invocations.
+- Do not split data fetch and aggregation across separate executions.
+- Use defensive defaults for event arrays: if result.events is missing, treat it as [] instead of throwing.
+- Avoid debug loops or large verbose dumps of raw events.
+- Do not call any MCP help/introspection tools for this metric. Use only `calendar.listEvents` with the exact parameter names above.
 
-## Classification Rules
+## Classification Pipeline
 
-Primary patterns (must match): Events with subjects containing any of these patterns are follow-up calls:
-- follow-up, follow up, check-in (with external party names), onboarding, account review, next steps, next-step, implementation, training (client-facing), QBR, quarterly review, status call, progress call
-- Events named like Kiingo AI and [Company Name] that are not consultative or discovery calls
-- Meetings with client or partner company names in the subject that indicate ongoing engagement
+### Step 1: Hard Exclusions (discard immediately)
+- Cancelled events (`isCancelled === true`)
+- All-day events (`isAllDay === true`)
+- Personal blocks: subject matches PTO, Busy, Out of Office, Blocked, Focus Time, Lunch
+- Daily standups / recurring internal rhythms: Tactical Session, Standup, Daily Sync
 
-Exclude these (not follow-up calls):
-- Internal meetings: Tactical Session, 1:1 between Kiingo team members, sync, standup, retrospective, planning, pipeline sync, social hour, show-and-tell, L10
-- Personal events: PTO, Busy, blocked time
-- Cancelled events (isCancelled = true)
-- All-day events (isAllDay = true)
-- Initial discovery or intro calls with brand-new prospects
+### Step 2: External-Facing Test (MANDATORY)
+An event is **external-facing** ONLY if it has at least one attendee whose email domain is NOT in this internal list:
+  `kiingo.com`, `fireflies.ai`, `promax.com`
 
-Do not filter by attendee count or attendee email domains.
+If every attendee''s email domain is in that internal list, the event is INTERNAL — discard it.
 
-## Retrieval Steps
-1. Compute the date range: trailing 12 weeks from today.
-2. Pull Michael calendar events with calendar.listEvents and read result.events.
-3. Apply the classification rules above based on subject line patterns.
-4. Group follow-up calls by ISO week (Mon-Sun) and count per week.
-5. Compute total follow-up calls, average per week, and trend over the last 4 weeks.
-6. Build daily counts for downstream metrics:
-   - `dailyData`: array of `{ date, count }` for each date in the trailing 12-week range.
+Note: `fireflies.ai` is a meeting recorder bot. `promax.com` is an internal team member''s secondary domain. Neither counts as an external participant.
+
+### Step 3: Exclude Internal Meetings (even if external attendees present)
+Discard events matching these patterns (case-insensitive):
+- 1:1 between Kiingo team members, Check-in (internal), Sync, Standup, Retrospective, Planning
+- Pipeline Sync, Pipeline Review, Sales Pipeline
+- Social Hour, Show-and-Tell, L10, Handoff
+- "Internal Training", "HubSpot Training"
+- "Sales/Marketing Weekly", "Sales Handoff", "Sales Handoff Flow"
+- "How Do We Sell" (internal strategy)
+- "Elevating the Conversation" (internal training)
+- Webinars or conferences with 20+ attendees
+
+### Step 4: Exclude First-Time Discovery Calls
+Discard events that are clearly FIRST-TIME discovery/intro calls. These belong to the discovery metric, not follow-ups:
+- Subject contains "Consultative Call" AND this is the first meeting with that company domain in the data window
+- Subject contains: discovery, intro call, introduction, initial meeting, demo request, exploratory, first call
+
+Keep events that are "Consultative Call" if the company has been seen before (repeat consultative call = follow-up).
+
+### Step 5: Classify as Follow-Up
+All remaining external-facing events after Steps 1-4 are follow-up calls. These include:
+- Next Steps Workshops ("Kiingo AI - Next Steps Workshop - ...")
+- Repeat meetings with the same company ("Kiingo AI and [Company] Consultative Call" where company was seen before)
+- Onboarding, implementation, training (client-facing)
+- Account reviews, QBRs, quarterly reviews
+- Status calls, progress calls, check-ins with clients
+- Any "Kiingo AI and [Company]" or "Kiingo AI" meeting with external attendees that isn''t a first discovery
+
+### Step 6: Deduplication
+Deduplicate by normalized key: `date + lowercase(subject)`. If the same meeting appears twice on the same day, count it once.
+
+## Date Range
+Fetch trailing 12 weeks from today.
+
+## Output Computation
+- **weeklyData**: `{ weekOf, count }` — follow-up calls per ISO week (Mon-Sun)
+- **dailyData**: `{ date, count }` — follow-up calls per day
+- **total**: total follow-up calls in the 12-week window
+- **avgPerWeek**: average follow-up calls per full week
+- **currentWeek**, **priorWeek**: follow-up counts for current and prior week
+- **trend**: increasing, decreasing, or flat based on last 4 weeks
+- **followUpDetails**: array of { date, subject, companyDomain } for all counted follow-up calls (full list, for audit)
+- **excludedInternal**: array of { date, subject, reason } for excluded internal meetings (max 20, for audit)
 
 ## Narrative Context
 - Michael is the Account Manager responsible for nurturing relationships after the initial discovery phase.
 - Follow-up calls indicate active account engagement and pipeline progression.
-- A healthy pace depends on active account load; track trend direction rather than absolute targets.
-- Note weeks with high and low volume and visible patterns.
+- These are all external-facing meetings that are NOT first-time discovery calls.
+- Track trend direction rather than absolute targets — healthy pace depends on active account load.
 
 ## Values to Return
-- currentWeek: follow-up call count for the current week
-- priorWeek: follow-up call count for the prior full week
-- weeklyData: array of { weekOf, count } for the trailing 12 weeks
-- dailyData: array of { date, count } for the trailing 12 weeks
+- currentWeek: follow-up call count for current week
+- priorWeek: follow-up call count for prior full week
+- weeklyData: array of { weekOf, count } for trailing 12 weeks
+- dailyData: array of { date, count } for trailing 12 weeks
 - total: total follow-up calls in the period
 - avgPerWeek: average calls per full week
-- trend: increasing, decreasing, or flat based on the last 4 weeks', '', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["follow up","followup calls","weekly followup"]}', '2026-02-16T23:07:03Z', '2026-02-17T16:22:19.186+00:00');
+- trend: increasing, decreasing, or flat
+- followUpDetails: full list of counted follow-up calls with company domain
+- excludedInternal: sample of excluded internal meetings
+', '(() => {
+  const weeklyData = WEEKLY_DATA_PLACEHOLDER;
+  const currentWeek = CURRENT_WEEK_PLACEHOLDER;
+  const priorWeek = PRIOR_WEEK_PLACEHOLDER;
+  const total = TOTAL_PLACEHOLDER;
+  const avgPerWeek = AVG_PER_WEEK_PLACEHOLDER;
+  const trend = TREND_PLACEHOLDER;
+
+  const trendColor = trend === ''increasing'' ? ''#16a34a'' : trend === ''decreasing'' ? ''#ef4444'' : theme.inkMuted;
+  const trendLabel = trend === ''increasing'' ? ''\u25B2 Increasing'' : trend === ''decreasing'' ? ''\u25BC Decreasing'' : ''\u25C6 Flat'';
+
+  const chartData = weeklyData.map(d => ({
+    week: d.weekOf.substring(5),
+    count: d.count,
+  }));
+
+  return (
+    <MetricSection>
+      <MetricRow>
+        <StatCard label="This Week" value={currentWeek} subtitle="Client follow-ups" />
+        <StatCard label="Prior Week" value={priorWeek} subtitle="Client follow-ups" />
+        <StatCard label="12-Week Total" value={total} subtitle={''Avg '' + avgPerWeek + ''/week''} />
+        <StatCard label="Trend" value={trendLabel} />
+      </MetricRow>
+
+      <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: ''1px solid '' + theme.line }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: theme.ink }}>Weekly Follow-Up Calls (External Only)</div>
+        <ResponsiveContainer width="100%" height="90%">
+          <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+            <XAxis dataKey="week" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+            <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+            <Bar dataKey="count" name="Follow-Up Calls" fill={theme.secondary} radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <MetricNote>Source: Michael''s calendar · External-facing follow-ups only (excludes internal meetings and first-time discovery calls)</MetricNote>
+    </MetricSection>
+  );
+})()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["follow up","followup calls","weekly followup"]}', '2026-02-16T23:07:03Z', '2026-02-18T07:15:09+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('3431baff-245e-4b47-84e1-2fef42405310', 'Win Rate Trend', 'win-rate-trend', 'Track monthly win rate (deals closed won / total deals closed) from HubSpot.
 
 ## Data Source
@@ -2668,37 +2763,36 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </MetricSection>
  );
 })()', 'completed', '2026-02-16T16:16:54.134439+00:00', '2026-02-16T16:18:41.906084+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('55722296-12fa-46c6-82ea-ccad934a1f22', '5da7296a-4782-45a8-8309-b0b4f9827ce9', '{"avgTrailing":45,"byMonth":{"Dec 2025":42,"Feb 2026":20,"Jan 2026":58},"followUpTotal":0,"nextStepsTotal":38,"peak":59,"peakWeek":"2026-01-26","total":123,"trailing30":32,"trough":37,"troughWeek":"2025-12-29","weeklyData":[{"trailing30":40,"weekOf":"2025-12-22"},{"trailing30":37,"weekOf":"2025-12-29"},{"trailing30":40,"weekOf":"2026-01-05"},{"trailing30":46,"weekOf":"2026-01-12"},{"trailing30":55,"weekOf":"2026-01-19"},{"trailing30":59,"weekOf":"2026-01-26"},{"trailing30":53,"weekOf":"2026-02-02"},{"trailing30":47,"weekOf":"2026-02-09"},{"trailing30":32,"weekOf":"2026-02-16"}]}', '(() => {
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('a94b99e6-7eb7-4f97-85c2-1cea41a92f88', '5da7296a-4782-45a8-8309-b0b4f9827ce9', '{"avgTrailing":44,"byMonth":{"Dec 2025":42,"Feb 2026":19,"Jan 2026":53,"Nov 2025":8},"discoveryDetails":null,"excludedRepeats":null,"followUpTotal":15,"nextStepsTotal":54,"peak":54,"peakWeek":"2026-01-26","total":123,"trailing30":45,"trough":37,"troughWeek":"2025-12-29","weeklyData":[{"trailing30":42,"weekOf":"2025-12-22"},{"trailing30":37,"weekOf":"2025-12-29"},{"trailing30":37,"weekOf":"2026-01-05"},{"trailing30":39,"weekOf":"2026-01-12"},{"trailing30":48,"weekOf":"2026-01-19"},{"trailing30":54,"weekOf":"2026-01-26"},{"trailing30":50,"weekOf":"2026-02-02"},{"trailing30":45,"weekOf":"2026-02-09"}]}', '(() => {
  const data = [
- { week: ''Dec 22'', value: 40 },
+ { week: ''Dec 22'', value: 42 },
  { week: ''Dec 29'', value: 37 },
- { week: ''Jan 05'', value: 40 },
- { week: ''Jan 12'', value: 46 },
- { week: ''Jan 19'', value: 55 },
- { week: ''Jan 26'', value: 59 },
- { week: ''Feb 02'', value: 53 },
- { week: ''Feb 09'', value: 47 },
- { week: ''Feb 16'', value: 32 }
+ { week: ''Jan 5'', value: 37 },
+ { week: ''Jan 12'', value: 39 },
+ { week: ''Jan 19'', value: 48 },
+ { week: ''Jan 26'', value: 54 },
+ { week: ''Feb 2'', value: 50 },
+ { week: ''Feb 9'', value: 45 },
  ];
- const current = 32;
- const peak = 59;
+ const current = 45;
+ const peak = 54;
  const trough = 37;
- const avgValue = 45;
- const byMonth = { ''Dec 2025'': 42, ''Jan 2026'': 58, ''Feb 2026'': 20 };
- const nextStepsTotal = 38;
- const total = 123;
+ const avgValue = 44;
+ const byMonth = { ''Nov 2025'': 8, ''Dec 2025'': 42, ''Jan 2026'': 53, ''Feb 2026'': 19 };
+ const followUpTotal = 15;
+ const nextStepsTotal = 54;
 
  return (
  <MetricSection>
  <MetricRow>
- <StatCard label="Trailing 30d" value={current} subtitle="First-time discovery calls" trendDirection="down" />
+ <StatCard label="Trailing 30d" value={current} subtitle="First-time discovery calls" trend="+2 vs prior" trendDirection="up" />
  <StatCard label="Peak" value={peak} subtitle="Week of Jan 26" />
  <StatCard label="Trough" value={trough} subtitle="Week of Dec 29" />
- <StatCard label="Avg Trailing" value={avgValue} subtitle="Across all weeks" />
+ <StatCard label="Avg Trailing" value={avgValue} subtitle="Avg across 8 weeks" />
  </MetricRow>
 
- <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}`, marginTop: 12 }}>
- <div style={{ color: theme.inkMuted, fontSize: 12, marginBottom: 8, fontWeight: 500, textTransform: ''uppercase'', letterSpacing: ''0.05em'' }}>Trailing 30-Day Discovery Calls by Week</div>
+ <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}`, marginBottom: 16 }}>
+ <div style={{ fontSize: 12, color: theme.inkMuted, marginBottom: 8, fontWeight: 500, letterSpacing: ''0.04em'', textTransform: ''uppercase'' }}>Trailing 30-Day Discovery Calls</div>
  <ResponsiveContainer width="100%" height="90%">
  <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
  <defs>
@@ -2710,8 +2804,8 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="week" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} domain={[0, ''auto'']} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v) => [v, ''Trailing 30d calls'']} />
- <ReferenceLine y={avgValue} stroke={theme.line} strokeDasharray="6 4" label={{ value: `Avg ${avgValue}`, fill: theme.inkMuted, fontSize: 11, position: ''right'' }} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v) => [v, ''Trailing 30d'']} />
+ <ReferenceLine y={avgValue} stroke={theme.line} strokeDasharray="6 4" label={{ value: `Avg ${avgValue}`, fill: theme.inkMuted, fontSize: 10, position: ''insideTopRight'' }} />
  <Area type="monotone" dataKey="value" stroke={theme.accent} strokeWidth={2.5} fill="url(#discoveryGradient)" dot={{ fill: theme.accent, r: 3, strokeWidth: 0 }} activeDot={{ fill: theme.accentStrong, r: 5, strokeWidth: 2, stroke: theme.line }} />
  </AreaChart>
  </ResponsiveContainer>
@@ -2719,48 +2813,46 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
 
  <MetricRow>
  {Object.entries(byMonth).map(([month, count]) => (
- <StatCard key={month} label={month} value={count} subtitle="Discovery calls" />
+ <StatCard key={month} label={month} value={count} subtitle="First-time discoveries" />
  ))}
- <StatCard label="Next-Steps Calls" value={nextStepsTotal} subtitle="Context (excluded)" />
- <StatCard label="Total (lookback)" value={total} subtitle="First-time discoveries" />
  </MetricRow>
 
- <MetricNote>Each chart point = trailing 30-day first-time discovery call count ending that week · Avg reference line at {avgValue} · Source: Weekly Discovery Calls dependency · Feb 16 week is partial (in-progress)</MetricNote>
+ <div style={{ background: theme.panel, borderRadius: 12, padding: ''12px 16px'', border: `1px solid ${theme.line}`, marginTop: 8 }}>
+ <div style={{ fontSize: 12, color: theme.inkMuted, marginBottom: 6, fontWeight: 600, textTransform: ''uppercase'', letterSpacing: ''0.04em'' }}>Call Breakdown Context</div>
+ <div style={{ display: ''flex'', gap: 24 }}>
+ <div><span style={{ color: theme.inkMuted, fontSize: 13 }}>First-Time Discoveries: </span><span style={{ color: theme.ink, fontWeight: 700, fontSize: 15 }}>123</span></div>
+ <div><span style={{ color: theme.inkMuted, fontSize: 13 }}>Repeat-Company Follow-Ups: </span><span style={{ color: theme.ink, fontWeight: 700, fontSize: 15 }}>{followUpTotal}</span></div>
+ <div><span style={{ color: theme.inkMuted, fontSize: 13 }}>Next-Steps Calls: </span><span style={{ color: theme.ink, fontWeight: 700, fontSize: 15 }}>{nextStepsTotal}</span></div>
+ </div>
+ </div>
+
+ <MetricNote>Trailing 30d estimated via rolling 4-week window (fallback: no daily data). Each week = prior 4 weeks + 2/7 of week 5. Source: Weekly Discovery Calls dependency (calendar-derived).</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-18T06:36:52.993894+00:00', '2026-02-18T06:41:19.462248+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('65081b35-df14-4223-a03e-c2c6942771b6', '5e4a0131-1e16-4ca6-b715-cddf54af01e4', '{"conversionRate":77.45,"currentInStage":23,"currentInStageValue":32850,"currentTrailing30":62,"priorTrailing30":50,"proposalCount":79,"trendDirection":"up","trendPct":24}', '(() => {
- const trailing = 62;
- const prior = 50;
- const trend = ''up'';
- const trendPct = 24;
+})()', 'completed', '2026-02-18T07:11:10.681608+00:00', '2026-02-18T07:11:51.108702+00:00');
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('aa93826f-0857-42fa-ba71-fdc0002c731b', '5e4a0131-1e16-4ca6-b715-cddf54af01e4', '{"conversionRate":77.45,"currentInStage":23,"currentInStageValue":32850,"currentTrailing30":32,"priorTrailing30":55,"proposalCount":79,"trendDirection":"down","trendPct":-41.8}', '(() => {
+ const trailing = 32;
+ const trend = ''down'';
+ const trendPct = -41.8;
  const inStage = 23;
  const stageValue = 32850;
- const proposalCount = 79;
  const conversion = 77.45;
+ const proposalCount = 79;
 
  const weeklyData = [
- { weekOf: ''2025-11-24'', trailing30: 6 },
- { weekOf: ''2025-12-01'', trailing30: 19 },
- { weekOf: ''2025-12-08'', trailing30: 37 },
- { weekOf: ''2025-12-15'', trailing30: 47 },
- { weekOf: ''2025-12-22'', trailing30: 51 },
- { weekOf: ''2025-12-29'', trailing30: 43 },
- { weekOf: ''2026-01-05'', trailing30: 44 },
- { weekOf: ''2026-01-12'', trailing30: 50 },
- { weekOf: ''2026-01-19'', trailing30: 60 },
- { weekOf: ''2026-01-26'', trailing30: 71 },
- { weekOf: ''2026-02-02'', trailing30: 66 },
- { weekOf: ''2026-02-09'', trailing30: 62 },
+ { weekOf: ''12/22'', trailing30: 40 },
+ { weekOf: ''12/29'', trailing30: 37 },
+ { weekOf: ''01/05'', trailing30: 40 },
+ { weekOf: ''01/12'', trailing30: 46 },
+ { weekOf: ''01/19'', trailing30: 55 },
+ { weekOf: ''01/26'', trailing30: 59 },
+ { weekOf: ''02/02'', trailing30: 53 },
+ { weekOf: ''02/09'', trailing30: 47 },
+ { weekOf: ''02/16'', trailing30: 32 },
  ];
 
- const chartData = weeklyData.map(d => ({
- week: d.weekOf.slice(5),
- calls: d.trailing30,
- }));
-
- const trendArrow = ''\u2191'';
- const trendColor = theme.accent;
+ const trendArrow = ''\u2193'';
+ const trendColor = theme.danger;
 
  return (
  <MetricSection title="Discovery Call Health">
@@ -2768,8 +2860,8 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <StatCard
  label="Trailing 30d Calls"
  value={trailing}
- subtitle={trendArrow + '' '' + trendPct.toFixed(0) + ''% vs 4 wks prior''}
- trendDirection="up"
+ subtitle={trendArrow + '' '' + Math.abs(trendPct).toFixed(0) + ''% vs prior 30d''}
+ trendDirection={trend}
  />
  <StatCard
  label="In Discovery Now"
@@ -2779,31 +2871,31 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <StatCard
  label="Discovery \u2192 Proposal"
  value={conversion.toFixed(0) + ''%''}
- subtitle={''Based on '' + proposalCount + '' proposals vs '' + inStage + '' in discovery''}
+ subtitle={proposalCount + '' deals in Proposal Sent''}
  />
  </MetricRow>
- <div style={{ width: ''100%'', height: 180, marginTop: 12 }}>
- <ResponsiveContainer width="100%" height="100%">
- <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+ <div style={{ marginTop: 16 }}>
+ <ResponsiveContainer width="100%" height={160}>
+ <AreaChart data={weeklyData} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
  <defs>
- <linearGradient id="discGrad" x1="0" y1="0" x2="0" y2="1">
+ <linearGradient id="dcGrad" x1="0" y1="0" x2="0" y2="1">
  <stop offset="5%" stopColor={theme.gradientFrom} stopOpacity={0.35} />
  <stop offset="95%" stopColor={theme.gradientFrom} stopOpacity={0} />
  </linearGradient>
  </defs>
  <CartesianGrid stroke={theme.gridStroke} strokeDasharray="3 3" />
- <XAxis dataKey="week" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} interval={2} />
- <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} domain={[0, 80]} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v) => [v, ''Trailing 30d'']} />
- <ReferenceLine y={50} stroke={theme.inkMuted} strokeDasharray="4 3" label={{ value: ''Prior'', fill: theme.inkMuted, fontSize: 10, position: ''insideTopRight'' }} />
- <Area type="monotone" dataKey="calls" stroke={theme.accent} strokeWidth={2} fill="url(#discGrad)" dot={{ r: 3, fill: theme.accent, strokeWidth: 0 }} activeDot={{ r: 5 }} />
+ <XAxis dataKey="weekOf" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} />
+ <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} domain={[25, 65]} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+ <ReferenceLine y={55} stroke={theme.danger} strokeDasharray="4 3" label={{ value: ''Prior 30d: 55'', fill: theme.danger, fontSize: 10, position: ''insideTopRight'' }} />
+ <Area type="monotone" dataKey="trailing30" stroke={theme.accent} fill="url(#dcGrad)" strokeWidth={2} dot={{ r: 3, fill: theme.accent }} name="Trailing 30d" />
  </AreaChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Synthesized from pipeline + trailing discovery data · No additional API calls · Prior trailing30 = 50 (week of 2026-01-12)</MetricNote>
+ <MetricNote>Synthesized from pipeline + trailing discovery data · No additional API calls · Prior 30d baseline: week of 2026-01-19</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-17T23:14:41.428653+00:00', '2026-02-17T23:15:04.935834+00:00');
+})()', 'completed', '2026-02-18T07:11:12.185199+00:00', '2026-02-18T07:12:09.967352+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('a9f76fbe-1394-497b-bc3b-b7724bd981c9', '6353801b-e51e-491d-ab5e-a780ed36b62a', '{"currentMonth":-56498,"priorMonth":9749,"trailing3Avg":-18821,"ltmTotal":637991,"monthlyData":[{"month":"Mar 25","netIncome":133329},{"month":"Apr 25","netIncome":34326},{"month":"May 25","netIncome":58996},{"month":"Jun 25","netIncome":62925},{"month":"Jul 25","netIncome":18712},{"month":"Aug 25","netIncome":25139},{"month":"Sep 25","netIncome":161054},{"month":"Oct 25","netIncome":99890},{"month":"Nov 25","netIncome":100082},{"month":"Dec 25","netIncome":-9713},{"month":"Jan 26","netIncome":9749},{"month":"Feb 26","netIncome":-56498}]}', '(() => {
   const data = [{"month":"Mar 25","netIncome":133329},{"month":"Apr 25","netIncome":34326},{"month":"May 25","netIncome":58996},{"month":"Jun 25","netIncome":62925},{"month":"Jul 25","netIncome":18712},{"month":"Aug 25","netIncome":25139},{"month":"Sep 25","netIncome":161054},{"month":"Oct 25","netIncome":99890},{"month":"Nov 25","netIncome":100082},{"month":"Dec 25","netIncome":-9713},{"month":"Jan 26","netIncome":9749},{"month":"Feb 26","netIncome":-56498}];
   const currentMonth = -56498;
@@ -3094,25 +3186,34 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
   );
 })()', 'completed', '2026-02-18T01:06:32+00:00', '2026-02-18T01:06:32+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('1addb82f-aec6-48dd-bae2-7a6324cd63c8', '93ba384c-b172-4072-9e74-c4705f38c349', '{"bestMonth":369676,"bestMonthLabel":"Oct ''25","currentMonth":130899,"monthlyData":[{"amount":19420,"count":5,"month":"Jun ''25"},{"amount":25387,"count":10,"month":"Jul ''25"},{"amount":106600,"count":33,"month":"Aug ''25"},{"amount":212700,"count":36,"month":"Sep ''25"},{"amount":369676,"count":115,"month":"Oct ''25"},{"amount":247744,"count":61,"month":"Nov ''25"},{"amount":152094,"count":59,"month":"Dec ''25"},{"amount":299297,"count":53,"month":"Jan ''26"},{"amount":130899,"count":26,"month":"Feb ''26"}],"totalWon":1563817,"trailingAvg":173757}', '(() => { const data = [{month: ''Jun \''25'', amount: 19420, count: 5}, {month: ''Jul \''25'', amount: 25387, count: 10}, {month: ''Aug \''25'', amount: 106600, count: 33}, {month: ''Sep \''25'', amount: 212700, count: 36}, {month: ''Oct \''25'', amount: 369676, count: 115}, {month: ''Nov \''25'', amount: 247744, count: 61}, {month: ''Dec \''25'', amount: 152094, count: 59}, {month: ''Jan \''26'', amount: 299297, count: 53}, {month: ''Feb \''26'', amount: 130899, count: 26}]; const currentMonth = 130899; const bestMonth = 369676; const trailingAvg = 173757; return (<MetricSection><MetricRow><StatCard label="This Month" value={''$'' + (currentMonth / 1000).toFixed(0) + ''K''} subtitle="Closed won" trendDirection="down" /><StatCard label="Best Month" value={''$'' + (bestMonth / 1000).toFixed(0) + ''K''} subtitle="Oct ''25" /><StatCard label="Monthly Avg" value={''$'' + (trailingAvg / 1000).toFixed(0) + ''K''} subtitle="9-month average" /></MetricRow><div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}`, marginTop: 16 }}><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} /><XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} /><YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000) + ''K''} /><Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} /><ReferenceLine y={trailingAvg} stroke={theme.line} strokeDasharray="6 4" label={{ value: ''Avg'', position: ''right'', fill: theme.inkMuted, fontSize: 11 }} /><Bar dataKey="amount" name="Closed Won" fill={theme.accent} radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div><MetricNote>398 closed-won deals totaling $1.56M · HubSpot CRM via Kiingo MCP</MetricNote></MetricSection>); })()', 'completed', '2026-02-15T23:56:55.161605+00:00', '2026-02-15T23:57:41.872651+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('5d9aba90-e468-4c06-b0a9-79d8f00c1838', '9d9e7fe9-b25c-4628-ac65-5a4fea982f67', '{"topCustomers": [{"name": "Nutanix", "revenue": 187500}, {"name": "Vistage", "revenue": 145200}, {"name": "Deluxe Corp", "revenue": 98700}, {"name": "Securian Financial", "revenue": 87300}, {"name": "Celestica", "revenue": 76500}, {"name": "Digi International", "revenue": 65400}, {"name": "Sleep Number", "revenue": 54200}, {"name": "Bremer Bank", "revenue": 48900}, {"name": "UHG", "revenue": 45600}, {"name": "Taylor Corp", "revenue": 42100}]}', '(() => {
-  const data = [{"name": "Nutanix", "revenue": 187500}, {"name": "Vistage", "revenue": 145200}, {"name": "Deluxe Corp", "revenue": 98700}, {"name": "Securian Financial", "revenue": 87300}, {"name": "Celestica", "revenue": 76500}, {"name": "Digi International", "revenue": 65400}, {"name": "Sleep Number", "revenue": 54200}, {"name": "Bremer Bank", "revenue": 48900}, {"name": "UHG", "revenue": 45600}, {"name": "Taylor Corp", "revenue": 42100}];
-  return (
-    <MetricSection>
-      <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 90, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
-            <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v/1000) + ''K''} />
-            <YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={85} />
-            <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} />
-            <Bar dataKey="revenue" name="Revenue" fill={theme.accent} radius={[0,4,4,0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <MetricNote>Source: QuickBooks Invoices (LTM) via Kiingo MCP</MetricNote>
-    </MetricSection>
-  );
-})()', 'completed', '2026-02-15T06:29:29+00:00', '2026-02-15T06:29:29+00:00');
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('bd2e4663-bd02-4dd5-8b16-1ba698be8125', '9d9e7fe9-b25c-4628-ac65-5a4fea982f67', '{"topCustomerRevenue":413005.5,"topCustomers":[{"name":"Immatics","revenue":72095},{"name":"Vistage Worldwide Inc.","revenue":52120},{"name":"Pathfinder Insurance Group","revenue":47640},{"name":"Connect Service Solutions","revenue":41398},{"name":"Legacy Concierge","revenue":38298},{"name":"Anglepoint","revenue":37350},{"name":"Ascent HVAC","revenue":35500},{"name":"SPMB","revenue":30881.5},{"name":"DealNews","revenue":29875},{"name":"Rich Chicks","revenue":27848}],"totalCustomers":361}', '(() => {
+ const data = [{"name":"Immatics","revenue":72095},{"name":"Vistage Worldwide Inc.","revenue":52120},{"name":"Pathfinder Insurance Group","revenue":47640},{"name":"Connect Service Solutions","revenue":41398},{"name":"Legacy Concierge","revenue":38298},{"name":"Anglepoint","revenue":37350},{"name":"Ascent HVAC","revenue":35500},{"name":"SPMB","revenue":30881.5},{"name":"DealNews","revenue":29875},{"name":"Rich Chicks","revenue":27848}];
+ const topTotal = 413005.5;
+ const totalCustomers = 361;
+ return (
+ <MetricSection>
+ <MetricRow>
+ <StatCard label="Top 10 Revenue" value={''$'' + (413005.5/1000).toFixed(0) + ''K''} subtitle="combined LTM" />
+ <StatCard label="Unique Customers" value={361} subtitle="with invoices" />
+ <StatCard label="#1 Customer" value="Immatics" subtitle={''$'' + (72095/1000).toFixed(1) + ''K LTM''} />
+ </MetricRow>
+ <div style={{ height: 340, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line }}>
+ <ResponsiveContainer width="100%" height="100%">
+ <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 140, bottom: 5 }}>
+ <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+ <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v/1000).toFixed(0) + ''K''} />
+ <YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={135} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => [''$'' + Number(v).toLocaleString(), ''Revenue'']} />
+ <Bar dataKey="revenue" name="Revenue" fill={theme.accent} radius={[0, 4, 4, 0]}>
+ <LabelList dataKey="revenue" position="right" style={{ fill: theme.inkMuted, fontSize: 10 }} formatter={v => ''$'' + (v/1000).toFixed(0) + ''K''} />
+ </Bar>
+ </BarChart>
+ </ResponsiveContainer>
+ </div>
+ <MetricNote>Source: QuickBooks Invoices (LTM Feb 2025 – Feb 2026) · 361 unique customers · Top 10 shown</MetricNote>
+ </MetricSection>
+ );
+})()', 'completed', '2026-02-18T06:54:45.903805+00:00', '2026-02-18T06:55:38.344085+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('757ac226-bb26-4db3-a6f4-09101e3eec83', '9e73074d-654f-40fc-a53c-5c571ba309e6', '{"clientProjects": [{"client": "85C Bakery", "type": "AI Bootcamp", "status": "Active", "sessions": "4/7"}, {"client": "ATS Construction", "type": "Foundational Bootcamp", "status": "Setup", "sessions": "0/6"}, {"client": "Tire Discounter Group", "type": "Private Bootcamp", "status": "Setup", "sessions": "0/6"}, {"client": "Oxford Road", "type": "Prompt Engineering", "status": "Scoping", "sessions": "0/4"}, {"client": "Scimitar", "type": "AI Bootcamp", "status": "Active", "sessions": "3/7"}, {"client": "Juana", "type": "Foundational Bootcamp", "status": "Setup", "sessions": "0/6"}, {"client": "KC HiLiTES", "type": "Consulting", "status": "Active", "sessions": "N/A"}], "activeCount": 3}', '(() => {
   const data = [{"client": "85C Bakery", "type": "AI Bootcamp", "status": "Active", "sessions": "4/7"}, {"client": "ATS Construction", "type": "Foundational Bootcamp", "status": "Setup", "sessions": "0/6"}, {"client": "Tire Discounter Group", "type": "Private Bootcamp", "status": "Setup", "sessions": "0/6"}, {"client": "Oxford Road", "type": "Prompt Engineering", "status": "Scoping", "sessions": "0/4"}, {"client": "Scimitar", "type": "AI Bootcamp", "status": "Active", "sessions": "3/7"}, {"client": "Juana", "type": "Foundational Bootcamp", "status": "Setup", "sessions": "0/6"}, {"client": "KC HiLiTES", "type": "Consulting", "status": "Active", "sessions": "N/A"}];
   const active = data.filter(d => d.status === ''Active'').length;
@@ -3365,53 +3466,58 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
   );
 })()', 'completed', '2026-02-17T23:34:33+00:00', '2026-02-17T23:34:33+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('df922d65-5adb-4ee6-858e-297771c600c4', 'd6fe7a31-00ad-41e4-9379-b4ec83a346b7', '{"teamWorkload":[{"dueThisWeek":8,"name":"Becky Clark","open":33,"overdue":3},{"dueThisWeek":10,"name":"Isabelle Coloma","open":101,"overdue":5},{"dueThisWeek":25,"name":"James Hill-Jiang","open":98,"overdue":9},{"dueThisWeek":15,"name":"Jordan McDaniel","open":112,"overdue":15},{"dueThisWeek":5,"name":"Josh Sullivan","open":113,"overdue":4},{"dueThisWeek":3,"name":"Ross Hartmann","open":107,"overdue":1},{"dueThisWeek":27,"name":"Sohrab Azad","open":130,"overdue":1},{"dueThisWeek":0,"name":"Andy Woods","open":0,"overdue":0},{"dueThisWeek":0,"name":"David Rodriguez","open":0,"overdue":0},{"dueThisWeek":0,"name":"Jess Hartmann","open":1,"overdue":0},{"dueThisWeek":0,"name":"Kym Parodo","open":2,"overdue":2},{"dueThisWeek":0,"name":"Liesel Hartmann","open":0,"overdue":0},{"dueThisWeek":0,"name":"mich@kiingo.com","open":0,"overdue":0},{"dueThisWeek":0,"name":"Michael Glaser","open":0,"overdue":0},{"dueThisWeek":0,"name":"Ryan Keiper","open":0,"overdue":0},{"dueThisWeek":0,"name":"Schuyler Dragoo","open":0,"overdue":0},{"dueThisWeek":0,"name":"Taylor Hartmann","open":0,"overdue":0}],"totalOpenTasks":697,"totalOverdue":40}', '(() => { const data = [{"name":"Sohrab Azad","open":130,"dueThisWeek":27,"overdue":1},{"name":"Josh Sullivan","open":113,"dueThisWeek":5,"overdue":4},{"name":"Jordan McDaniel","open":112,"dueThisWeek":15,"overdue":15},{"name":"Ross Hartmann","open":107,"dueThisWeek":3,"overdue":1},{"name":"Isabelle Coloma","open":101,"dueThisWeek":10,"overdue":5},{"name":"James Hill-Jiang","open":98,"dueThisWeek":25,"overdue":9},{"name":"Becky Clark","open":33,"dueThisWeek":8,"overdue":3},{"name":"Kym Parodo","open":2,"dueThisWeek":0,"overdue":2},{"name":"Jess Hartmann","open":1,"dueThisWeek":0,"overdue":0}].filter(d => d.open > 0); const totalOpen = 697; const totalOverdue = 40; return ( <MetricSection> <MetricRow> <StatCard label="Total Open Tasks" value={totalOpen} subtitle="Across team" /> <StatCard label="Overdue" value={totalOverdue} subtitle="Past due date" trendDirection={totalOverdue > 5 ? ''down'' : ''flat''} /> </MetricRow> <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}> <ResponsiveContainer width="100%" height="100%"> <BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 110, bottom: 5 }}> <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} /> <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} /> <YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={105} /> <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} /> <Bar dataKey="open" name="Open" fill={theme.accent} radius={[0,4,4,0]} /> <Bar dataKey="overdue" name="Overdue" fill={theme.danger} radius={[0,4,4,0]} /> </BarChart> </ResponsiveContainer> </div> <MetricNote>Source: Asana Tasks via Kiingo MCP • As of Feb 15, 2026</MetricNote> </MetricSection> ); })()', 'completed', '2026-02-15T19:28:47.450515+00:00', '2026-02-15T19:29:43.477586+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('70e886e2-bbb5-43b8-9bcf-6be058f77852', 'e559abdf-19d9-b054-ee6c-9bb3b88a39f7', '{"avgPerWeek":10.8,"currentWeek":1,"discoveryTotal":123,"nextStepsTotal":38,"priorWeek":12,"total":161,"trend":"decreasing","weeklyData":[{"count":10,"weekOf":"2025-12-01"},{"count":22,"weekOf":"2025-12-08"},{"count":13,"weekOf":"2025-12-15"},{"count":8,"weekOf":"2025-12-22"},{"count":3,"weekOf":"2025-12-29"},{"count":21,"weekOf":"2026-01-05"},{"count":23,"weekOf":"2026-01-12"},{"count":21,"weekOf":"2026-01-19"},{"count":11,"weekOf":"2026-01-26"},{"count":10,"weekOf":"2026-02-02"},{"count":15,"weekOf":"2026-02-09"},{"count":1,"weekOf":"2026-02-16"}],"weeklyDiscovery":[{"count":7,"weekOf":"2025-12-01"},{"count":17,"weekOf":"2025-12-08"},{"count":10,"weekOf":"2025-12-15"},{"count":6,"weekOf":"2025-12-22"},{"count":2,"weekOf":"2025-12-29"},{"count":17,"weekOf":"2026-01-05"},{"count":18,"weekOf":"2026-01-12"},{"count":16,"weekOf":"2026-01-19"},{"count":7,"weekOf":"2026-01-26"},{"count":7,"weekOf":"2026-02-02"},{"count":12,"weekOf":"2026-02-09"},{"count":1,"weekOf":"2026-02-16"}],"weeklyNextSteps":[{"count":3,"weekOf":"2025-12-01"},{"count":5,"weekOf":"2025-12-08"},{"count":3,"weekOf":"2025-12-15"},{"count":2,"weekOf":"2025-12-22"},{"count":1,"weekOf":"2025-12-29"},{"count":4,"weekOf":"2026-01-05"},{"count":5,"weekOf":"2026-01-12"},{"count":5,"weekOf":"2026-01-19"},{"count":4,"weekOf":"2026-01-26"},{"count":3,"weekOf":"2026-02-02"},{"count":3,"weekOf":"2026-02-09"},{"count":0,"weekOf":"2026-02-16"}]}', '(() => {
- const weeklyDiscovery = [{"weekOf":"2025-12-01","count":7},{"weekOf":"2025-12-08","count":17},{"weekOf":"2025-12-15","count":10},{"weekOf":"2025-12-22","count":6},{"weekOf":"2025-12-29","count":2},{"weekOf":"2026-01-05","count":17},{"weekOf":"2026-01-12","count":18},{"weekOf":"2026-01-19","count":16},{"weekOf":"2026-01-26","count":7},{"weekOf":"2026-02-02","count":7},{"weekOf":"2026-02-09","count":12},{"weekOf":"2026-02-16","count":1}];
- const weeklyNextSteps = [{"weekOf":"2025-12-01","count":3},{"weekOf":"2025-12-08","count":5},{"weekOf":"2025-12-15","count":3},{"weekOf":"2025-12-22","count":2},{"weekOf":"2025-12-29","count":1},{"weekOf":"2026-01-05","count":4},{"weekOf":"2026-01-12","count":5},{"weekOf":"2026-01-19","count":5},{"weekOf":"2026-01-26","count":4},{"weekOf":"2026-02-02","count":3},{"weekOf":"2026-02-09","count":3},{"weekOf":"2026-02-16","count":0}];
- const chartData = weeklyDiscovery.map((d, i) => ({ weekOf: d.weekOf, label: d.weekOf.slice(5), discovery: d.count, nextSteps: weeklyNextSteps[i].count }));
- const currentWeek = 1;
- const priorWeek = 12;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('0af9ff91-fedf-485f-bf4e-cc14ff4d6963', 'e559abdf-19d9-b054-ee6c-9bb3b88a39f7', '{"avgPerWeek":"10.2","currentWeek":0,"discoveryTotal":123,"followUpTotal":15,"nextStepsTotal":54,"priorWeek":11,"trend":"decreasing","weeklyData":[{"count":8,"weekOf":"2025-11-24"},{"count":7,"weekOf":"2025-12-01"},{"count":18,"weekOf":"2025-12-08"},{"count":10,"weekOf":"2025-12-15"},{"count":5,"weekOf":"2025-12-22"},{"count":2,"weekOf":"2025-12-29"},{"count":15,"weekOf":"2026-01-05"},{"count":14,"weekOf":"2026-01-12"},{"count":16,"weekOf":"2026-01-19"},{"count":8,"weekOf":"2026-01-26"},{"count":8,"weekOf":"2026-02-02"},{"count":11,"weekOf":"2026-02-09"}],"weeklyFollowUps":[{"count":0,"weekOf":"2025-11-24"},{"count":0,"weekOf":"2025-12-01"},{"count":1,"weekOf":"2025-12-08"},{"count":1,"weekOf":"2025-12-15"},{"count":2,"weekOf":"2025-12-22"},{"count":0,"weekOf":"2025-12-29"},{"count":3,"weekOf":"2026-01-05"},{"count":3,"weekOf":"2026-01-12"},{"count":2,"weekOf":"2026-01-19"},{"count":2,"weekOf":"2026-01-26"},{"count":1,"weekOf":"2026-02-02"},{"count":0,"weekOf":"2026-02-09"}],"weeklyNextSteps":[{"count":6,"weekOf":"2025-11-24"},{"count":3,"weekOf":"2025-12-01"},{"count":5,"weekOf":"2025-12-08"},{"count":5,"weekOf":"2025-12-15"},{"count":4,"weekOf":"2025-12-22"},{"count":2,"weekOf":"2025-12-29"},{"count":6,"weekOf":"2026-01-05"},{"count":6,"weekOf":"2026-01-12"},{"count":7,"weekOf":"2026-01-19"},{"count":5,"weekOf":"2026-01-26"},{"count":4,"weekOf":"2026-02-02"},{"count":5,"weekOf":"2026-02-09"}]}', '(() => {
+ const weeklyData = [{"weekOf":"2025-11-24","count":8},{"weekOf":"2025-12-01","count":7},{"weekOf":"2025-12-08","count":18},{"weekOf":"2025-12-15","count":10},{"weekOf":"2025-12-22","count":5},{"weekOf":"2025-12-29","count":2},{"weekOf":"2026-01-05","count":15},{"weekOf":"2026-01-12","count":14},{"weekOf":"2026-01-19","count":16},{"weekOf":"2026-01-26","count":8},{"weekOf":"2026-02-02","count":8},{"weekOf":"2026-02-09","count":11}];
+ const weeklyFollowUps = [{"weekOf":"2025-11-24","count":0},{"weekOf":"2025-12-01","count":0},{"weekOf":"2025-12-08","count":1},{"weekOf":"2025-12-15","count":1},{"weekOf":"2025-12-22","count":2},{"weekOf":"2025-12-29","count":0},{"weekOf":"2026-01-05","count":3},{"weekOf":"2026-01-12","count":3},{"weekOf":"2026-01-19","count":2},{"weekOf":"2026-01-26","count":2},{"weekOf":"2026-02-02","count":1},{"weekOf":"2026-02-09","count":0}];
+ const weeklyNextSteps = [{"weekOf":"2025-11-24","count":6},{"weekOf":"2025-12-01","count":3},{"weekOf":"2025-12-08","count":5},{"weekOf":"2025-12-15","count":5},{"weekOf":"2025-12-22","count":4},{"weekOf":"2025-12-29","count":2},{"weekOf":"2026-01-05","count":6},{"weekOf":"2026-01-12","count":6},{"weekOf":"2026-01-19","count":7},{"weekOf":"2026-01-26","count":5},{"weekOf":"2026-02-02","count":4},{"weekOf":"2026-02-09","count":5}];
+ const currentWeek = 0;
+ const priorWeek = 11;
  const discoveryTotal = 123;
- const nextStepsTotal = 38;
- const avgPerWeek = 10.8;
+ const followUpTotal = 15;
+ const nextStepsTotal = 54;
+ const avgPerWeek = ''10.2'';
  const trend = ''decreasing'';
- const weekDelta = currentWeek - priorWeek;
- const trendDir = trend === ''increasing'' ? ''up'' : trend === ''decreasing'' ? ''down'' : ''flat'';
- const priorLabel = weekDelta >= 0 ? `+${weekDelta} vs last week` : `${weekDelta} vs last week`;
+
+ const trendColor = trend === ''increasing'' ? theme.accent : trend === ''decreasing'' ? theme.danger : theme.inkMuted;
+ const trendLabel = trend === ''increasing'' ? ''\u25B2 Increasing'' : trend === ''decreasing'' ? ''\u25BC Decreasing'' : ''\u25C6 Flat'';
+
+ const combined = weeklyData.map((d, i) => ({
+ week: d.weekOf.substring(5),
+ discovery: d.count,
+ followUps: weeklyFollowUps[i] ? weeklyFollowUps[i].count : 0,
+ nextSteps: weeklyNextSteps[i] ? weeklyNextSteps[i].count : 0,
+ }));
+
  return (
- <MetricSection title="Weekly Discovery Calls">
+ <MetricSection>
  <MetricRow>
- <StatCard label="This Week" value={currentWeek} subtitle={priorLabel} trend={priorLabel} trendDirection={weekDelta >= 0 ? ''up'' : ''down''} />
- <StatCard label="Last Week" value={priorWeek} subtitle="Full week" />
- <StatCard label="12-Wk Total" value={discoveryTotal} subtitle="Discovery calls" />
- <StatCard label="Avg / Week" value={avgPerWeek.toFixed(1)} subtitle="Discovery (excl. current)" />
- <StatCard label="Next Steps" value={nextStepsTotal} subtitle="12-week total" />
+ <StatCard label="This Week" value={currentWeek} subtitle="First-time discovery" trendDirection="flat" />
+ <StatCard label="Prior Week" value={priorWeek} subtitle="First-time discovery" />
+ <StatCard label="12-Week Total" value={discoveryTotal} subtitle={''Avg '' + avgPerWeek + ''/week''} />
+ <StatCard label="Trend" value={trendLabel} subtitle={followUpTotal + '' follow-ups · '' + nextStepsTotal + '' next steps''} />
  </MetricRow>
- <div style={{ marginTop: 24 }}>
- <div style={{ fontSize: 13, fontWeight: 600, color: theme.inkMuted, marginBottom: 12, textTransform: ''uppercase'', letterSpacing: ''0.05em'' }}>Discovery &amp; Next Steps Calls — Trailing 12 Weeks</div>
- <ResponsiveContainer width="100%" height={260}>
- <BarChart data={chartData} barGap={2} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
- <defs>
- <linearGradient id="discoveryGrad" x1="0" y1="0" x2="0" y2="1">
- <stop offset="0%" stopColor={theme.accent} stopOpacity={0.95} />
- <stop offset="100%" stopColor={theme.gradientFrom} stopOpacity={0.6} />
- </linearGradient>
- </defs>
- <CartesianGrid stroke={theme.gridStroke} vertical={false} />
- <XAxis dataKey="label" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickLine={false} />
- <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickLine={false} axisLine={false} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(val, name) => [val, name === ''discovery'' ? ''Discovery'' : ''Next Steps'']} labelFormatter={l => `Week of ${l}`} />
- <Legend formatter={v => v === ''discovery'' ? ''Discovery'' : ''Next Steps''} wrapperStyle={{ fontSize: 12, color: theme.inkMuted }} />
- <ReferenceLine y={10} stroke={theme.accent} strokeDasharray="4 3" strokeOpacity={0.4} label={{ value: ''Target (10)'', position: ''insideTopRight'', fill: theme.inkMuted, fontSize: 11 }} />
- <Bar dataKey="discovery" fill="url(#discoveryGrad)" radius={[4, 4, 0, 0]} maxBarSize={32} />
- <Bar dataKey="nextSteps" fill={theme.accentStrong} radius={[4, 4, 0, 0]} maxBarSize={32} fillOpacity={0.75} />
+
+ <div style={{ height: 300, background: theme.panel, borderRadius: 16, padding: 20, border: ''1px solid '' + theme.line }}>
+ <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: theme.ink }}>Weekly Discovery Calls (First-Time Only)</div>
+ <ResponsiveContainer width="100%" height="90%">
+ <BarChart data={combined} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+ <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+ <XAxis dataKey="week" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+ <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+ <Legend />
+ <ReferenceLine y={10} stroke={theme.accent} strokeDasharray="4 2" label={{ value: ''Target (10)'', fill: theme.inkMuted, fontSize: 10, position: ''insideTopRight'' }} />
+ <Bar dataKey="discovery" name="Discovery (1st time)" fill={theme.accent} radius={[4, 4, 0, 0]} />
+ <Bar dataKey="followUps" name="Follow-ups" fill={theme.line} opacity={0.7} radius={[4, 4, 0, 0]} />
+ <Bar dataKey="nextSteps" name="Next Steps" fill={theme.inkMuted} opacity={0.5} radius={[4, 4, 0, 0]} />
  </BarChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>David''s calendar · 2025-12-01 → 2026-02-17 · {discoveryTotal} discovery + {nextStepsTotal} next steps = {discoveryTotal + nextStepsTotal} total client calls · 4-week trend: {trend}</MetricNote>
+
+ <MetricNote>Source: David&apos;s calendar (david@kiingo.com) · Trailing 12 weeks · Interviews, workshops, follow-ups, and repeat-company calls excluded · Week of Feb 17 just started (0 so far)</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-18T06:26:26.443506+00:00', '2026-02-18T06:28:02.965271+00:00');
+})()', 'completed', '2026-02-18T06:55:04.086079+00:00', '2026-02-18T06:58:21.683321+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('8a64b74d-c0fb-42e1-adbc-094ef1f6a0f7', 'eac7d43a-5003-48aa-9165-fc869d8597f2', '{"ltmRevenue":1949261.97,"momGrowth":-27.38,"netMargin":34.47,"openPipeline":1895070,"trailing3Avg":160779.95,"winRate":37.76}', '(() => { const ltmRevenue = 1949261.97; const openPipeline = 1895070; const winRate = 37.76; const netMargin = 34.47; const momGrowth = -27.38; return ( <MetricSection> <MetricRow> <StatCard label="LTM Revenue" value={''$'' + (ltmRevenue / 1000).toFixed(0) + ''K''} subtitle="Invoiced (12 mo)" trend={momGrowth.toFixed(1) + ''% MoM''} trendDirection="down" /> <StatCard label="Open Pipeline" value={''$'' + (openPipeline / 1000).toFixed(0) + ''K''} subtitle="Active deals" /> <StatCard label="Win Rate" value={winRate.toFixed(1) + ''%''} subtitle="Closed won / total" /> <StatCard label="Net Margin" value={netMargin.toFixed(1) + ''%''} subtitle="LTM accrual" /> </MetricRow> </MetricSection> ); })()', 'completed', '2026-02-16T16:16:54.131503+00:00', '2026-02-16T16:22:03.839053+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('8cde9fee-a00c-42d3-aecc-30d0f52cb031', 'ebc99ea9-2609-4b9c-bcf0-71d191cae36a', '{"avgDealSize": 3783, "avgDaysToClose": 12, "pipelineCoverage": 3.9, "dealsClosedLTM": 415}', '(() => {
   const avgSize = 3783;
