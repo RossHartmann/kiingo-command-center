@@ -99,12 +99,13 @@ function priorityLabel(priority: number): string {
   return "P5";
 }
 
-function projectLabel(atom: AtomRecord): string | undefined {
+function contextLabel(atom: AtomRecord): string | undefined {
   const categories = atom.facetData.meta?.categories?.filter((value) => value.trim().length > 0) ?? [];
-  if (categories.length === 0) {
-    return undefined;
+  if (categories.length > 0) {
+    return categories.join(" / ");
   }
-  return categories.join(" / ");
+  const labels = atom.facetData.meta?.labels?.filter((value) => value.trim().length > 0) ?? [];
+  return labels.length > 0 ? labels.join(" / ") : undefined;
 }
 
 function attentionLayerLabel(atom: AtomRecord): string {
@@ -699,7 +700,9 @@ export function TasksScreen(): JSX.Element {
 
   function renderTaskCard(atom: AtomRecord, section: "primary" | "secondary" | "tertiary" | "done" | "waiting"): JSX.Element {
     const expanded = expandedTaskId === atom.id;
-    const project = projectLabel(atom);
+    const context = contextLabel(atom);
+    const labels = atom.facetData.meta?.labels?.filter((value) => value.trim().length > 0) ?? [];
+    const threadIds = atom.relations.threadIds ?? [];
     const status = atom.facetData.task?.status ?? "todo";
     const due = dueDescriptor(atom);
     const layer = attentionLayerLabel(atom);
@@ -738,7 +741,9 @@ export function TasksScreen(): JSX.Element {
               </small>
               {section === "waiting" && <small>{waitingLabel(activeConditionsByAtomId[atom.id])}</small>}
               {due && <small>{due}</small>}
-              {project && <small>Project: {project}</small>}
+              {context && <small>Context: {context}</small>}
+              {labels.length > 0 && <small>Labels: {labels.join(", ")}</small>}
+              {threadIds.length > 0 && <small>Threads: {threadIds.length}</small>}
             </div>
             <div className="tasks-card-actions">
               {section === "done" ? (
@@ -782,9 +787,12 @@ export function TasksScreen(): JSX.Element {
   return (
     <section className="tasks-screen">
       <div className="card tasks-projection-bar">
-        <small className="settings-hint">Tasks across your projects.</small>
+        <small className="settings-hint">Tasks across your workspace.</small>
         <div className="tasks-projection-actions">
           <button type="button" onClick={() => actions.selectScreen("notepad")}>
+            Open Notepads
+          </button>
+          <button type="button" onClick={() => actions.selectScreen("projects")}>
             Open Projects
           </button>
           <button
@@ -817,7 +825,7 @@ export function TasksScreen(): JSX.Element {
         {showProjectionInfo && (
           <div className="tasks-projection-disclosure">
             <small className="settings-hint">
-              Tasks is a projection over project rows. Attention updates and decision cards are generated from shared workspace signals.
+              Tasks is a projection over shared workspace blocks. Attention updates and decision cards are generated from shared workspace signals.
             </small>
             <small className="settings-hint">
               Flags: projections {projectionsEnabled ? "on" : "off"} · decay {decayEngineEnabled ? "on" : "off"} · decisions{" "}

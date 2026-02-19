@@ -17,6 +17,7 @@ import type {
   Profile,
   SaveMetricDefinitionPayload,
   SaveNotepadViewRequest,
+  SaveProjectDefinitionRequest,
   ScreenMetricBinding,
   ScreenMetricView,
   SendConversationMessagePayload,
@@ -41,6 +42,7 @@ import type {
   DeleteAtomRequest,
   AttentionLayer,
   NotepadViewDefinition,
+  ProjectDefinition,
   PageRequest,
   PageResponse,
   ListEventsRequest,
@@ -130,6 +132,7 @@ interface MockStore {
   placements: PlacementRecord[];
   conditions: ConditionRecord[];
   notepads: NotepadViewDefinition[];
+  projects: ProjectDefinition[];
   workSessions: WorkSessionRecord[];
   recurrenceTemplates: RecurrenceTemplate[];
   recurrenceInstances: RecurrenceInstance[];
@@ -545,6 +548,9 @@ async function upsertDecisionPrompt(
 function ensureNowNotepad(): void {
   const existing = mockStore.notepads.find((notepad) => notepad.id === "now");
   if (existing) {
+    if (!existing.viewKind) {
+      existing.viewKind = "inbox";
+    }
     return;
   }
   const now = nowIso();
@@ -554,6 +560,7 @@ function ensureNowNotepad(): void {
     name: "Now",
     description: "System default view for active work",
     isSystem: true,
+    viewKind: "inbox",
     filters: { facet: "task", statuses: ["todo", "doing", "blocked"], includeArchived: false },
     sorts: [{ field: "priority", direction: "asc" }],
     captureDefaults: {
@@ -566,6 +573,72 @@ function ensureNowNotepad(): void {
     updatedAt: now,
     revision: 1
   });
+}
+
+function inferNotepadViewKind(notepad: Pick<NotepadViewDefinition, "id" | "filters">): NotepadViewDefinition["viewKind"] {
+  if (notepad.id === "now") {
+    return "inbox";
+  }
+  const filters = notepad.filters;
+  const hasComputedSelectors =
+    Boolean(filters.categories?.length) ||
+    Boolean(filters.categoryIds?.length) ||
+    Boolean(filters.labels?.length) ||
+    Boolean(filters.labelIds?.length) ||
+    Boolean(filters.threadIds?.length) ||
+    Boolean(filters.textQuery?.trim()) ||
+    Boolean(filters.facet) ||
+    Boolean(filters.parentId);
+  return hasComputedSelectors ? "computed" : "manual";
+}
+
+function sanitizeProjectId(seed: string): string {
+  const normalized = seed.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/(^-|-$)/g, "");
+  return normalized.length > 0 ? normalized : `project-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function ensureProjectsBackfilled(): void {
+  ensureNowNotepad();
+  if (mockStore.projects.length > 0) {
+    return;
+  }
+  const now = nowIso();
+  const derived = mockStore.notepads
+    .filter((notepad) => !notepad.isSystem)
+    .map<ProjectDefinition>((notepad) => {
+      const labelIds = [
+        ...(notepad.filters.categoryIds ?? []),
+        ...(notepad.filters.labelIds ?? []),
+        ...(notepad.filters.threadIds ?? [])
+      ].filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
+      const kind: ProjectDefinition["kind"] = labelIds.length > 0 ? "label_project" : "workspace_project";
+      return {
+        id: sanitizeProjectId(`project-${notepad.id}`),
+        schemaVersion: 1,
+        name: notepad.name,
+        description: notepad.description,
+        status: "active",
+        kind,
+        labelIds,
+        defaultViewId: notepad.id,
+        viewIds: [notepad.id],
+        captureDefaults: {
+          threadIds: notepad.captureDefaults?.threadIds,
+          labelIds: notepad.captureDefaults?.labelIds,
+          categoryIds: notepad.captureDefaults?.categoryIds,
+          categories: notepad.captureDefaults?.categories,
+          labels: notepad.captureDefaults?.labels,
+          taskStatus: notepad.captureDefaults?.taskStatus,
+          taskPriority: notepad.captureDefaults?.taskPriority
+        },
+        source: "migrated_derived",
+        createdAt: now,
+        updatedAt: now,
+        revision: 1
+      };
+    });
+  mockStore.projects = derived;
+  persistMockStore();
 }
 
 function recordWorkspaceEvent(
@@ -600,6 +673,7 @@ function emptyMockStore(): MockStore {
     placements: [],
     conditions: [],
     notepads: [],
+    projects: [],
     workSessions: [],
     recurrenceTemplates: [],
     recurrenceInstances: [],
@@ -647,6 +721,7 @@ function loadMockStore(): MockStore {
       placements: parsed.placements ?? [],
       conditions: parsed.conditions ?? [],
       notepads: parsed.notepads ?? [],
+      projects: parsed.projects ?? [],
       workSessions: parsed.workSessions ?? [],
       recurrenceTemplates: parsed.recurrenceTemplates ?? [],
       recurrenceInstances: parsed.recurrenceInstances ?? [],
@@ -1438,6 +1513,12 @@ export async function workspaceCapabilitiesGet(): Promise<WorkspaceCapabilities>
       "notepad_get",
       "notepad_save",
       "notepad_delete",
+      "projects_list",
+      "project_get",
+      "project_save",
+      "project_delete",
+      "project_open",
+      "project_views_list",
       "notepad_atoms_list",
       "notepad_block_create",
       "blocks_list",
@@ -1566,20 +1647,37 @@ function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomR
   }
   if (filter?.threadIds?.length) {
     const expected = new Set(filter.threadIds);
-    result = result.filter((atom) => atom.relations.threadIds.some((threadId) => expected.has(threadId)));
+    const mode = filter.threadFilterMode ?? "or";
+    result = result.filter((atom) => {
+      const actual = atom.relations.threadIds ?? [];
+      if (mode === "and") {
+        return [...expected].every((threadId) => actual.includes(threadId));
+      }
+      return actual.some((threadId) => expected.has(threadId));
+    });
   }
   if (filter?.labels?.length) {
     const expected = new Set(filter.labels.map((value) => value.toLowerCase()));
+    const mode = filter.labelFilterMode ?? "or";
     result = result.filter((atom) => {
       const labels = atom.facetData.meta?.labels ?? [];
-      return labels.some((label) => expected.has(label.toLowerCase()));
+      const normalized = labels.map((label) => label.toLowerCase());
+      if (mode === "and") {
+        return [...expected].every((label) => normalized.includes(label));
+      }
+      return normalized.some((label) => expected.has(label));
     });
   }
   if (filter?.categories?.length) {
     const expected = new Set(filter.categories.map((value) => value.toLowerCase()));
+    const mode = filter.categoryFilterMode ?? "or";
     result = result.filter((atom) => {
       const categories = atom.facetData.meta?.categories ?? [];
-      return categories.some((category) => expected.has(category.toLowerCase()));
+      const normalized = categories.map((category) => category.toLowerCase());
+      if (mode === "and") {
+        return [...expected].every((category) => normalized.includes(category));
+      }
+      return normalized.some((category) => expected.has(category));
     });
   }
   if (filter?.attentionLayers?.length) {
@@ -1923,6 +2021,11 @@ export async function notepadsList(): Promise<NotepadViewDefinition[]> {
     return tauriInvoke("notepads_list");
   }
   ensureNowNotepad();
+  for (const notepad of mockStore.notepads) {
+    if (!notepad.viewKind) {
+      notepad.viewKind = inferNotepadViewKind(notepad);
+    }
+  }
   return [...mockStore.notepads].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -1931,7 +2034,11 @@ export async function notepadGet(notepadId: string): Promise<NotepadViewDefiniti
     return tauriInvoke("notepad_get", { notepadId });
   }
   ensureNowNotepad();
-  return mockStore.notepads.find((notepad) => notepad.id === notepadId) ?? null;
+  const notepad = mockStore.notepads.find((item) => item.id === notepadId) ?? null;
+  if (notepad && !notepad.viewKind) {
+    notepad.viewKind = inferNotepadViewKind(notepad);
+  }
+  return notepad;
 }
 
 export async function notepadSave(payload: SaveNotepadViewRequest): Promise<NotepadViewDefinition> {
@@ -1954,6 +2061,7 @@ export async function notepadSave(payload: SaveNotepadViewRequest): Promise<Note
   const next: NotepadViewDefinition = {
     ...request.definition,
     isSystem: request.definition.isSystem || request.definition.id === "now",
+    viewKind: request.definition.viewKind ?? inferNotepadViewKind(request.definition),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     revision: (existing?.revision ?? 0) + 1
@@ -1982,6 +2090,102 @@ export async function notepadDelete(notepadId: string): Promise<{ success: boole
   mockStore.notepads.splice(idx, 1);
   persistMockStore();
   return { success: true };
+}
+
+export async function projectsList(): Promise<ProjectDefinition[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("projects_list");
+  }
+  ensureProjectsBackfilled();
+  return [...mockStore.projects].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function projectGet(projectId: string): Promise<ProjectDefinition | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("project_get", { projectId });
+  }
+  ensureProjectsBackfilled();
+  return mockStore.projects.find((project) => project.id === projectId) ?? null;
+}
+
+export async function projectSave(payload: SaveProjectDefinitionRequest): Promise<ProjectDefinition> {
+  const request: SaveProjectDefinitionRequest = {
+    ...payload,
+    idempotencyKey: ensureIdempotencyKey(payload.idempotencyKey)
+  };
+  if (IS_TAURI) {
+    return tauriInvoke("project_save", { payload: request });
+  }
+  ensureProjectsBackfilled();
+  const now = nowIso();
+  const existing = mockStore.projects.find((project) => project.id === request.definition.id);
+  if (request.expectedRevision !== undefined) {
+    const actual = existing?.revision ?? 0;
+    if (actual !== request.expectedRevision) {
+      throw new Error(`CONFLICT: expected revision ${request.expectedRevision} but found ${actual}`);
+    }
+  }
+  const normalizedViewIds = request.definition.viewIds.filter(
+    (value, index, values) => value.trim().length > 0 && values.indexOf(value) === index
+  );
+  const next: ProjectDefinition = {
+    ...request.definition,
+    viewIds: normalizedViewIds,
+    defaultViewId: request.definition.defaultViewId ?? normalizedViewIds[0] ?? "now",
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    revision: (existing?.revision ?? 0) + 1
+  };
+  if (existing) {
+    Object.assign(existing, next);
+  } else {
+    mockStore.projects.unshift(next);
+  }
+  persistMockStore();
+  return next;
+}
+
+export async function projectDelete(projectId: string): Promise<{ success: boolean }> {
+  const idempotencyKey = ensureIdempotencyKey();
+  if (IS_TAURI) {
+    return tauriInvoke("project_delete", { projectId, idempotencyKey });
+  }
+  ensureProjectsBackfilled();
+  const idx = mockStore.projects.findIndex((project) => project.id === projectId);
+  if (idx === -1) {
+    return { success: false };
+  }
+  mockStore.projects.splice(idx, 1);
+  persistMockStore();
+  return { success: true };
+}
+
+export async function projectOpen(projectId: string): Promise<{ projectId: string; defaultViewId: string }> {
+  if (IS_TAURI) {
+    return tauriInvoke("project_open", { projectId });
+  }
+  const project = await projectGet(projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  const defaultViewId = project.defaultViewId ?? project.viewIds[0] ?? "now";
+  return { projectId, defaultViewId };
+}
+
+export async function projectViewsList(projectId: string): Promise<NotepadViewDefinition[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("project_views_list", { projectId });
+  }
+  const project = await projectGet(projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  const available = await notepadsList();
+  if (project.viewIds.length === 0) {
+    return available.filter((notepad) => notepad.id === project.defaultViewId);
+  }
+  const allowed = new Set(project.viewIds);
+  return available.filter((notepad) => allowed.has(notepad.id));
 }
 
 export async function notepadAtomsList(
@@ -2586,6 +2790,12 @@ function ensureFeatureFlags(): void {
   const now = nowIso();
   const defaultEnabled = new Set<FeatureFlag["key"]>([
     "workspace.notepad_ui_v2",
+    "workspace.notepad_open_notepad_v2",
+    "workspace.inline_tags",
+    "workspace.notepad_context_menu",
+    "workspace.projects_v1",
+    "workspace.notepad_project_split_ui",
+    "workspace.project_default_views",
     "workspace.scheduler",
     "workspace.decay_engine",
     "workspace.decision_queue",
@@ -2609,7 +2819,13 @@ function ensureFeatureFlags(): void {
     "workspace.recurrence",
     "workspace.recurrence_v2",
     "workspace.agent_handoff",
-    "workspace.notepad_ui_v2"
+    "workspace.notepad_ui_v2",
+    "workspace.notepad_open_notepad_v2",
+    "workspace.inline_tags",
+    "workspace.notepad_context_menu",
+    "workspace.projects_v1",
+    "workspace.notepad_project_split_ui",
+    "workspace.project_default_views"
   ];
   mockStore.featureFlags = keys.map((key) => ({
     key,

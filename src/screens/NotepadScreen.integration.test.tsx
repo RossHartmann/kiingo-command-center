@@ -42,14 +42,14 @@ async function seedRow(notepadId: string, text: string): Promise<void> {
 
 async function settleNotepad(): Promise<void> {
   await waitFor(() => {
-    expect(screen.queryByText("Loading project...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading notepad...")).not.toBeInTheDocument();
     expect(screen.queryByText("Saving...")).not.toBeInTheDocument();
   });
 }
 
 async function renderNotepadAndSwitch(notepadId: string): Promise<HTMLSelectElement> {
   render(<NotepadScreen />);
-  const selector = (await screen.findByLabelText("Active project")) as HTMLSelectElement;
+  const selector = (await screen.findByLabelText("Active notepad")) as HTMLSelectElement;
   fireEvent.change(selector, { target: { value: notepadId } });
   await waitFor(() => {
     expect(selector.value).toBe(notepadId);
@@ -139,6 +139,32 @@ describe("NotepadScreen integration", () => {
     expect(visibleEditors.slice(0, 2)).toEqual(["", "moved-down-line"]);
   });
 
+  it("splits a row at the caret when Enter is pressed mid-line", async () => {
+    const notepadId = uniqueNotepadId("itest-enter-split");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    const editor = selectedEditor();
+    const originalPlacementId = editor.dataset.placementId;
+    expect(originalPlacementId).toBeTruthy();
+    fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "AlphaBeta" } });
+    editor.setSelectionRange(5, 5);
+
+    fireEvent.keyDown(editor, { key: "Enter" });
+    await settleNotepad();
+
+    const visibleEditors = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea.notepad-editor")).map((e) => e.value);
+    expect(visibleEditors.slice(0, 2)).toEqual(["Alpha", "Beta"]);
+
+    const focused = selectedEditor();
+    expect(focused.dataset.placementId).toBe(originalPlacementId);
+    expect(focused.value).toBe("Beta");
+    expect(focused.selectionStart).toBe(0);
+    expect(focused.selectionEnd).toBe(0);
+  });
+
   it("deletes an empty row on Backspace and focuses previous row", async () => {
     const notepadId = uniqueNotepadId("itest-backspace");
     await createTestNotepad(notepadId);
@@ -160,6 +186,40 @@ describe("NotepadScreen integration", () => {
 
     editor = selectedEditor();
     expect(editor.value).toBe("keep-row");
+    await waitFor(() => {
+      expect(screen.queryAllByRole("treeitem").length).toBe(1);
+    });
+  });
+
+  it("merges with previous sibling when pressing Backspace at line start", async () => {
+    const notepadId = uniqueNotepadId("itest-backspace-merge");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    let first = selectedEditor();
+    const firstPlacementId = first.dataset.placementId;
+    expect(firstPlacementId).toBeTruthy();
+    fireEvent.focus(first);
+    fireEvent.change(first, { target: { value: "Alpha" } });
+
+    fireEvent.keyDown(first, { key: "Enter" });
+    await settleNotepad();
+    const second = selectedEditor();
+    const secondPlacementId = second.dataset.placementId;
+    expect(secondPlacementId).toBeTruthy();
+    fireEvent.focus(second);
+    fireEvent.change(second, { target: { value: "Beta" } });
+    second.setSelectionRange(0, 0);
+
+    fireEvent.keyDown(second, { key: "Backspace" });
+    await settleNotepad();
+
+    const merged = selectedEditor();
+    expect(merged.dataset.placementId).toBe(secondPlacementId);
+    expect(merged.value).toBe("Alpha Beta");
+    expect(merged.selectionStart).toBe(6);
+    expect(merged.selectionEnd).toBe(6);
     await waitFor(() => {
       expect(screen.queryAllByRole("treeitem").length).toBe(1);
     });
@@ -376,6 +436,115 @@ describe("NotepadScreen integration", () => {
     expect(childRow.getAttribute("aria-level")).toBe("2");
   });
 
+  it("supports structural undo and redo from editor shortcuts", async () => {
+    const notepadId = uniqueNotepadId("itest-undo-redo");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    let editor = selectedEditor();
+    fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "Undo me" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+    await settleNotepad();
+    expect(screen.queryAllByRole("treeitem").length).toBe(2);
+
+    editor = selectedEditor();
+    fireEvent.focus(editor);
+    fireEvent.keyDown(editor, { key: "z", metaKey: true });
+    await settleNotepad();
+    expect(screen.queryAllByRole("treeitem").length).toBe(1);
+
+    editor = selectedEditor();
+    fireEvent.focus(editor);
+    fireEvent.keyDown(editor, { key: "z", metaKey: true, shiftKey: true });
+    await settleNotepad();
+    expect(screen.queryAllByRole("treeitem").length).toBe(2);
+  });
+
+  it("supports keyboard drag mode and sibling navigation shortcuts", async () => {
+    const notepadId = uniqueNotepadId("itest-keyboard-drag");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    let editor = selectedEditor();
+    const firstPlacementId = editor.dataset.placementId;
+    expect(firstPlacementId).toBeTruthy();
+    fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "A" } });
+
+    fireEvent.keyDown(editor, { key: "Enter" });
+    await settleNotepad();
+    editor = selectedEditor();
+    fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "B" } });
+    const secondPlacementId = editor.dataset.placementId;
+    expect(secondPlacementId).toBeTruthy();
+
+    fireEvent.keyDown(editor, { key: "Enter" });
+    await settleNotepad();
+    editor = selectedEditor();
+    fireEvent.focus(editor);
+    fireEvent.change(editor, { target: { value: "C" } });
+
+    const secondEditor = editorByPlacementId(secondPlacementId!);
+    fireEvent.focus(secondEditor);
+    const tree = screen.getByRole("tree");
+    fireEvent.focus(tree);
+    fireEvent.keyDown(tree, { key: "ArrowUp", altKey: true });
+    expect(selectedEditor().dataset.placementId).toBe(firstPlacementId);
+    fireEvent.keyDown(tree, { key: "ArrowDown", altKey: true });
+    expect(selectedEditor().dataset.placementId).toBe(secondPlacementId);
+
+    const firstEditor = editorByPlacementId(firstPlacementId!);
+    fireEvent.focus(firstEditor);
+    fireEvent.focus(tree);
+    fireEvent.keyDown(tree, { key: "m", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(tree, { key: "Enter" });
+    await settleNotepad();
+
+    const order = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea.notepad-editor")).map((value) => value.value);
+    expect(order.slice(0, 3)).toEqual(["B", "A", "C"]);
+  });
+
+  it("collapses and expands the selected subtree with bracket shortcuts", async () => {
+    const notepadId = uniqueNotepadId("itest-subtree-shortcuts");
+    await createTestNotepad(notepadId);
+    await renderNotepadAndSwitch(notepadId);
+
+    await clickNewRow();
+    let parent = selectedEditor();
+    const parentPlacementId = parent.dataset.placementId;
+    expect(parentPlacementId).toBeTruthy();
+    fireEvent.focus(parent);
+    fireEvent.change(parent, { target: { value: "Parent" } });
+
+    fireEvent.keyDown(parent, { key: "Enter" });
+    await settleNotepad();
+    let child = selectedEditor();
+    const childPlacementId = child.dataset.placementId;
+    expect(childPlacementId).toBeTruthy();
+    fireEvent.focus(child);
+    fireEvent.keyDown(child, { key: "Tab" });
+    await settleNotepad();
+    child = selectedEditor();
+    fireEvent.focus(child);
+    fireEvent.change(child, { target: { value: "Child" } });
+
+    parent = editorByPlacementId(parentPlacementId!);
+    fireEvent.focus(parent);
+    const tree = screen.getByRole("tree");
+    fireEvent.focus(tree);
+    fireEvent.keyDown(tree, { key: "[" });
+    await settleNotepad();
+    expect(document.querySelector(`textarea.notepad-editor[data-placement-id="${childPlacementId}"]`)).toBeNull();
+
+    fireEvent.keyDown(tree, { key: "]" });
+    await settleNotepad();
+    expect(document.querySelector(`textarea.notepad-editor[data-placement-id="${childPlacementId}"]`)).toBeTruthy();
+  });
+
   it("re-targets move/copy destination when switching active project", async () => {
     const sourceNotepadId = uniqueNotepadId("itest-move-source");
     const targetNotepadId = uniqueNotepadId("itest-move-target");
@@ -394,18 +563,18 @@ describe("NotepadScreen integration", () => {
       fireEvent.click(moveCopyToggle);
     }
 
-    const destinationBefore = (await screen.findByLabelText("Destination project")) as HTMLSelectElement;
+    const destinationBefore = (await screen.findByLabelText("Destination notepad")) as HTMLSelectElement;
     fireEvent.change(destinationBefore, { target: { value: targetNotepadId } });
     expect(destinationBefore.value).toBe(targetNotepadId);
 
-    const activeProject = (await screen.findByLabelText("Active project")) as HTMLSelectElement;
+    const activeProject = (await screen.findByLabelText("Active notepad")) as HTMLSelectElement;
     fireEvent.change(activeProject, { target: { value: targetNotepadId } });
     await waitFor(() => {
       expect(activeProject.value).toBe(targetNotepadId);
     });
     await settleNotepad();
 
-    const destinationAfter = (await screen.findByLabelText("Destination project")) as HTMLSelectElement;
+    const destinationAfter = (await screen.findByLabelText("Destination notepad")) as HTMLSelectElement;
     const available = Array.from(destinationAfter.options)
       .map((option) => option.value)
       .filter((value) => value.length > 0);

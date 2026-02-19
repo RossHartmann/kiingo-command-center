@@ -600,8 +600,14 @@ export interface NotepadFilter {
   facet?: FacetKind;
   statuses?: TaskStatus[];
   threadIds?: EntityId[];
+  threadFilterMode?: "or" | "and";
   labels?: string[];
+  labelFilterMode?: "or" | "and";
+  labelIds?: EntityId[];
   categories?: string[];
+  categoryFilterMode?: "or" | "and";
+  categoryIds?: EntityId[];
+  includeCategoryDescendants?: boolean;
   parentId?: EntityId;
   attentionLayers?: AttentionLayer[];
   commitmentLevels?: CommitmentLevel[];
@@ -628,11 +634,16 @@ export interface NotepadCaptureDefaults {
   taskStatus?: TaskStatus;
   taskPriority?: 1 | 2 | 3 | 4 | 5;
   threadIds?: EntityId[];
+  labelIds?: EntityId[];
+  categoryIds?: EntityId[];
   categories?: string[];
   labels?: string[];
   commitmentLevel?: CommitmentLevel;
   attentionLayer?: AttentionLayer;
 }
+
+export type NotepadViewKind = "inbox" | "computed" | "manual";
+export type NotepadDisplayRole = "default_project_view" | "alt_project_view" | "freeform";
 
 export interface NotepadViewDefinition {
   id: EntityId;
@@ -640,10 +651,43 @@ export interface NotepadViewDefinition {
   name: string;
   description?: string;
   isSystem: boolean;
+  viewKind?: NotepadViewKind;
+  scopeProjectId?: EntityId;
+  displayRole?: NotepadDisplayRole;
   filters: NotepadFilter;
   sorts: NotepadSort[];
   captureDefaults?: NotepadCaptureDefaults;
   layoutMode: "outline" | "list" | "focus";
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  revision: number;
+}
+
+export type ProjectKind = "label_project" | "workspace_project";
+export type ProjectStatus = "active" | "archived";
+
+export interface ProjectCaptureDefaults {
+  threadIds?: EntityId[];
+  labelIds?: EntityId[];
+  categoryIds?: EntityId[];
+  categories?: string[];
+  labels?: string[];
+  taskStatus?: TaskStatus;
+  taskPriority?: 1 | 2 | 3 | 4 | 5;
+}
+
+export interface ProjectDefinition {
+  id: EntityId;
+  schemaVersion: number;
+  name: string;
+  description?: string;
+  status: ProjectStatus;
+  kind: ProjectKind;
+  labelIds: EntityId[];
+  defaultViewId?: EntityId;
+  viewIds: EntityId[];
+  captureDefaults?: ProjectCaptureDefaults;
+  source?: "manual" | "migrated_derived";
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
   revision: number;
@@ -768,6 +812,12 @@ export interface SaveNotepadViewRequest {
   expectedRevision?: number;
   idempotencyKey?: string;
   definition: Omit<NotepadViewDefinition, "createdAt" | "updatedAt" | "revision">;
+}
+
+export interface SaveProjectDefinitionRequest {
+  expectedRevision?: number;
+  idempotencyKey?: string;
+  definition: Omit<ProjectDefinition, "createdAt" | "updatedAt" | "revision">;
 }
 
 export interface BlockRecord {
@@ -1298,7 +1348,13 @@ export type FeatureFlagKey =
   | "workspace.recurrence"
   | "workspace.recurrence_v2"
   | "workspace.agent_handoff"
-  | "workspace.notepad_ui_v2";
+  | "workspace.notepad_ui_v2"
+  | "workspace.notepad_open_notepad_v2"
+  | "workspace.inline_tags"
+  | "workspace.notepad_context_menu"
+  | "workspace.projects_v1"
+  | "workspace.notepad_project_split_ui"
+  | "workspace.project_default_views";
 
 export interface FeatureFlag {
   key: FeatureFlagKey;

@@ -1016,8 +1016,14 @@ pub struct NotepadFilter {
     pub facet: Option<FacetKind>,
     pub statuses: Option<Vec<TaskStatus>>,
     pub thread_ids: Option<Vec<String>>,
+    pub thread_filter_mode: Option<String>,
     pub labels: Option<Vec<String>>,
+    pub label_filter_mode: Option<String>,
+    pub label_ids: Option<Vec<String>>,
     pub categories: Option<Vec<String>>,
+    pub category_filter_mode: Option<String>,
+    pub category_ids: Option<Vec<String>>,
+    pub include_category_descendants: Option<bool>,
     pub parent_id: Option<String>,
     pub attention_layers: Option<Vec<AttentionLayer>>,
     pub commitment_levels: Option<Vec<CommitmentLevel>>,
@@ -1041,6 +1047,8 @@ pub struct NotepadCaptureDefaults {
     pub task_status: Option<TaskStatus>,
     pub task_priority: Option<i32>,
     pub thread_ids: Option<Vec<String>>,
+    pub label_ids: Option<Vec<String>>,
+    pub category_ids: Option<Vec<String>>,
     pub categories: Option<Vec<String>>,
     pub labels: Option<Vec<String>>,
     pub commitment_level: Option<CommitmentLevel>,
@@ -1055,6 +1063,9 @@ pub struct NotepadViewDefinition {
     pub name: String,
     pub description: Option<String>,
     pub is_system: bool,
+    pub view_kind: Option<String>,
+    pub scope_project_id: Option<String>,
+    pub display_role: Option<String>,
     pub filters: NotepadFilter,
     pub sorts: Vec<NotepadSort>,
     pub capture_defaults: Option<NotepadCaptureDefaults>,
@@ -1235,10 +1246,75 @@ pub struct NotepadViewDefinitionInput {
     pub name: String,
     pub description: Option<String>,
     pub is_system: bool,
+    pub view_kind: Option<String>,
+    pub scope_project_id: Option<String>,
+    pub display_role: Option<String>,
     pub filters: NotepadFilter,
     pub sorts: Vec<NotepadSort>,
     pub capture_defaults: Option<NotepadCaptureDefaults>,
     pub layout_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCaptureDefaults {
+    pub thread_ids: Option<Vec<String>>,
+    pub label_ids: Option<Vec<String>>,
+    pub category_ids: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub labels: Option<Vec<String>>,
+    pub task_status: Option<TaskStatus>,
+    pub task_priority: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDefinition {
+    pub id: String,
+    pub schema_version: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub kind: String,
+    pub label_ids: Vec<String>,
+    pub default_view_id: Option<String>,
+    pub view_ids: Vec<String>,
+    pub capture_defaults: Option<ProjectCaptureDefaults>,
+    pub source: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDefinitionInput {
+    pub id: String,
+    pub schema_version: i32,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub kind: String,
+    pub label_ids: Vec<String>,
+    pub default_view_id: Option<String>,
+    pub view_ids: Vec<String>,
+    pub capture_defaults: Option<ProjectCaptureDefaults>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectDefinitionRequest {
+    pub expected_revision: Option<i64>,
+    pub idempotency_key: Option<String>,
+    pub definition: ProjectDefinitionInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectOpenResponse {
+    pub project_id: String,
+    pub default_view_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { NAVIGATION, SCREEN_META } from "./Sidebar/navigationConfig";
-import { getScreenMetrics, listMetricDefinitions, notepadsList } from "../lib/tauriClient";
-import type { NotepadViewDefinition } from "../lib/types";
+import { getScreenMetrics, listMetricDefinitions, notepadsList, projectOpen, projectsList, registryEntriesList } from "../lib/tauriClient";
+import type { NotepadViewDefinition, ProjectDefinition, RegistryEntry } from "../lib/types";
 import type { Screen } from "../state/appState";
 
 interface PageResult {
@@ -27,11 +27,36 @@ interface ProjectResult {
   kind: "project";
   projectId: string;
   label: string;
+  defaultViewId?: string;
+  projectKind: ProjectDefinition["kind"];
+  labels: string[];
+  description: string;
+}
+
+interface NotepadResult {
+  kind: "notepad";
+  notepadId: string;
+  label: string;
   categories: string[];
   description: string;
 }
 
-type SearchResult = PageResult | MetricResult | ProjectResult;
+interface CommandResult {
+  kind: "command";
+  command: "open_notepad";
+  label: string;
+  description: string;
+}
+
+interface OpenNotepadResult {
+  kind: "open_notepad";
+  label: string;
+  description: string;
+  categories: string[];
+  filterMode: "or" | "and";
+}
+
+type SearchResult = PageResult | MetricResult | ProjectResult | NotepadResult | CommandResult | OpenNotepadResult;
 
 const ALL_PAGES: PageResult[] = NAVIGATION.flatMap((group) =>
   group.items.flatMap((item) => {
@@ -102,16 +127,38 @@ async function loadAllMetricBindings(): Promise<MetricBinding[]> {
 }
 
 export const OMNI_SCROLL_TO_METRIC = "omni:scroll-to-metric";
-export const OMNI_OPEN_PROJECT = "omni:open-project";
+export const OMNI_OPEN_NOTEPAD = "omni:open-notepad";
+export const OMNI_OPEN_NOTEPAD_BY_CATEGORY = "omni:open-notepad-by-category";
+
+function parseCategoryQuery(query: string): { categories: string[]; filterMode: "or" | "and" } {
+  let trimmed = query.trim();
+  let filterMode: "or" | "and" = "or";
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("and:")) {
+    filterMode = "and";
+    trimmed = trimmed.slice(4).trim();
+  } else if (lower.startsWith("and ")) {
+    filterMode = "and";
+    trimmed = trimmed.slice(4).trim();
+  }
+  const categories = trimmed
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+  return { categories, filterMode };
+}
 
 export function OmniSearch() {
   const state = useAppState();
   const actions = useAppActions();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"global" | "open_notepad">("global");
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [metricBindings, setMetricBindings] = useState<MetricBinding[]>([]);
-  const [projects, setProjects] = useState<NotepadViewDefinition[]>([]);
+  const [notepads, setNotepads] = useState<NotepadViewDefinition[]>([]);
+  const [projects, setProjects] = useState<ProjectDefinition[]>([]);
+  const [categoryEntries, setCategoryEntries] = useState<RegistryEntry[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const navModeRef = useRef<"keyboard" | "mouse">("keyboard");
@@ -134,26 +181,112 @@ export function OmniSearch() {
       bindingsLoadedRef.current = true;
       void loadAllMetricBindings().then(setMetricBindings);
     }
-    void notepadsList().then(setProjects).catch(() => undefined);
+    void notepadsList().then(setNotepads).catch(() => undefined);
+    void projectsList().then(setProjects).catch(() => undefined);
+    void registryEntriesList({ kind: "category", status: "active", limit: 500 })
+      .then((page) => setCategoryEntries(page.items))
+      .catch(() => undefined);
   }, [actions, stateMetrics.length, open]);
 
   const filtered = useMemo(() => {
+    if (mode === "open_notepad") {
+      const notepadCategoryNames = notepads
+        .flatMap((notepad) => notepad.filters.categories ?? [])
+        .filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
+      const base = [
+        ...categoryEntries
+          .slice()
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map<OpenNotepadResult>((entry) => ({
+            kind: "open_notepad",
+            label: entry.name,
+            description: entry.aliases.length > 0 ? `Aliases: ${entry.aliases.join(", ")}` : "Category notepad",
+            categories: [entry.name],
+            filterMode: "or"
+          })),
+        ...notepadCategoryNames.map<OpenNotepadResult>((name) => ({
+          kind: "open_notepad",
+          label: name,
+          description: "Category from existing notepads",
+          categories: [name],
+          filterMode: "or"
+        }))
+      ]
+        .filter(
+          (item, index, items) => items.findIndex((candidate) => candidate.label.toLowerCase() === item.label.toLowerCase()) === index
+        )
+        .sort((a, b) => a.label.localeCompare(b.label));
+      const { categories, filterMode } = parseCategoryQuery(query);
+      const q = query.trim().toLowerCase();
+      const matches =
+        q.length === 0
+          ? base
+          : base.filter((item) => item.label.toLowerCase().includes(q) || item.description.toLowerCase().includes(q));
+      if (categories.length > 0) {
+        const multiLabel =
+          categories.length === 1
+            ? `Open Notepad: ${categories[0]}`
+            : `Open Notepad (${filterMode.toUpperCase()}): ${categories.join(" + ")}`;
+        const exists = matches.some(
+          (item) =>
+            item.categories.length === categories.length &&
+            item.filterMode === filterMode &&
+            item.categories.every((value, index) => value.toLowerCase() === categories[index].toLowerCase())
+        );
+        if (!exists) {
+          matches.unshift({
+            kind: "open_notepad",
+            label: multiLabel,
+            description:
+              categories.length === 1
+                ? "Create/open category notepad"
+                : `Create/open multi-category view (${filterMode.toUpperCase()})`,
+            categories,
+            filterMode
+          });
+        }
+      }
+      return matches;
+    }
+
     const projectResults: ProjectResult[] = projects
       .map((project) => ({
         kind: "project" as const,
         projectId: project.id,
         label: project.name,
-        categories: project.filters.categories ?? [],
+        defaultViewId: project.defaultViewId,
+        projectKind: project.kind,
+        labels: project.labelIds,
         description: project.description ?? ""
       }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    const notepadResults: NotepadResult[] = notepads
+      .map((notepad) => ({
+        kind: "notepad" as const,
+        notepadId: notepad.id,
+        label: notepad.name,
+        categories: notepad.filters.categories ?? [],
+        description: notepad.description ?? ""
+      }))
       .sort((a, b) => {
-        if (a.projectId === "now") return -1;
-        if (b.projectId === "now") return 1;
+        if (a.notepadId === "now") return -1;
+        if (b.notepadId === "now") return 1;
         return a.label.localeCompare(b.label);
       });
 
     if (!query.trim()) {
-      return [...ALL_PAGES, ...projectResults] as SearchResult[];
+      return [
+        {
+          kind: "command",
+          command: "open_notepad",
+          label: "Open Notepad",
+          description: "Open or create a category notepad"
+        },
+        ...ALL_PAGES,
+        ...projectResults,
+        ...notepadResults
+      ] as SearchResult[];
     }
 
     const q = query.toLowerCase();
@@ -228,23 +361,51 @@ export function OmniSearch() {
 
     for (const project of projectResults) {
       const name = project.label.toLowerCase();
-      const categories = project.categories.map((value) => value.toLowerCase()).join(" ");
+      const labels = project.labels.map((value) => value.toLowerCase()).join(" ");
       const description = project.description.toLowerCase();
       let score = 0;
       if (name === q) score = 92;
       else if (name.startsWith(q)) score = 72;
       else if (name.split(/\s+/).some((word) => word.startsWith(q))) score = 56;
       else if (name.includes(q)) score = 44;
-      else if (categories.includes(q)) score = 30;
+      else if (labels.includes(q)) score = 30;
       else if (description.includes(q)) score = 18;
       if (score > 0) {
         scored.push({ result: project, score });
       }
     }
 
+    for (const notepad of notepadResults) {
+      const name = notepad.label.toLowerCase();
+      const categories = notepad.categories.map((value) => value.toLowerCase()).join(" ");
+      const description = notepad.description.toLowerCase();
+      let score = 0;
+      if (name === q) score = 88;
+      else if (name.startsWith(q)) score = 68;
+      else if (name.split(/\s+/).some((word) => word.startsWith(q))) score = 52;
+      else if (name.includes(q)) score = 40;
+      else if (categories.includes(q)) score = 28;
+      else if (description.includes(q)) score = 16;
+      if (score > 0) {
+        scored.push({ result: notepad, score });
+      }
+    }
+
+    if ("open notepad".includes(q) || "category notepad".includes(q) || "category view".includes(q)) {
+      scored.push({
+        result: {
+          kind: "command",
+          command: "open_notepad",
+          label: "Open Notepad",
+          description: "Open or create a category notepad"
+        },
+        score: 96
+      });
+    }
+
     scored.sort((a, b) => b.score - a.score);
     return scored.map((value) => value.result);
-  }, [metricBindings, metrics, projects, query]);
+  }, [categoryEntries, metricBindings, metrics, mode, notepads, projects, query]);
 
   const filteredRef = useRef(filtered);
   filteredRef.current = filtered;
@@ -253,6 +414,7 @@ export function OmniSearch() {
 
   const close = useCallback(() => {
     setOpen(false);
+    setMode("global");
     setQuery("");
     setSelectedIndex(0);
   }, []);
@@ -270,10 +432,33 @@ export function OmniSearch() {
           }, 200);
         }
       } else if (result.kind === "project") {
+        void (async () => {
+          try {
+            const opened = await projectOpen(result.projectId);
+            actions.selectScreen("notepad");
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent(OMNI_OPEN_NOTEPAD, { detail: { notepadId: opened.defaultViewId } }));
+            }, 120);
+          } catch {
+            actions.selectScreen("projects");
+          }
+        })();
+      } else if (result.kind === "notepad") {
         actions.selectScreen("notepad");
-        const projectId = result.projectId;
+        const notepadId = result.notepadId;
         setTimeout(() => {
-          window.dispatchEvent(new CustomEvent(OMNI_OPEN_PROJECT, { detail: { projectId } }));
+          window.dispatchEvent(new CustomEvent(OMNI_OPEN_NOTEPAD, { detail: { notepadId } }));
+        }, 120);
+      } else if (result.kind === "command" && result.command === "open_notepad") {
+        setMode("open_notepad");
+        setQuery("");
+        setSelectedIndex(0);
+        return;
+      } else if (result.kind === "open_notepad") {
+        actions.selectScreen("notepad");
+        const detail = { categories: result.categories, filterMode: result.filterMode };
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent(OMNI_OPEN_NOTEPAD_BY_CATEGORY, { detail }));
         }, 120);
       }
       close();
@@ -295,12 +480,18 @@ export function OmniSearch() {
       }
       if (event.key === "Escape" && open) {
         event.preventDefault();
-        close();
+        if (mode === "open_notepad") {
+          setMode("global");
+          setQuery("");
+          setSelectedIndex(0);
+        } else {
+          close();
+        }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [close, open]);
+  }, [close, mode, open]);
 
   useEffect(() => {
     if (open) {
@@ -356,7 +547,11 @@ export function OmniSearch() {
           ref={inputRef}
           className="omni-input"
           type="text"
-          placeholder="Go to page, project, or metric..."
+          placeholder={
+            mode === "open_notepad"
+              ? "Type category (or comma-separated list). Prefix with 'and:' for AND."
+              : "Go to page, project, notepad, or metric..."
+          }
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onKeyDown}
@@ -364,14 +559,24 @@ export function OmniSearch() {
           autoComplete="off"
         />
         <div className="omni-results" ref={listRef} onMouseMove={onMouseMove}>
-          {filtered.length === 0 && <div className="omni-empty">No matching pages, projects, or metrics</div>}
+          {filtered.length === 0 && (
+            <div className="omni-empty">
+              {mode === "open_notepad" ? "No matching categories" : "No matching pages, projects, notepads, or metrics"}
+            </div>
+          )}
           {filtered.map((result, index) => {
             const key =
               result.kind === "page"
                 ? `p:${result.screen}`
                 : result.kind === "metric"
                   ? `m:${result.metricId}`
-                  : `pr:${result.projectId}`;
+                  : result.kind === "project"
+                    ? `pr:${result.projectId}`
+                    : result.kind === "notepad"
+                      ? `np:${result.notepadId}`
+                      : result.kind === "command"
+                      ? `cmd:${result.command}`
+                      : `on:${result.filterMode}:${result.categories.join("|")}`;
             const isActive = index === selectedIndex;
             const isCurrent = result.kind === "page" && result.screen === state.selectedScreen;
             return (
@@ -408,14 +613,49 @@ export function OmniSearch() {
                   </>
                 ) : (
                   <>
-                    <span className="omni-result-icon omni-project-icon">{"\u270E"}</span>
-                    <span className="omni-result-text">
-                      <span className="omni-result-label">{result.label}</span>
-                      <span className="omni-result-description">
-                        {result.categories.length > 0 ? `Categories: ${result.categories.join(", ")}` : "Project"}
-                      </span>
-                    </span>
-                    <span className="omni-result-badge">project</span>
+                    {result.kind === "project" ? (
+                      <>
+                        <span className="omni-result-icon omni-project-icon">{"\u270E"}</span>
+                        <span className="omni-result-text">
+                          <span className="omni-result-label">{result.label}</span>
+                          <span className="omni-result-description">
+                            {result.labels.length > 0 ? `Labels: ${result.labels.join(", ")}` : "Project context"}
+                          </span>
+                        </span>
+                        <span className="omni-result-badge">project</span>
+                      </>
+                    ) : result.kind === "notepad" ? (
+                      <>
+                        <span className="omni-result-icon omni-project-icon">{"\u25A3"}</span>
+                        <span className="omni-result-text">
+                          <span className="omni-result-label">{result.label}</span>
+                          <span className="omni-result-description">
+                            {result.categories.length > 0 ? `Categories: ${result.categories.join(", ")}` : "Notepad view"}
+                          </span>
+                        </span>
+                        <span className="omni-result-badge">notepad</span>
+                      </>
+                    ) : result.kind === "command" ? (
+                      <>
+                        <span className="omni-result-icon omni-command-icon">{"\u25B7"}</span>
+                        <span className="omni-result-text">
+                          <span className="omni-result-label">{result.label}</span>
+                          <span className="omni-result-description">{result.description}</span>
+                        </span>
+                        <span className="omni-result-badge">command</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="omni-result-icon omni-project-icon">{"\u25A3"}</span>
+                        <span className="omni-result-text">
+                          <span className="omni-result-label">{result.label}</span>
+                          <span className="omni-result-description">{result.description}</span>
+                        </span>
+                        <span className="omni-result-badge">
+                          {result.categories.length > 1 ? `categories ${result.filterMode.toUpperCase()}` : "category"}
+                        </span>
+                      </>
+                    )}
                   </>
                 )}
               </button>
@@ -433,7 +673,9 @@ export function OmniSearch() {
             <kbd>esc</kbd> close
           </span>
           <span style={{ marginLeft: "auto", opacity: 0.5, fontSize: "0.7rem" }}>
-            {metrics.length} metrics · {metricBindings.length} bindings · {projects.length} projects
+            {mode === "open_notepad"
+              ? `${categoryEntries.length} categories`
+              : `${metrics.length} metrics · ${metricBindings.length} bindings · ${projects.length} projects · ${notepads.length} notepads`}
           </span>
         </div>
       </div>

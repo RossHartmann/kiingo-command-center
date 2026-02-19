@@ -470,8 +470,8 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
   overflow-y: auto;
 }
 
-/* Non-chat, non-dashboard screens stay centered and readable */
-.content-panel:has(.screen:not(.chat-screen):not(.dashboard-screen)) {
+/* Non-chat, non-dashboard, non-notepad screens stay centered and readable */
+.content-panel:has(.screen:not(.chat-screen):not(.dashboard-screen):not(.notepad-screen):not(.projects-screen)) {
   max-width: 960px;
 }
 
@@ -483,6 +483,14 @@ p, small, label, button, input, textarea, select, code, span, strong, li {
 .content-panel:has(.dashboard-screen) {
   max-width: none;
   padding: 0.4rem 0.5rem;
+}
+
+/* Notepad + Projects use full width with no padding (sidebar handles its own spacing) */
+.content-panel:has(.notepad-screen),
+.content-panel:has(.projects-screen) {
+  max-width: none;
+  padding: 0 !important;
+  margin: 0;
 }
 
 .screen {
@@ -2773,7 +2781,279 @@ body.metric-dragging {
 
 .notepad-screen {
   display: grid;
-  gap: 0.9rem;
+  gap: 0;
+}
+
+/* --- Page-level layout: sidebar | main content --- */
+.page-sidebar-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 0;
+  min-height: 0;
+  height: calc(100vh - 3.2rem);
+  overflow: hidden;
+}
+
+/* --- Notepad list sidebar (left rail) --- */
+.notepad-list-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+  overflow: hidden;
+  padding: 0;
+}
+
+.notepad-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.75rem 0.4rem;
+  flex-shrink: 0;
+}
+
+.notepad-list-header h3 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.notepad-list-new-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--ink-muted);
+  transition: background 0.12s, border-color 0.12s;
+}
+.notepad-list-new-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.notepad-list-header-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.notepad-list-info {
+  padding: 0.3rem 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.notepad-list-info-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+.notepad-list-info-tabs button {
+  font-size: 0.68rem;
+  padding: 0.18rem 0.4rem;
+}
+.notepad-list-shortcuts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.68rem;
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+.notepad-list-shortcuts kbd {
+  font-family: inherit;
+  font-size: 0.64rem;
+  padding: 0.05rem 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.notepad-list-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.notepad-list-diagnostics-flag {
+  font-size: 0.66rem;
+  color: var(--ink-muted);
+  width: 100%;
+}
+
+.notepad-list-search {
+  padding: 0 0.5rem 0.4rem;
+  flex-shrink: 0;
+}
+
+.notepad-list-search input {
+  width: 100%;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  outline: none;
+}
+.notepad-list-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.notepad-list-search input::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.6;
+}
+
+/* --- Inline create form --- */
+.notepad-list-create {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.notepad-list-create input {
+  width: 100%;
+  font-size: 0.78rem;
+  padding: 0.32rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.notepad-list-create input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.notepad-list-create-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+.notepad-list-create-actions button {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.5rem;
+}
+
+/* --- Notepad list items --- */
+.notepad-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.notepad-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  font-size: 0.82rem;
+  color: inherit;
+  transition: background 0.1s;
+  border-left: 3px solid transparent;
+}
+.notepad-list-item:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.notepad-list-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-left-color: var(--accent);
+  font-weight: 500;
+}
+.notepad-list-item-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.45rem 0.5rem 0.45rem 0.75rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+.notepad-list-edit-btn {
+  flex-shrink: 0;
+  padding: 0.3rem 0.4rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.notepad-list-item:hover .notepad-list-edit-btn,
+.notepad-list-item.active .notepad-list-edit-btn {
+  opacity: 1;
+}
+.notepad-list-edit-btn:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.notepad-list-edit {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem 0.5rem;
+}
+.notepad-list-edit input {
+  font-size: 0.74rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.notepad-list-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notepad-list-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.notepad-list-tag {
+  font-size: 0.64rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--ink-muted);
+}
+
+.notepad-list-empty {
+  padding: 0.8rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  opacity: 0.7;
+}
+
+/* --- Main content area (right of sidebar) --- */
+.page-sidebar-main {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.7rem;
+  overflow-y: auto;
+  min-height: 0;
+  align-content: start;
 }
 
 .notepad-live-announcer {
@@ -2799,98 +3079,13 @@ body.metric-dragging {
   padding: 0.2rem 0.55rem;
 }
 
-.notepad-toolbar {
-  display: grid;
-  gap: 0.6rem;
-}
 
-.notepad-toolbar-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  align-items: end;
-}
-
-.notepad-toolbar-row label {
-  min-width: 220px;
-}
-
-.notepad-preset-group {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.notepad-disclosure-actions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  margin-left: auto;
-}
-
-.notepad-disclosure-actions button {
-  min-width: 4.8rem;
-}
-
-.notepad-disclosure-panel {
-  display: grid;
-  gap: 0.5rem;
-  border-top: 1px dashed var(--line);
-  padding-top: 0.5rem;
-}
-
-.notepad-info-toggle-row {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.notepad-shortcuts {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.15rem 0.45rem;
-  background: var(--panel);
-}
-
-.notepad-shortcuts summary {
-  cursor: pointer;
-  font-size: 0.72rem;
-  color: var(--ink-muted);
-}
-
-.notepad-shortcuts ul {
-  margin: 0.35rem 0 0;
-  padding-left: 1rem;
-  display: grid;
-  gap: 0.25rem;
-}
-
-.notepad-shortcuts li {
-  font-size: 0.72rem;
-  color: var(--ink-muted);
-}
-
-.notepad-create-form {
-  gap: 0.6rem;
-}
-
-.notepad-create-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.6rem;
-  align-items: end;
-}
-
-.notepad-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-  gap: 0.8rem;
-  min-width: 0;
-}
 
 .notepad-outline {
-  min-height: 420px;
+  min-height: 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   gap: 0.6rem;
   overflow: hidden;
 }
@@ -2940,12 +3135,18 @@ body.metric-dragging {
   cursor: pointer;
 }
 
+.notepad-meta-action.active {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .notepad-meta-action.warning {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line) 55%);
 }
 
 .notepad-tree {
-  height: min(68vh, 720px);
+  flex: 1;
+  min-height: 200px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -3148,74 +3349,49 @@ body.metric-dragging {
   background: var(--notepad-overlay-date-bg);
 }
 
-.notepad-inspector {
-  align-content: start;
-  gap: 0.6rem;
-}
-
-.notepad-inspector-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-}
-
-.notepad-inspector.collapsed {
-  align-content: start;
-}
-
-.notepad-inspector h3 {
-  margin: 0;
-  font-size: 0.82rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink-muted);
-}
-
-.notepad-inspector-grid {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.notepad-inspector-grid p {
-  margin: 0;
-}
-
-.notepad-inspector-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.notepad-inspector-toggle-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.notepad-inspector-toggle-row button {
-  min-width: 5.2rem;
-}
-
-.quick-actions-panel {
-  margin-top: 0.3rem;
+.notepad-context-menu {
+  position: fixed;
+  z-index: 10020;
+  width: min(260px, calc(100vw - 1.2rem));
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--panel) 92%, var(--bg) 8%),
-    color-mix(in srgb, var(--bg) 84%, var(--panel) 16%)
-  );
-  gap: 0.5rem;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+  padding: 0.35rem;
+  display: grid;
+  gap: 0.2rem;
 }
 
-.quick-actions-panel h4 {
-  margin: 0;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink-muted);
+.notepad-context-menu button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  border-radius: 7px;
+  padding: 0.36rem 0.45rem;
+  font-size: 0.76rem;
+}
+
+.notepad-context-menu button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line) 65%);
+}
+
+.notepad-context-menu button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.notepad-context-menu button.active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 600;
+}
+
+.notepad-context-divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 0.15rem 0;
 }
 
 .health-pill {
@@ -3244,15 +3420,257 @@ body.metric-dragging {
   background: var(--notepad-health-warn-bg);
 }
 
-@media (max-width: 1240px) {
-  .notepad-create-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 1020px) {
+  .page-sidebar-layout {
+    grid-template-columns: 200px minmax(0, 1fr);
   }
 }
 
-@media (max-width: 1020px) {
-  .notepad-layout {
+@media (max-width: 740px) {
+  .page-sidebar-layout {
     grid-template-columns: 1fr;
+  }
+  .notepad-list-sidebar {
+    max-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+/* ===================================================================
+   PROJECTS SCREEN
+   =================================================================== */
+
+.projects-screen {
+  display: grid;
+  gap: 0;
+}
+
+/* --- Project list sidebar (reuses notepad sidebar pattern) --- */
+.project-list-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-right: 1px solid var(--line);
+  background: var(--bg);
+  overflow: hidden;
+  padding: 0;
+}
+
+.project-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.75rem 0.4rem;
+  flex-shrink: 0;
+}
+
+.project-list-header h3 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.project-list-header-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.project-list-search {
+  padding: 0 0.5rem 0.4rem;
+  flex-shrink: 0;
+}
+
+.project-list-search input {
+  width: 100%;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+}
+.project-list-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.project-list-search input::placeholder {
+  color: var(--ink-muted);
+  opacity: 0.6;
+}
+
+.project-list-create {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.project-list-create input,
+.project-list-create select,
+.project-list-create textarea {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+  width: 100%;
+}
+.project-list-create input:focus,
+.project-list-create select:focus,
+.project-list-create textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.project-list-create-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+.project-list-create-actions button {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.5rem;
+}
+
+.project-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.project-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  border-left: 3px solid transparent;
+  transition: background 0.1s, border-color 0.15s;
+  position: relative;
+}
+.project-list-item:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.project-list-item.active {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.project-list-item-btn {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.project-list-item-name {
+  font-size: 0.82rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-list-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.project-list-tag {
+  font-size: 0.62rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.project-list-edit-btn {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  color: var(--ink-muted);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.project-list-item:hover .project-list-edit-btn,
+.project-list-item.active .project-list-edit-btn {
+  opacity: 1;
+}
+.project-list-edit-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.project-list-edit {
+  padding: 0.3rem 0.5rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 0.3rem;
+}
+.project-list-edit input {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.4rem;
+}
+
+.project-list-empty {
+  padding: 0.8rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  opacity: 0.7;
+}
+
+/* --- Project main content area --- */
+.project-detail {
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+}
+
+.project-detail h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.project-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.project-detail-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.project-empty-state {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  opacity: 0.6;
+}
+
+@media (max-width: 740px) {
+  .project-list-sidebar {
+    max-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
   }
 }
 
@@ -3386,6 +3804,10 @@ body.metric-dragging {
 
 .omni-project-icon {
   color: #365f50;
+}
+
+.omni-command-icon {
+  color: color-mix(in srgb, var(--accent) 55%, var(--ink-muted) 45%);
 }
 
 .omni-result-badge {

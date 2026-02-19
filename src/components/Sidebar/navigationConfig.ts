@@ -78,12 +78,19 @@ export const NAVIGATION: NavGroup[] = [
         children: [
           { id: "dept-sales", label: "Sales Dashboard", icon: "\u2197" },
           { id: "discovery-calls", label: "Discovery Calls", icon: "\u260E" },
-          { id: "follow-up-calls", label: "Follow-up Calls", icon: "\u21BB" }
+          { id: "follow-up-calls", label: "Follow-up Calls", icon: "\u21BB" },
+          { id: "sales-followup", label: "Follow-Up", icon: "\u2691" }
         ]
       },
       { id: "dept-marketing", label: "Marketing", icon: "\u2709" },
       { id: "dept-engineering", label: "Engineering", icon: "\u2318" },
-      { id: "dept-operations", label: "Operations", icon: "\u2699" }
+      {
+        id: "sub:operations", label: "Operations", icon: "\u2699",
+        children: [
+          { id: "dept-operations", label: "Ops Dashboard", icon: "\u2699" },
+          { id: "ops-followup", label: "Follow-Up", icon: "\u2691" }
+        ]
+      }
     ]
   },
   {
@@ -114,7 +121,8 @@ export const NAVIGATION: NavGroup[] = [
     icon: "\u270E",
     defaultExpanded: true,
     items: [
-      { id: "notepad", label: "Projects", icon: "\u270E" },
+      { id: "projects", label: "Projects", icon: "\u25C8" },
+      { id: "notepad", label: "Notepads", icon: "\u270E" },
       { id: "tasks", label: "Tasks", icon: "\u2611" }
     ]
   },
@@ -183,9 +191,11 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   "dept-sales": { title: "Sales Dashboard", description: "Quota attainment, deal velocity, and pipeline health", group: "departments" },
   "discovery-calls": { title: "Discovery Calls", description: "Track and analyze sales discovery call pipeline and outcomes", group: "departments" },
   "follow-up-calls": { title: "Follow-up Calls", description: "Track and analyze sales follow-up call activity and conversion", group: "departments" },
+  "sales-followup": { title: "Follow-Up", description: "Pipeline follow-up health snapshot and daily trends", group: "departments" },
   "dept-marketing": { title: "Marketing", description: "Brand reach, proof amplification, and campaign ROI", group: "departments" },
   "dept-engineering": { title: "Engineering", description: "Velocity, reliability, and delivery cadence", group: "departments" },
   "dept-operations": { title: "Operations", description: "Bootcamp delivery, program ops, and capacity", group: "departments" },
+  "ops-followup": { title: "Ops Follow-Up", description: "Operations pipeline follow-up health and trends", group: "departments" },
 
   "team-scorecard": { title: "Scorecard", description: "Company scorecard with owner-level accountability metrics", group: "team" },
   "team-rocks": { title: "Rocks", description: "Quarterly priorities and progress", group: "team" },
@@ -198,8 +208,9 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   "cco-principles": { title: "CCO Principles", description: "Customer success principles for retention and expansion", group: "team" },
   "chro-principles": { title: "CHRO Principles", description: "People leadership principles for culture and talent", group: "team" },
 
-  notepad: { title: "Projects", description: "Dynalist-style project outliner over shared workspace blocks", group: "workspace" },
-  tasks: { title: "Tasks", description: "Task projection across all projects", group: "workspace" },
+  projects: { title: "Projects", description: "Project contexts mapped to default notepad views", group: "workspace" },
+  notepad: { title: "Notepads", description: "Dynalist-style notepad views over shared workspace blocks", group: "workspace" },
+  tasks: { title: "Tasks", description: "Task projection across the workspace", group: "workspace" },
 
   chat: { title: "Chat", description: "AI coding assistant chat", group: "ai-agent" },
   composer: { title: "Composer", description: "Compose and launch runs", group: "ai-agent" },

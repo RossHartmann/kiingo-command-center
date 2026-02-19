@@ -18,6 +18,30 @@ describe("keyboardContract", () => {
   it("maps editor key actions for core structural shortcuts", () => {
     expect(
       resolveEditorKeyAction({
+        key: "z",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        rowText: "hello",
+        selectionStart: 5,
+        selectionEnd: 5
+      })
+    ).toEqual({ type: "undo_structure" });
+
+    expect(
+      resolveEditorKeyAction({
+        key: "z",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: true,
+        rowText: "hello",
+        selectionStart: 5,
+        selectionEnd: 5
+      })
+    ).toEqual({ type: "redo_structure" });
+
+    expect(
+      resolveEditorKeyAction({
         key: "Enter",
         metaKey: false,
         ctrlKey: false,
@@ -63,6 +87,18 @@ describe("keyboardContract", () => {
         selectionEnd: 0
       })
     ).toEqual({ type: "delete_empty_row" });
+
+    expect(
+      resolveEditorKeyAction({
+        key: "Backspace",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        rowText: "hello",
+        selectionStart: 0,
+        selectionEnd: 0
+      })
+    ).toEqual({ type: "merge_with_previous_sibling" });
 
     expect(
       resolveEditorKeyAction({
@@ -178,6 +214,26 @@ describe("keyboardContract", () => {
   });
 
   it("maps container keys for navigation and mode transitions", () => {
+    expect(
+      resolveContainerKeyAction({
+        key: "z",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        hasSelectedRow: true
+      })
+    ).toEqual({ type: "undo_structure" });
+
+    expect(
+      resolveContainerKeyAction({
+        key: "z",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: true,
+        hasSelectedRow: true
+      })
+    ).toEqual({ type: "redo_structure" });
+
     expect(
       resolveContainerKeyAction({
         key: "ArrowUp",

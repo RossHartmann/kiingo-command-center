@@ -12,11 +12,12 @@ use crate::models::{
     MigrationPlan, MigrationRun, NotepadFilter, NotepadSort, NotepadViewDefinition,
     NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload,
     ObsidianTaskSyncResult, PageResponse, PlacementRecord, PlacementReorderRequest,
+    ProjectDefinition, ProjectOpenResponse,
     ProjectionCheckpoint, ProjectionDefinition, ProjectionMutationPayload,
     ProjectionRebuildResponse, RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse,
     RecurrenceTemplate, RegistryEntry, RegistryMutationPayload, RegistrySuggestionsResponse,
     RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload,
-    SaveNotepadViewRequest, SemanticChunk, SemanticReindexResponse, SemanticSearchHit,
+    SaveNotepadViewRequest, SaveProjectDefinitionRequest, SemanticChunk, SemanticReindexResponse, SemanticSearchHit,
     SemanticSearchRequest, SemanticSearchResponse, SensitivityLevel, SetTaskStatusRequest,
     TaskFacet, TaskReopenRequest, TaskStatus, UpdateAtomRequest, WorkSessionCancelRequest,
     WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord, WorkSessionStartRequest,
@@ -52,6 +53,7 @@ const ROOT_DIRS: &[&str] = &[
     "conditions/active",
     "conditions/history",
     "notepads",
+    "projects",
     "events",
     "threads",
     "categories",
@@ -138,6 +140,12 @@ pub fn capabilities(root: &Path) -> AppResult<WorkspaceCapabilities> {
             "notepad_get".to_string(),
             "notepad_save".to_string(),
             "notepad_delete".to_string(),
+            "projects_list".to_string(),
+            "project_get".to_string(),
+            "project_save".to_string(),
+            "project_delete".to_string(),
+            "project_open".to_string(),
+            "project_views_list".to_string(),
             "notepad_atoms_list".to_string(),
             "notepad_block_create".to_string(),
             "blocks_list".to_string(),
@@ -562,6 +570,7 @@ fn is_command_center_system_path(command_center_root: &Path, path: &Path) -> boo
             | "placements"
             | "conditions"
             | "notepads"
+            | "projects"
             | "events"
             | "threads"
             | "categories"
@@ -985,6 +994,129 @@ pub fn notepad_delete(
             Ok(BooleanResponse { success: true })
         },
     )
+}
+
+pub fn projects_list(root: &Path) -> AppResult<Vec<ProjectDefinition>> {
+    ensure_topology(root)?;
+    ensure_projects_backfilled(root)?;
+
+    let mut items = Vec::new();
+    for entry in fs::read_dir(root.join("projects")).map_err(|error| AppError::Io(error.to_string()))? {
+        let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        match read_project_file(&path) {
+            Ok(value) => items.push(value),
+            Err(error) => {
+                tracing::warn!(path = %path.to_string_lossy(), error = %error, "skipping malformed project file");
+            }
+        }
+    }
+    items.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
+    Ok(items)
+}
+
+pub fn project_get(root: &Path, project_id: &str) -> AppResult<Option<ProjectDefinition>> {
+    ensure_topology(root)?;
+    ensure_projects_backfilled(root)?;
+    let path = project_path(root, project_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_project_file(&path).map(Some)
+}
+
+pub fn project_save(root: &Path, request: SaveProjectDefinitionRequest) -> AppResult<ProjectDefinition> {
+    ensure_topology(root)?;
+    ensure_projects_backfilled(root)?;
+    let key = request.idempotency_key.clone();
+    with_idempotency(root, "project.save", key.as_deref(), &request, || {
+        project_save_inner(root, request.clone())
+    })
+}
+
+pub fn project_delete(
+    root: &Path,
+    project_id: &str,
+    idempotency_key: Option<String>,
+) -> AppResult<BooleanResponse> {
+    ensure_topology(root)?;
+    let key = idempotency_key.clone();
+    with_idempotency(
+        root,
+        "project.delete",
+        key.as_deref(),
+        &json!({"projectId": project_id}),
+        || {
+            let path = project_path(root, project_id);
+            if !path.exists() {
+                return Ok(BooleanResponse { success: false });
+            }
+            fs::remove_file(path).map_err(|error| AppError::Io(error.to_string()))?;
+            Ok(BooleanResponse { success: true })
+        },
+    )
+}
+
+pub fn project_open(root: &Path, project_id: &str) -> AppResult<ProjectOpenResponse> {
+    ensure_topology(root)?;
+    ensure_now_notepad(root)?;
+    ensure_projects_backfilled(root)?;
+
+    let project = project_get(root, project_id)?
+        .ok_or_else(|| AppError::NotFound(format!("Project '{}' not found", project_id)))?;
+
+    let mut candidates = Vec::new();
+    if let Some(default_view_id) = project.default_view_id.clone() {
+        candidates.push(default_view_id);
+    }
+    candidates.extend(project.view_ids.clone());
+    candidates.push("now".to_string());
+
+    let mut resolved = "now".to_string();
+    for candidate in candidates {
+        if notepad_get(root, &candidate)?.is_some() {
+            resolved = candidate;
+            break;
+        }
+    }
+
+    Ok(ProjectOpenResponse {
+        project_id: project.id,
+        default_view_id: resolved,
+    })
+}
+
+pub fn project_views_list(root: &Path, project_id: &str) -> AppResult<Vec<NotepadViewDefinition>> {
+    ensure_topology(root)?;
+    ensure_projects_backfilled(root)?;
+    let project = project_get(root, project_id)?
+        .ok_or_else(|| AppError::NotFound(format!("Project '{}' not found", project_id)))?;
+
+    let mut views = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    if let Some(default_view_id) = project.default_view_id.clone() {
+        if let Some(view) = notepad_get(root, &default_view_id)? {
+            seen.insert(view.id.clone());
+            views.push(view);
+        }
+    }
+    for view_id in project.view_ids {
+        if seen.contains(&view_id) {
+            continue;
+        }
+        if let Some(view) = notepad_get(root, &view_id)? {
+            seen.insert(view.id.clone());
+            views.push(view);
+        }
+    }
+    Ok(views)
 }
 
 pub fn notepad_atoms_list(
@@ -2118,6 +2250,11 @@ fn notepad_save_inner(
         name: input.name,
         description: input.description,
         is_system: input.is_system || input.id == "now",
+        view_kind: input
+            .view_kind
+            .or_else(|| Some(infer_notepad_view_kind(&input.id, &input.filters))),
+        scope_project_id: input.scope_project_id,
+        display_role: input.display_role,
         filters: input.filters,
         sorts: input.sorts,
         capture_defaults: input.capture_defaults,
@@ -2132,6 +2269,107 @@ fn notepad_save_inner(
     };
 
     write_notepad_file(root, &path, &definition)?;
+    Ok(definition)
+}
+
+fn project_save_inner(root: &Path, request: SaveProjectDefinitionRequest) -> AppResult<ProjectDefinition> {
+    let SaveProjectDefinitionRequest {
+        expected_revision,
+        idempotency_key: _,
+        definition: input,
+    } = request;
+
+    let now = Utc::now();
+    let path = project_path(root, &input.id);
+    let existing: Option<ProjectDefinition> = if path.exists() {
+        read_project_file(&path).ok()
+    } else {
+        None
+    };
+
+    if let Some(expected) = expected_revision {
+        let actual = existing.as_ref().map(|value| value.revision).unwrap_or(0);
+        if actual != expected {
+            let latest = existing
+                .as_ref()
+                .map(|value| serde_json::to_value(value).unwrap_or(Value::Null))
+                .unwrap_or(Value::Null);
+            return Err(AppError::Policy(format!(
+                "CONFLICT: {}",
+                json!({
+                    "code": "CONFLICT",
+                    "entity": "project",
+                    "expectedRevision": expected,
+                    "actualRevision": actual,
+                    "latest": latest
+                })
+            )));
+        }
+    }
+
+    let mut view_ids: Vec<String> = input
+        .view_ids
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    view_ids.sort();
+    view_ids.dedup();
+
+    let mut default_view_id = input
+        .default_view_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| view_ids.first().cloned())
+        .unwrap_or_else(|| "now".to_string());
+    if notepad_get(root, &default_view_id)?.is_none() {
+        default_view_id = "now".to_string();
+    }
+    if !view_ids.contains(&default_view_id) {
+        view_ids.insert(0, default_view_id.clone());
+    }
+
+    let created_at = existing
+        .as_ref()
+        .map(|value| value.created_at)
+        .unwrap_or(now);
+    let revision = existing
+        .as_ref()
+        .map(|value| value.revision + 1)
+        .unwrap_or(1);
+
+    let kind = match input.kind.as_str() {
+        "label_project" => "label_project".to_string(),
+        "workspace_project" => "workspace_project".to_string(),
+        _ => "workspace_project".to_string(),
+    };
+    let status = match input.status.as_str() {
+        "archived" => "archived".to_string(),
+        _ => "active".to_string(),
+    };
+
+    let definition = ProjectDefinition {
+        id: input.id,
+        schema_version: if input.schema_version <= 0 {
+            1
+        } else {
+            input.schema_version
+        },
+        name: input.name,
+        description: input.description,
+        status,
+        kind,
+        label_ids: input.label_ids,
+        default_view_id: Some(default_view_id),
+        view_ids,
+        capture_defaults: input.capture_defaults,
+        source: input.source,
+        created_at,
+        updated_at: now,
+        revision,
+    };
+
+    write_project_file(&path, &definition)?;
     Ok(definition)
 }
 
@@ -2434,6 +2672,11 @@ fn notepad_path(root: &Path, notepad_id: &str) -> PathBuf {
         .join(format!("{}.md", sanitize_component(notepad_id)))
 }
 
+fn project_path(root: &Path, project_id: &str) -> PathBuf {
+    root.join("projects")
+        .join(format!("{}.json", sanitize_component(project_id)))
+}
+
 fn resolve_notepad_path(root: &Path, notepad_id: &str) -> PathBuf {
     let primary = notepad_path(root, notepad_id);
     if primary.exists() {
@@ -2619,6 +2862,14 @@ fn write_notepad_file(
 ) -> AppResult<()> {
     let metadata = serde_json::to_value(definition)?;
     write_markdown_frontmatter(root, path, &metadata, "")
+}
+
+fn read_project_file(path: &Path) -> AppResult<ProjectDefinition> {
+    read_json_file(path)
+}
+
+fn write_project_file(path: &Path, definition: &ProjectDefinition) -> AppResult<()> {
+    write_json_file(path, definition)
 }
 
 fn try_obsidian_cli_write(root: &Path, path: &Path, content: &str) -> bool {
@@ -3267,8 +3518,20 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
     let include_archived = filter.include_archived.unwrap_or(false);
     let statuses = filter.statuses.clone();
     let thread_ids = filter.thread_ids.clone();
+    let thread_filter_mode = filter
+        .thread_filter_mode
+        .clone()
+        .unwrap_or_else(|| "or".to_string());
     let labels = filter.labels.clone();
+    let label_filter_mode = filter
+        .label_filter_mode
+        .clone()
+        .unwrap_or_else(|| "or".to_string());
     let categories = filter.categories.clone();
+    let category_filter_mode = filter
+        .category_filter_mode
+        .clone()
+        .unwrap_or_else(|| "or".to_string());
     let text_query = filter
         .text_query
         .as_ref()
@@ -3306,11 +3569,17 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
 
         if let Some(expected_thread_ids) = thread_ids.as_ref() {
             let expected_set: HashSet<&String> = expected_thread_ids.iter().collect();
-            let matches = atom
-                .relations
-                .thread_ids
-                .iter()
-                .any(|thread_id| expected_set.contains(thread_id));
+            let matches = if thread_filter_mode.eq_ignore_ascii_case("and") {
+                expected_thread_ids
+                    .iter()
+                    .all(|thread_id| atom.relations.thread_ids.contains(thread_id))
+            } else {
+                atom
+                    .relations
+                    .thread_ids
+                    .iter()
+                    .any(|thread_id| expected_set.contains(thread_id))
+            };
             if !matches {
                 return false;
             }
@@ -3327,9 +3596,15 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
                 .as_ref()
                 .and_then(|meta| meta.labels.clone())
                 .unwrap_or_default();
-            let matches = actual_labels
-                .iter()
-                .any(|label| expected_set.contains(&label.to_ascii_lowercase()));
+            let matches = if label_filter_mode.eq_ignore_ascii_case("and") {
+                expected_set
+                    .iter()
+                    .all(|label| actual_labels.iter().any(|actual| actual.eq_ignore_ascii_case(label)))
+            } else {
+                actual_labels
+                    .iter()
+                    .any(|label| expected_set.contains(&label.to_ascii_lowercase()))
+            };
             if !matches {
                 return false;
             }
@@ -3346,9 +3621,17 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
                 .as_ref()
                 .and_then(|meta| meta.categories.clone())
                 .unwrap_or_default();
-            let matches = actual_categories
-                .iter()
-                .any(|category| expected_set.contains(&category.to_ascii_lowercase()));
+            let matches = if category_filter_mode.eq_ignore_ascii_case("and") {
+                expected_set.iter().all(|category| {
+                    actual_categories
+                        .iter()
+                        .any(|actual| actual.eq_ignore_ascii_case(category))
+                })
+            } else {
+                actual_categories
+                    .iter()
+                    .any(|category| expected_set.contains(&category.to_ascii_lowercase()))
+            };
             if !matches {
                 return false;
             }
@@ -3667,6 +3950,129 @@ fn ensure_now_notepad(root: &Path) -> AppResult<()> {
     write_notepad_file(root, &path, &definition)
 }
 
+fn ensure_projects_backfilled(root: &Path) -> AppResult<()> {
+    let mut has_projects = false;
+    for entry in fs::read_dir(root.join("projects")).map_err(|error| AppError::Io(error.to_string()))? {
+        let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("json") {
+            has_projects = true;
+            break;
+        }
+    }
+    if has_projects {
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    for notepad in notepads_list(root)? {
+        if notepad.is_system {
+            continue;
+        }
+        let mut label_ids = Vec::new();
+        if let Some(ids) = notepad.filters.category_ids.clone() {
+            label_ids.extend(ids);
+        }
+        if let Some(ids) = notepad.filters.label_ids.clone() {
+            label_ids.extend(ids);
+        }
+        if let Some(ids) = notepad.filters.thread_ids.clone() {
+            label_ids.extend(ids);
+        }
+        label_ids.sort();
+        label_ids.dedup();
+
+        let inferred_label_project = !label_ids.is_empty()
+            || notepad
+                .filters
+                .categories
+                .as_ref()
+                .map(|values| !values.is_empty())
+                .unwrap_or(false)
+            || notepad
+                .filters
+                .labels
+                .as_ref()
+                .map(|values| !values.is_empty())
+                .unwrap_or(false);
+        let project = ProjectDefinition {
+            id: format!("project_{}", sanitize_component(&notepad.id)),
+            schema_version: 1,
+            name: notepad.name.clone(),
+            description: notepad.description.clone(),
+            status: "active".to_string(),
+            kind: if inferred_label_project {
+                "label_project".to_string()
+            } else {
+                "workspace_project".to_string()
+            },
+            label_ids,
+            default_view_id: Some(notepad.id.clone()),
+            view_ids: vec![notepad.id.clone()],
+            capture_defaults: notepad.capture_defaults.as_ref().map(|defaults| crate::models::ProjectCaptureDefaults {
+                thread_ids: defaults.thread_ids.clone(),
+                label_ids: defaults.label_ids.clone(),
+                category_ids: defaults.category_ids.clone(),
+                categories: defaults.categories.clone(),
+                labels: defaults.labels.clone(),
+                task_status: defaults.task_status,
+                task_priority: defaults.task_priority,
+            }),
+            source: Some("migrated_derived".to_string()),
+            created_at: now,
+            updated_at: now,
+            revision: 1,
+        };
+        write_project_file(&project_path(root, &project.id), &project)?;
+    }
+    Ok(())
+}
+
+fn infer_notepad_view_kind(notepad_id: &str, filters: &NotepadFilter) -> String {
+    if notepad_id == "now" {
+        return "inbox".to_string();
+    }
+    let has_computed_selectors = filters
+        .facet
+        .is_some()
+        || filters
+            .categories
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || filters
+            .category_ids
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || filters
+            .labels
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || filters
+            .label_ids
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || filters
+            .thread_ids
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || filters.parent_id.is_some()
+        || filters
+            .text_query
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+    if has_computed_selectors {
+        "computed".to_string()
+    } else {
+        "manual".to_string()
+    }
+}
+
 fn default_now_notepad(now: DateTime<Utc>) -> NotepadViewDefinition {
     NotepadViewDefinition {
         id: "now".to_string(),
@@ -3674,6 +4080,9 @@ fn default_now_notepad(now: DateTime<Utc>) -> NotepadViewDefinition {
         name: "Now".to_string(),
         description: Some("System default view for active work".to_string()),
         is_system: true,
+        view_kind: Some("inbox".to_string()),
+        scope_project_id: None,
+        display_role: None,
         filters: NotepadFilter {
             facet: Some(FacetKind::Task),
             statuses: Some(vec![
@@ -6731,12 +7140,24 @@ fn default_feature_flags() -> Vec<Value> {
         "workspace.recurrence_v2",
         "workspace.agent_handoff",
         "workspace.notepad_ui_v2",
+        "workspace.notepad_open_notepad_v2",
+        "workspace.inline_tags",
+        "workspace.notepad_context_menu",
+        "workspace.projects_v1",
+        "workspace.notepad_project_split_ui",
+        "workspace.project_default_views",
     ]
     .iter()
     .map(|key| {
         json!({
             "key": key,
-            "enabled": *key == "workspace.notepad_ui_v2",
+            "enabled": *key == "workspace.notepad_ui_v2"
+                || *key == "workspace.notepad_open_notepad_v2"
+                || *key == "workspace.inline_tags"
+                || *key == "workspace.notepad_context_menu"
+                || *key == "workspace.projects_v1"
+                || *key == "workspace.notepad_project_split_ui"
+                || *key == "workspace.project_default_views",
             "updatedAt": now
         })
     })
@@ -6925,6 +7346,9 @@ mod tests {
                     name: "Focus".to_string(),
                     description: Some("Focused tasks".to_string()),
                     is_system: false,
+                    view_kind: Some("computed".to_string()),
+                    scope_project_id: None,
+                    display_role: None,
                     filters: NotepadFilter {
                         facet: Some(FacetKind::Task),
                         statuses: Some(vec![
@@ -6996,6 +7420,9 @@ mod tests {
                     name: "Focus".to_string(),
                     description: Some("Materialize placements from membership".to_string()),
                     is_system: false,
+                    view_kind: Some("computed".to_string()),
+                    scope_project_id: None,
+                    display_role: None,
                     filters: NotepadFilter {
                         facet: Some(FacetKind::Task),
                         statuses: Some(vec![

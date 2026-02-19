@@ -1,7 +1,6 @@
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   atomArchive,
-  atomDelete,
   atomGet,
   atomUpdate,
   blockGet,
@@ -18,12 +17,15 @@ import {
   notepadBlockCreate,
   notepadsList,
   notepadSave,
+  registryEntriesList,
+  registryEntrySave,
   placementDelete,
   placementSave,
   placementsList,
   placementsReorder,
   systemApplyAttentionUpdate,
   systemGenerateDecisionCards,
+  taskReopen,
   taskStatusSet,
   workSessionsList,
   workspaceCapabilitiesGet,
@@ -35,6 +37,7 @@ import type {
   ConditionRecord,
   DecisionPrompt,
   FeatureFlag,
+  RegistryEntry,
   NotepadFilter,
   NotepadViewDefinition,
   PlacementRecord,
@@ -44,7 +47,7 @@ import type {
   WorkspaceHealth
 } from "../lib/types";
 import { taskDisplayTitle } from "../lib/taskTitle";
-import { NotepadToolbar } from "../components/notepad/NotepadToolbar";
+import { NotepadListSidebar } from "../components/notepad/NotepadListSidebar";
 import { NotepadTree } from "../components/notepad/NotepadTree";
 import {
   resolveContainerKeyAction,
@@ -62,18 +65,15 @@ import {
   type PlacementDropIntent
 } from "../components/notepad/treeData";
 import { ROOT_KEY, type FlatRow } from "../components/notepad/types";
-import { OMNI_OPEN_PROJECT } from "../components/OmniSearch";
+import { OMNI_OPEN_NOTEPAD, OMNI_OPEN_NOTEPAD_BY_CATEGORY } from "../components/OmniSearch";
 import { useOptionalAppActions } from "../state/appState";
 import { useNotepadUiState } from "../state/notepadState";
 
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
 const ACTIVE_ROW_STATUSES: TaskStatus[] = ["todo", "doing", "blocked"];
-const NOTEPAD_INSPECTOR_OPEN_KEY = "notepad.disclosure.inspectorOpen";
-const NOTEPAD_MOVE_COPY_OPEN_KEY = "notepad.disclosure.moveCopyOpen";
-const NOTEPAD_BLOCKING_OPEN_KEY = "notepad.disclosure.blockingOpen";
-const NOTEPAD_ADVANCED_OPEN_KEY = "notepad.disclosure.advancedOpen";
 const NOTEPAD_HINT_DISMISSED_KEY = "notepad.disclosure.hintDismissed";
 const NOTEPAD_DRAG_UNDO_TTL_MS = 10000;
+const STRUCTURAL_HISTORY_LIMIT = 50;
 
 interface DragUndoState {
   notepadId: string;
@@ -82,6 +82,35 @@ interface DragUndoState {
   previousParentPlacementId?: string;
   previousCanonicalParentAtomId?: string;
   message: string;
+}
+
+interface SnapshotPlacement {
+  id: string;
+  viewId: string;
+  blockId: string;
+  parentPlacementId?: string;
+  orderKey: string;
+  pinned: boolean;
+}
+
+interface StructuralSnapshot {
+  notepadId: string;
+  placements: SnapshotPlacement[];
+  orderedPlacementIds: string[];
+  atoms: AtomRecord[];
+  selectedPlacementId?: string;
+}
+
+interface StructuralHistoryEntry {
+  label: string;
+  before: StructuralSnapshot;
+  after: StructuralSnapshot;
+}
+
+interface KeyboardDragState {
+  sourcePlacementId: string;
+  targetPlacementId: string;
+  intent: PlacementDropIntent;
 }
 
 function loadNotepadBoolPreference(key: string, fallback: boolean): boolean {
@@ -162,6 +191,60 @@ function parseCategories(input: string): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
+function normalizeCategoryName(input: string): string {
+  return input
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^#+/, "");
+}
+
+function normalizeTagName(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/^#+/, "")
+    .replace(/[^\p{L}\p{N}_-]+/gu, "");
+}
+
+function uniqueLowercase(values: string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    const lower = normalized.toLowerCase();
+    if (seen.has(lower)) {
+      continue;
+    }
+    seen.add(lower);
+    next.push(normalized);
+  }
+  return next;
+}
+
+function extractInlineTags(rawText: string): string[] {
+  if (!rawText.includes("#")) {
+    return [];
+  }
+  const stripped = rawText
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/https?:\/\/\S+/g, " ");
+  const matches = stripped.match(/(^|\s)#([A-Za-z0-9][A-Za-z0-9_-]{0,63})/g) ?? [];
+  return uniqueLowercase(
+    matches
+      .map((match) => {
+        const token = match.trim();
+        const idx = token.indexOf("#");
+        return idx >= 0 ? token.slice(idx + 1) : "";
+      })
+      .map(normalizeTagName)
+      .filter((value) => value.length > 0)
+  );
+}
+
 function rowText(row: FlatRow, draft: string | undefined): string {
   return draft ?? row.block.text;
 }
@@ -175,10 +258,21 @@ function mergeRowText(current: string, next: string): string {
   return `${current} ${next}`;
 }
 
-function atomHasNoMeaningfulContent(atom: AtomRecord): boolean {
-  const text = atom.rawText.trim();
-  const body = (atom.body ?? "").trim();
-  return text.length === 0 && body.length === 0;
+function mergeBoundaryOffset(left: string, right: string): number {
+  if (left.length === 0 || right.length === 0) {
+    return left.length;
+  }
+  if (/\s$/.test(left) || /^\s/.test(right)) {
+    return left.length;
+  }
+  return left.length + 1;
+}
+
+function deepClone<T>(value: T): T {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function requiredWorkspaceCommandsPresent(capabilities: WorkspaceCapabilities | undefined): { ok: boolean; missing: string[] } {
@@ -222,6 +316,17 @@ interface PendingEditorSelection {
   end: number;
 }
 
+interface PendingCategoryOpenRequest {
+  categories: string[];
+  filterMode: "or" | "and";
+}
+
+interface RowContextMenuState {
+  placementId: string;
+  x: number;
+  y: number;
+}
+
 export function NotepadScreen(): JSX.Element {
   const [uiState, uiDispatch] = useNotepadUiState();
   const appActions = useOptionalAppActions();
@@ -253,32 +358,24 @@ export function NotepadScreen(): JSX.Element {
   const [editCategories, setEditCategories] = useState("");
   const [editingNotepad, setEditingNotepad] = useState(false);
 
-  const [quickTargetNotepadId, setQuickTargetNotepadId] = useState("");
-  const [pendingProjectId, setPendingProjectId] = useState<string>();
-  const [showMoveCopyPanel, setShowMoveCopyPanel] = useState<boolean>(() =>
-    loadNotepadBoolPreference(NOTEPAD_MOVE_COPY_OPEN_KEY, false)
-  );
-  const [showBlockingPanel, setShowBlockingPanel] = useState<boolean>(() =>
-    loadNotepadBoolPreference(NOTEPAD_BLOCKING_OPEN_KEY, false)
-  );
-  const [showAdvancedPanel, setShowAdvancedPanel] = useState<boolean>(() =>
-    loadNotepadBoolPreference(NOTEPAD_ADVANCED_OPEN_KEY, false)
-  );
-  const [inspectorOpen, setInspectorOpen] = useState<boolean>(() =>
-    loadNotepadBoolPreference(NOTEPAD_INSPECTOR_OPEN_KEY, false)
-  );
+  const [pendingNotepadId, setPendingNotepadId] = useState<string>();
+  const [pendingCategoryOpen, setPendingCategoryOpen] = useState<PendingCategoryOpenRequest>();
+  const [rowContextMenu, setRowContextMenu] = useState<RowContextMenuState | null>(null);
   const [hintDismissed, setHintDismissed] = useState<boolean>(() =>
     loadNotepadBoolPreference(NOTEPAD_HINT_DISMISSED_KEY, false)
   );
   const [dragUndo, setDragUndo] = useState<DragUndoState | null>(null);
   const [dragAnnouncement, setDragAnnouncement] = useState("");
+  const [keyboardDrag, setKeyboardDrag] = useState<KeyboardDragState | null>(null);
 
   const saveTimersRef = useRef<Map<string, number>>(new Map());
   const dragUndoTimerRef = useRef<number>();
+  const structuralUndoRef = useRef<StructuralHistoryEntry[]>([]);
+  const structuralRedoRef = useRef<StructuralHistoryEntry[]>([]);
+  const applyingStructuralHistoryRef = useRef(false);
   const pendingEditorFocusPlacementIdRef = useRef<string | undefined>(undefined);
   const pendingEditorSelectionRef = useRef<PendingEditorSelection>();
   const selectedPlacementRef = useRef<string | undefined>(undefined);
-  const quickTargetSelectRef = useRef<HTMLSelectElement | null>(null);
   const pointerEditorInteractionRef = useRef<{ active: boolean; placementId?: string }>({
     active: false,
     placementId: undefined
@@ -295,7 +392,8 @@ export function NotepadScreen(): JSX.Element {
   );
 
   const selectedRow = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-  const projectCategories = activeNotepad?.filters.categories ?? [];
+  const contextMenuRow = rowContextMenu ? treeData.rowByPlacementId[rowContextMenu.placementId] : undefined;
+  const activeCategories = activeNotepad?.filters.categories ?? [];
   const statusPreset = useMemo<"active" | "all">(() => {
     const statuses = activeNotepad?.filters.statuses;
     if (!statuses || statuses.length === 0) {
@@ -347,12 +445,20 @@ export function NotepadScreen(): JSX.Element {
     }
     return count;
   }, [treeData.flatRows]);
-  const selectedAttentionWhy = selectedRow?.atom?.facetData.attention?.explanation;
   const decisionQueueEnabled = workspaceFlagEnabled(featureFlags, "workspace.decision_queue", true);
   const decayEngineEnabled = workspaceFlagEnabled(featureFlags, "workspace.decay_engine", true);
   const focusSessionsEnabled = workspaceFlagEnabled(featureFlags, "workspace.focus_sessions_v2", true);
+  const openNotepadV2Enabled = workspaceFlagEnabled(featureFlags, "workspace.notepad_open_notepad_v2", true);
+  const inlineTagsEnabled = workspaceFlagEnabled(featureFlags, "workspace.inline_tags", true);
+  const contextMenuEnabled = workspaceFlagEnabled(featureFlags, "workspace.notepad_context_menu", true);
 
   const isGateOpen = useMemo(() => !gateError, [gateError]);
+
+  useEffect(() => {
+    if (rowContextMenu && !contextMenuRow) {
+      setRowContextMenu(null);
+    }
+  }, [contextMenuRow, rowContextMenu]);
   const dismissHint = useCallback(() => {
     if (!hintDismissed) {
       setHintDismissed(true);
@@ -366,6 +472,50 @@ export function NotepadScreen(): JSX.Element {
       }, 1400);
     }
   }, []);
+
+  const [contextSubmenu, setContextSubmenu] = useState<"none" | "status" | "priority" | "move">("none");
+
+  const closeRowContextMenu = useCallback((): void => {
+    setRowContextMenu(null);
+    setContextSubmenu("none");
+  }, []);
+
+  const openRowContextMenu = useCallback(
+    (placementId: string, x: number, y: number): void => {
+      if (!contextMenuEnabled) {
+        return;
+      }
+      dismissHint();
+      uiDispatch({ type: "set_selected_placement", placementId });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+      setRowContextMenu({ placementId, x, y });
+    },
+    [contextMenuEnabled, dismissHint, uiDispatch]
+  );
+
+  useEffect(() => {
+    if (!rowContextMenu) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".notepad-context-menu")) {
+        return;
+      }
+      setRowContextMenu(null);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setRowContextMenu(null);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rowContextMenu]);
 
   const clearDragUndo = useCallback((): void => {
     if (dragUndoTimerRef.current) {
@@ -400,24 +550,19 @@ export function NotepadScreen(): JSX.Element {
   }, [uiState.selectedPlacementId]);
 
   useEffect(() => {
-    const destinationOptions = notepads.filter((value) => value.id !== uiState.activeNotepadId);
-    if (destinationOptions.length === 0) {
-      if (quickTargetNotepadId) {
-        setQuickTargetNotepadId("");
-      }
-      return;
-    }
-    if (quickTargetNotepadId && destinationOptions.some((value) => value.id === quickTargetNotepadId)) {
-      return;
-    }
-    setQuickTargetNotepadId(destinationOptions[0].id);
-  }, [notepads, quickTargetNotepadId, uiState.activeNotepadId]);
-
-  useEffect(() => {
     if (dragUndo && dragUndo.notepadId !== uiState.activeNotepadId) {
       clearDragUndo();
     }
   }, [clearDragUndo, dragUndo, uiState.activeNotepadId]);
+
+  useEffect(() => {
+    if (!keyboardDrag) {
+      return;
+    }
+    if (!treeData.rowByPlacementId[keyboardDrag.sourcePlacementId] || !treeData.rowByPlacementId[keyboardDrag.targetPlacementId]) {
+      setKeyboardDrag(null);
+    }
+  }, [keyboardDrag, treeData.rowByPlacementId]);
 
   useEffect(() => {
     const onMouseDownCapture = (event: MouseEvent): void => {
@@ -446,50 +591,6 @@ export function NotepadScreen(): JSX.Element {
       return;
     }
     try {
-      window.localStorage.setItem(NOTEPAD_INSPECTOR_OPEN_KEY, String(inspectorOpen));
-    } catch {
-      // Ignore persistence failures in constrained environments.
-    }
-  }, [inspectorOpen]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
-      return;
-    }
-    try {
-      window.localStorage.setItem(NOTEPAD_MOVE_COPY_OPEN_KEY, String(showMoveCopyPanel));
-    } catch {
-      // Ignore persistence failures in constrained environments.
-    }
-  }, [showMoveCopyPanel]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
-      return;
-    }
-    try {
-      window.localStorage.setItem(NOTEPAD_BLOCKING_OPEN_KEY, String(showBlockingPanel));
-    } catch {
-      // Ignore persistence failures in constrained environments.
-    }
-  }, [showBlockingPanel]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
-      return;
-    }
-    try {
-      window.localStorage.setItem(NOTEPAD_ADVANCED_OPEN_KEY, String(showAdvancedPanel));
-    } catch {
-      // Ignore persistence failures in constrained environments.
-    }
-  }, [showAdvancedPanel]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
-      return;
-    }
-    try {
       window.localStorage.setItem(NOTEPAD_HINT_DISMISSED_KEY, String(hintDismissed));
     } catch {
       // Ignore persistence failures in constrained environments.
@@ -497,30 +598,43 @@ export function NotepadScreen(): JSX.Element {
   }, [hintDismissed]);
 
   useEffect(() => {
-    const onOpenProject = (event: Event): void => {
-      const detail = (event as CustomEvent<{ projectId?: string }>).detail;
-      const projectId = detail?.projectId;
-      if (!projectId) {
+    const onOpenNotepad = (event: Event): void => {
+      const detail = (event as CustomEvent<{ notepadId?: string }>).detail;
+      const notepadId = detail?.notepadId;
+      if (!notepadId) {
         return;
       }
-      setPendingProjectId(projectId);
+      setPendingNotepadId(notepadId);
     };
-    window.addEventListener(OMNI_OPEN_PROJECT, onOpenProject as EventListener);
+    const onOpenCategoryNotepad = (event: Event): void => {
+      const detail = (event as CustomEvent<{ categories?: string[]; filterMode?: "or" | "and" }>).detail;
+      const categories = (detail?.categories ?? []).map(normalizeCategoryName).filter((value) => value.length > 0);
+      if (categories.length === 0) {
+        return;
+      }
+      setPendingCategoryOpen({
+        categories: uniqueLowercase(categories),
+        filterMode: detail?.filterMode === "and" ? "and" : "or"
+      });
+    };
+    window.addEventListener(OMNI_OPEN_NOTEPAD, onOpenNotepad as EventListener);
+    window.addEventListener(OMNI_OPEN_NOTEPAD_BY_CATEGORY, onOpenCategoryNotepad as EventListener);
     return () => {
-      window.removeEventListener(OMNI_OPEN_PROJECT, onOpenProject as EventListener);
+      window.removeEventListener(OMNI_OPEN_NOTEPAD, onOpenNotepad as EventListener);
+      window.removeEventListener(OMNI_OPEN_NOTEPAD_BY_CATEGORY, onOpenCategoryNotepad as EventListener);
     };
   }, []);
 
   useEffect(() => {
-    if (!pendingProjectId) {
+    if (!pendingNotepadId) {
       return;
     }
-    if (!notepads.some((view) => view.id === pendingProjectId)) {
+    if (!notepads.some((view) => view.id === pendingNotepadId)) {
       return;
     }
-    uiDispatch({ type: "set_active_notepad", notepadId: pendingProjectId });
-    setPendingProjectId(undefined);
-  }, [notepads, pendingProjectId, uiDispatch]);
+    uiDispatch({ type: "set_active_notepad", notepadId: pendingNotepadId });
+    setPendingNotepadId(undefined);
+  }, [notepads, pendingNotepadId, uiDispatch]);
 
   const loadWorkspaceGate = useCallback(async (): Promise<void> => {
     const [nextCapabilities, nextHealth, nextFlags] = await Promise.all([
@@ -533,7 +647,7 @@ export function NotepadScreen(): JSX.Element {
     setFeatureFlags(nextFlags);
 
     if (!notepadUiFlagEnabled(nextFlags)) {
-      setGateError("Projects is currently disabled by feature flag `workspace.notepad_ui_v2`.");
+      setGateError("Notepads are currently disabled by feature flag `workspace.notepad_ui_v2`.");
       return;
     }
 
@@ -556,6 +670,182 @@ export function NotepadScreen(): JSX.Element {
     setNotepads(views);
     return views;
   }, []);
+
+  const ensureCategoryRegistryEntries = useCallback(
+    async (inputCategories: string[]): Promise<{ categories: string[]; categoryIds: string[] }> => {
+      const normalized = uniqueLowercase(inputCategories.map(normalizeCategoryName).filter((value) => value.length > 0));
+      if (normalized.length === 0) {
+        return { categories: [], categoryIds: [] };
+      }
+      const registryPage = await registryEntriesList({ kind: "category", status: "active", limit: 1000 });
+      const byName = new Map<string, RegistryEntry>();
+      for (const entry of registryPage.items) {
+        byName.set(entry.name.toLowerCase(), entry);
+        for (const alias of entry.aliases) {
+          byName.set(alias.toLowerCase(), entry);
+        }
+      }
+
+      const categories: string[] = [];
+      const categoryIds: string[] = [];
+      for (const category of normalized) {
+        const found = byName.get(category.toLowerCase());
+        if (found) {
+          categories.push(found.name);
+          categoryIds.push(found.id);
+          continue;
+        }
+        const created = await registryEntrySave({
+          kind: "category",
+          name: category,
+          aliases: [],
+          status: "active"
+        });
+        categories.push(created.name);
+        categoryIds.push(created.id);
+        byName.set(created.name.toLowerCase(), created);
+      }
+
+      return {
+        categories: uniqueLowercase(categories),
+        categoryIds: uniqueLowercase(categoryIds)
+      };
+    },
+    []
+  );
+
+  const ensureThreadRegistryEntries = useCallback(async (inputThreads: string[]): Promise<string[]> => {
+    const normalized = uniqueLowercase(inputThreads.map(normalizeCategoryName).filter((value) => value.length > 0));
+    if (normalized.length === 0) {
+      return [];
+    }
+    const registryPage = await registryEntriesList({ kind: "thread", status: "active", limit: 1000 });
+    const byName = new Map<string, RegistryEntry>();
+    for (const entry of registryPage.items) {
+      byName.set(entry.name.toLowerCase(), entry);
+      for (const alias of entry.aliases) {
+        byName.set(alias.toLowerCase(), entry);
+      }
+    }
+
+    const threadIds: string[] = [];
+    for (const thread of normalized) {
+      const found = byName.get(thread.toLowerCase());
+      if (found) {
+        threadIds.push(found.id);
+        continue;
+      }
+      const created = await registryEntrySave({
+        kind: "thread",
+        name: thread,
+        aliases: [],
+        status: "active"
+      });
+      threadIds.push(created.id);
+      byName.set(created.name.toLowerCase(), created);
+    }
+    return uniqueLowercase(threadIds);
+  }, []);
+
+  const openCategoryNotepadFromPalette = useCallback(
+    async (request: PendingCategoryOpenRequest): Promise<void> => {
+      if (!isGateOpen) {
+        return;
+      }
+      if (!openNotepadV2Enabled) {
+        setError("Open Notepad by category is disabled by feature flag `workspace.notepad_open_notepad_v2`.");
+        return;
+      }
+      const normalized = uniqueLowercase(request.categories.map(normalizeCategoryName).filter((value) => value.length > 0));
+      if (normalized.length === 0) {
+        return;
+      }
+      setSaving(true);
+      setError(undefined);
+      try {
+        const resolved = await ensureCategoryRegistryEntries(normalized);
+        const categories = resolved.categories;
+        const filterMode = request.filterMode === "and" ? "and" : "or";
+        const filterSet = new Set(categories.map((value) => value.toLowerCase()));
+        const existing = notepads.find((view) => {
+          if ((view.filters.categoryFilterMode ?? "or") !== filterMode) {
+            return false;
+          }
+          const current = view.filters.categories ?? [];
+          if (current.length !== categories.length) {
+            return false;
+          }
+          return current.every((value) => filterSet.has(value.toLowerCase()));
+        });
+        const slugParts = categories.map((value) => slugify(value)).filter((value) => value.length > 0);
+        const fallbackId =
+          categories.length === 1
+            ? `category-${slugParts[0] ?? Date.now().toString()}`
+            : `categories-${filterMode}-${slugParts.join("-") || Date.now().toString()}`;
+        const notepadId = existing?.id ?? fallbackId;
+        const name =
+          categories.length === 1
+            ? categories[0]
+            : `${filterMode.toUpperCase()}: ${categories.join(" + ")}`;
+        const definition: Omit<NotepadViewDefinition, "createdAt" | "updatedAt" | "revision"> = {
+          id: notepadId,
+          schemaVersion: existing?.schemaVersion ?? 1,
+          name,
+          description:
+            categories.length === 1
+              ? `Category notepad for ${categories[0]}`
+              : `Multi-category notepad (${filterMode.toUpperCase()})`,
+          isSystem: existing?.isSystem ?? false,
+          filters: {
+            ...(existing?.filters ?? {}),
+            includeArchived: false,
+            categories,
+            labels: categories,
+            categoryFilterMode: filterMode,
+            categoryIds: resolved.categoryIds,
+            labelIds: resolved.categoryIds
+          },
+          sorts: existing?.sorts ?? [{ field: "updatedAt", direction: "desc" }],
+          captureDefaults: {
+            ...(existing?.captureDefaults ?? {}),
+            categories,
+            labels: categories,
+            categoryIds: resolved.categoryIds,
+            labelIds: resolved.categoryIds
+          },
+          layoutMode: existing?.layoutMode ?? "outline"
+        };
+        const saved = await notepadSave({
+          expectedRevision: existing?.revision,
+          idempotencyKey: idempotencyKey(),
+          definition
+        });
+        await loadNotepadsIntoState();
+        uiDispatch({ type: "set_active_notepad", notepadId: saved.id });
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [
+      ensureCategoryRegistryEntries,
+      isGateOpen,
+      loadNotepadsIntoState,
+      notepads,
+      openNotepadV2Enabled,
+      uiDispatch
+    ]
+  );
+
+  useEffect(() => {
+    if (!pendingCategoryOpen) {
+      return;
+    }
+    void openCategoryNotepadFromPalette(pendingCategoryOpen).finally(() => {
+      setPendingCategoryOpen(undefined);
+    });
+  }, [openCategoryNotepadFromPalette, pendingCategoryOpen]);
 
   const materializeMissingPlacements = useCallback(
     async (
@@ -807,15 +1097,41 @@ export function NotepadScreen(): JSX.Element {
       const attempt = (remaining: number): void => {
         const editor = document.querySelector<HTMLTextAreaElement>(`textarea[data-placement-id="${placementId}"]`);
         if (editor) {
-          editor.focus();
+          const shouldRefocus = document.activeElement !== editor;
+          if (shouldRefocus) {
+            editor.focus();
+          }
           const pendingSelection = pendingEditorSelectionRef.current;
           if (pendingSelection?.placementId === placementId) {
             editor.setSelectionRange(pendingSelection.start, pendingSelection.end);
             pendingEditorSelectionRef.current = undefined;
-          } else {
+          } else if (shouldRefocus) {
             placeCaretAtEnd(editor);
           }
           pendingEditorFocusPlacementIdRef.current = undefined;
+          uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+          return;
+        }
+        if (remaining <= 0) {
+          return;
+        }
+        window.setTimeout(() => {
+          window.requestAnimationFrame(() => attempt(remaining - 1));
+        }, 16);
+      };
+      attempt(12);
+    },
+    [ensurePlacementVisible, uiDispatch]
+  );
+
+  const focusEditorSelectionForPlacement = useCallback(
+    (placementId: string, start: number, end: number): void => {
+      ensurePlacementVisible(placementId);
+      const attempt = (remaining: number): void => {
+        const editor = document.querySelector<HTMLTextAreaElement>(`textarea[data-placement-id="${placementId}"]`);
+        if (editor) {
+          editor.focus();
+          editor.setSelectionRange(start, end);
           uiDispatch({ type: "set_interaction_mode", mode: "edit" });
           return;
         }
@@ -884,6 +1200,86 @@ export function NotepadScreen(): JSX.Element {
     };
   }, [focusEditorForPlacement, treeData.flatRows, uiState.selectedPlacementId]);
 
+  const applyInlineTagsToAtom = useCallback(
+    async (atom: AtomRecord, nextText: string): Promise<AtomRecord> => {
+      if (!inlineTagsEnabled) {
+        return atom;
+      }
+      const tags = extractInlineTags(nextText);
+      if (tags.length === 0) {
+        return atom;
+      }
+      const entries = await registryEntriesList({ status: "active", limit: 1000 });
+      const byAlias = new Map<string, RegistryEntry>();
+      for (const entry of entries.items) {
+        byAlias.set(normalizeTagName(entry.name), entry);
+        for (const alias of entry.aliases) {
+          byAlias.set(normalizeTagName(alias), entry);
+        }
+      }
+
+      const nextThreadIds = new Set(atom.relations.threadIds ?? []);
+      const nextLabels = new Set(atom.facetData.meta?.labels ?? []);
+      const nextCategories = new Set(atom.facetData.meta?.categories ?? []);
+
+      for (const tag of tags) {
+        const normalized = normalizeTagName(tag);
+        if (!normalized) {
+          continue;
+        }
+        let entry = byAlias.get(normalized);
+        if (!entry) {
+          entry = await registryEntrySave({
+            kind: "category",
+            name: normalized,
+            aliases: [],
+            status: "active"
+          });
+          byAlias.set(normalized, entry);
+        }
+
+        nextLabels.add(entry.name);
+        if (entry.kind === "thread") {
+          nextThreadIds.add(entry.id);
+        } else {
+          nextCategories.add(entry.name);
+        }
+      }
+
+      const mergedThreadIds = uniqueLowercase([...nextThreadIds]);
+      const mergedLabels = uniqueLowercase([...nextLabels]);
+      const mergedCategories = uniqueLowercase([...nextCategories]);
+      const unchanged =
+        mergedThreadIds.length === (atom.relations.threadIds ?? []).length &&
+        mergedLabels.length === (atom.facetData.meta?.labels ?? []).length &&
+        mergedCategories.length === (atom.facetData.meta?.categories ?? []).length &&
+        mergedThreadIds.every((value, index) => value === (atom.relations.threadIds ?? [])[index]) &&
+        mergedLabels.every((value, index) => value === (atom.facetData.meta?.labels ?? [])[index]) &&
+        mergedCategories.every((value, index) => value === (atom.facetData.meta?.categories ?? [])[index]);
+
+      if (unchanged) {
+        return atom;
+      }
+
+      const latestAtom = (await atomGet(atom.id)) ?? atom;
+      return atomUpdate(latestAtom.id, {
+        expectedRevision: latestAtom.revision,
+        relationsPatch: {
+          ...latestAtom.relations,
+          threadIds: mergedThreadIds
+        },
+        facetDataPatch: {
+          meta: {
+            ...(latestAtom.facetData.meta ?? {}),
+            labels: mergedLabels,
+            categories: mergedCategories
+          }
+        }
+      });
+    },
+    [inlineTagsEnabled]
+  );
+
   const persistRowText = useCallback(
     async (row: FlatRow, nextText: string): Promise<void> => {
       const atom = row.atom;
@@ -896,10 +1292,11 @@ export function NotepadScreen(): JSX.Element {
       }
 
       try {
-        const updatedAtom = await atomUpdate(atom.id, {
+        let updatedAtom = await atomUpdate(atom.id, {
           expectedRevision: atom.revision,
           rawText: nextText
         });
+        updatedAtom = await applyInlineTagsToAtom(updatedAtom, nextText);
         const latestBlock = await blockGet(row.block.id);
         setAtomsById((current) => ({ ...current, [updatedAtom.id]: updatedAtom }));
         if (latestBlock) {
@@ -911,7 +1308,7 @@ export function NotepadScreen(): JSX.Element {
         await reloadActiveNotepad();
       }
     },
-    [reloadActiveNotepad, uiDispatch]
+    [applyInlineTagsToAtom, reloadActiveNotepad, uiDispatch]
   );
 
   const scheduleDraftSave = useCallback(
@@ -963,6 +1360,257 @@ export function NotepadScreen(): JSX.Element {
     },
     [reloadActiveNotepad]
   );
+
+  const snapshotSignature = useCallback((snapshot: StructuralSnapshot): string => {
+    return JSON.stringify({
+      placements: snapshot.placements,
+      orderedPlacementIds: snapshot.orderedPlacementIds,
+      atoms: snapshot.atoms.map((atom) => ({
+        id: atom.id,
+        rawText: atom.rawText,
+        facetData: atom.facetData,
+        relations: atom.relations,
+        body: atom.body,
+        archivedAt: atom.archivedAt
+      })),
+      selectedPlacementId: snapshot.selectedPlacementId
+    });
+  }, []);
+
+  const captureStructuralSnapshot = useCallback(async (): Promise<StructuralSnapshot | undefined> => {
+    if (!uiState.activeNotepadId) {
+      return undefined;
+    }
+    const placementsInView = sortPlacements(
+      await listAllPages((cursor) => placementsList({ viewId: uiState.activeNotepadId!, limit: 250, cursor }))
+    );
+    const blockIds = Array.from(new Set(placementsInView.map((placement) => placement.blockId)));
+    const blocks = (
+      await Promise.all(blockIds.map(async (blockId) => blockGet(blockId)))
+    ).filter((block): block is BlockRecord => !!block);
+    const atomIds = Array.from(new Set(blocks.map((block) => block.atomId).filter((value): value is string => !!value)));
+    const atoms = (
+      await Promise.all(atomIds.map(async (atomIdValue) => atomGet(atomIdValue)))
+    ).filter((atom): atom is AtomRecord => !!atom);
+
+    return {
+      notepadId: uiState.activeNotepadId,
+      placements: placementsInView.map((placement) => ({
+        id: placement.id,
+        viewId: placement.viewId,
+        blockId: placement.blockId,
+        parentPlacementId: placement.parentPlacementId,
+        orderKey: placement.orderKey,
+        pinned: placement.pinned
+      })),
+      orderedPlacementIds: placementsInView.map((placement) => placement.id),
+      atoms: atoms.map((atom) => deepClone(atom)),
+      selectedPlacementId: selectedPlacementRef.current
+    };
+  }, [uiState.activeNotepadId]);
+
+  const applyStructuralSnapshot = useCallback(
+    async (snapshot: StructuralSnapshot, directionLabel: "undo" | "redo"): Promise<boolean> => {
+      if (!isGateOpen || !snapshot.notepadId) {
+        return false;
+      }
+
+      if (uiState.activeNotepadId !== snapshot.notepadId) {
+        uiDispatch({ type: "set_active_notepad", notepadId: snapshot.notepadId });
+        await loadNotepadData(snapshot.notepadId);
+      }
+
+      const snapshotPlacementById = new Map(snapshot.placements.map((placement) => [placement.id, placement]));
+      const snapshotBlockIds = new Set(snapshot.placements.map((placement) => placement.blockId));
+      const snapshotAtomIds = new Set(snapshot.atoms.map((atom) => atom.id));
+
+      const applied = await runMutation(async () => {
+        const currentPlacements = await listAllPages((cursor) =>
+          placementsList({ viewId: snapshot.notepadId, limit: 250, cursor })
+        );
+        const currentPlacementById = new Map(currentPlacements.map((placement) => [placement.id, placement]));
+        const extraBlockIds = new Set<string>();
+
+        for (const placement of currentPlacements) {
+          if (!snapshotPlacementById.has(placement.id)) {
+            extraBlockIds.add(placement.blockId);
+            await placementDelete(placement.id, idempotencyKey());
+          }
+        }
+
+        for (const placementId of snapshot.orderedPlacementIds) {
+          const placement = snapshotPlacementById.get(placementId);
+          if (!placement) {
+            continue;
+          }
+          const existing = currentPlacementById.get(placement.id);
+          await placementSave({
+            id: placement.id,
+            viewId: placement.viewId,
+            blockId: placement.blockId,
+            parentPlacementId: placement.parentPlacementId,
+            orderKey: placement.orderKey,
+            pinned: placement.pinned,
+            expectedRevision: existing?.revision,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+
+        if (snapshot.orderedPlacementIds.length > 1) {
+          await placementsReorder(snapshot.notepadId, {
+            orderedPlacementIds: snapshot.orderedPlacementIds,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+
+        for (const snapshotAtom of snapshot.atoms) {
+          let latestAtom = await atomGet(snapshotAtom.id);
+          if (!latestAtom) {
+            continue;
+          }
+
+          if (snapshotAtom.archivedAt && !latestAtom.archivedAt) {
+            latestAtom = await atomArchive(latestAtom.id, {
+              expectedRevision: latestAtom.revision,
+              reason: `notepad_structure_${directionLabel}`
+            });
+          } else if (!snapshotAtom.archivedAt && latestAtom.archivedAt) {
+            const reopenStatus =
+              snapshotAtom.facetData.task?.status === "doing" || snapshotAtom.facetData.task?.status === "blocked"
+                ? snapshotAtom.facetData.task.status
+                : "todo";
+            latestAtom = await taskReopen(latestAtom.id, {
+              expectedRevision: latestAtom.revision,
+              status: reopenStatus
+            });
+          }
+
+          await atomUpdate(latestAtom.id, {
+            expectedRevision: latestAtom.revision,
+            rawText: snapshotAtom.rawText,
+            facetDataPatch: deepClone(snapshotAtom.facetData),
+            relationsPatch: {
+              parentId: snapshotAtom.relations.parentId,
+              blockedByAtomId: snapshotAtom.relations.blockedByAtomId,
+              threadIds: [...(snapshotAtom.relations.threadIds ?? [])],
+              derivedFromAtomId: snapshotAtom.relations.derivedFromAtomId
+            },
+            clearParentId: snapshotAtom.relations.parentId ? undefined : true,
+            bodyPatch: { mode: "replace", value: snapshotAtom.body ?? "" }
+          });
+        }
+
+        for (const extraBlockId of extraBlockIds) {
+          if (snapshotBlockIds.has(extraBlockId)) {
+            continue;
+          }
+          const placementsForBlock = await listAllPages((cursor) =>
+            placementsList({ blockId: extraBlockId, limit: 250, cursor })
+          );
+          if (placementsForBlock.length > 0) {
+            continue;
+          }
+          const block = await blockGet(extraBlockId);
+          if (!block?.atomId || snapshotAtomIds.has(block.atomId)) {
+            continue;
+          }
+          const latestAtom = await atomGet(block.atomId);
+          if (latestAtom && !latestAtom.archivedAt) {
+            await atomArchive(latestAtom.id, {
+              expectedRevision: latestAtom.revision,
+              reason: `notepad_structure_${directionLabel}_cleanup`
+            });
+          }
+        }
+      });
+
+      if (!applied) {
+        return false;
+      }
+
+      const fallbackPlacementId = snapshot.selectedPlacementId ?? snapshot.orderedPlacementIds[0];
+      selectedPlacementRef.current = fallbackPlacementId;
+      uiDispatch({ type: "set_selected_placement", placementId: fallbackPlacementId });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+      return true;
+    },
+    [isGateOpen, loadNotepadData, runMutation, uiDispatch, uiState.activeNotepadId]
+  );
+
+  const runStructuralMutation = useCallback(
+    async (label: string, mutation: () => Promise<void>): Promise<boolean> => {
+      if (applyingStructuralHistoryRef.current) {
+        return runMutation(mutation);
+      }
+      const before = await captureStructuralSnapshot();
+      const mutated = await runMutation(mutation);
+      if (!mutated || !before) {
+        return mutated;
+      }
+      const after = await captureStructuralSnapshot();
+      if (!after) {
+        return mutated;
+      }
+
+      if (snapshotSignature(before) === snapshotSignature(after)) {
+        return mutated;
+      }
+
+      structuralUndoRef.current.push({ label, before, after });
+      if (structuralUndoRef.current.length > STRUCTURAL_HISTORY_LIMIT) {
+        structuralUndoRef.current.shift();
+      }
+      structuralRedoRef.current = [];
+      return mutated;
+    },
+    [captureStructuralSnapshot, runMutation, snapshotSignature]
+  );
+
+  const undoStructuralChange = useCallback(async (): Promise<void> => {
+    if (structuralUndoRef.current.length === 0) {
+      announceDragAction("Nothing to undo.");
+      return;
+    }
+    const entry = structuralUndoRef.current[structuralUndoRef.current.length - 1];
+    applyingStructuralHistoryRef.current = true;
+    try {
+      const applied = await applyStructuralSnapshot(entry.before, "undo");
+      if (!applied) {
+        return;
+      }
+      structuralUndoRef.current.pop();
+      structuralRedoRef.current.push(entry);
+      if (structuralRedoRef.current.length > STRUCTURAL_HISTORY_LIMIT) {
+        structuralRedoRef.current.shift();
+      }
+      announceDragAction(`Undid ${entry.label}.`);
+    } finally {
+      applyingStructuralHistoryRef.current = false;
+    }
+  }, [announceDragAction, applyStructuralSnapshot]);
+
+  const redoStructuralChange = useCallback(async (): Promise<void> => {
+    if (structuralRedoRef.current.length === 0) {
+      announceDragAction("Nothing to redo.");
+      return;
+    }
+    const entry = structuralRedoRef.current[structuralRedoRef.current.length - 1];
+    applyingStructuralHistoryRef.current = true;
+    try {
+      const applied = await applyStructuralSnapshot(entry.after, "redo");
+      if (!applied) {
+        return;
+      }
+      structuralRedoRef.current.pop();
+      structuralUndoRef.current.push(entry);
+      if (structuralUndoRef.current.length > STRUCTURAL_HISTORY_LIMIT) {
+        structuralUndoRef.current.shift();
+      }
+      announceDragAction(`Redid ${entry.label}.`);
+    } finally {
+      applyingStructuralHistoryRef.current = false;
+    }
+  }, [announceDragAction, applyStructuralSnapshot]);
 
   const updateCanonicalParent = useCallback(async (atom: AtomRecord | undefined, parentAtomId?: string): Promise<void> => {
     if (!atom) {
@@ -1028,7 +1676,7 @@ export function NotepadScreen(): JSX.Element {
       const parentRow = parentPlacementId ? treeData.rowByPlacementId[parentPlacementId] : undefined;
       const parentAtomId = parentRow?.atom?.id;
 
-      await runMutation(async () => {
+      await runStructuralMutation("insert-row-above", async () => {
         const created = await notepadBlockCreate({
           notepadId: uiState.activeNotepadId,
           rawText: ""
@@ -1087,7 +1735,7 @@ export function NotepadScreen(): JSX.Element {
       findPlacementForBlockInView,
       flushDraft,
       isGateOpen,
-      runMutation,
+      runStructuralMutation,
       treeData.orderedPlacementIds,
       treeData.rowByPlacementId,
       uiDispatch,
@@ -1113,7 +1761,7 @@ export function NotepadScreen(): JSX.Element {
         await flushDraft(anchorRow.placement.id);
       }
 
-      await runMutation(async () => {
+      await runStructuralMutation("create-row", async () => {
         const created = await notepadBlockCreate({
           notepadId: uiState.activeNotepadId,
           rawText: ""
@@ -1165,7 +1813,7 @@ export function NotepadScreen(): JSX.Element {
       findPlacementForBlockInView,
       flushDraft,
       isGateOpen,
-      runMutation,
+      runStructuralMutation,
       treeData.orderedPlacementIds,
       treeData.rowByPlacementId,
       uiDispatch,
@@ -1189,11 +1837,19 @@ export function NotepadScreen(): JSX.Element {
       return;
     }
 
-    await runMutation(async () => {
+    await runStructuralMutation("indent-row", async () => {
       await updatePlacementParent(row, previousVisible.placement.id);
       await updateCanonicalParent(row.atom, previousVisible.atom?.id);
     });
-  }, [isGateOpen, runMutation, treeData.flatRows, treeData.rowByPlacementId, uiState.selectedPlacementId, updateCanonicalParent, updatePlacementParent]);
+  }, [
+    isGateOpen,
+    runStructuralMutation,
+    treeData.flatRows,
+    treeData.rowByPlacementId,
+    uiState.selectedPlacementId,
+    updateCanonicalParent,
+    updatePlacementParent
+  ]);
 
   const outdentSelected = useCallback(async (): Promise<void> => {
     const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
@@ -1210,11 +1866,18 @@ export function NotepadScreen(): JSX.Element {
       ? treeData.rowByPlacementId[nextParentPlacementId]?.atom?.id
       : undefined;
 
-    await runMutation(async () => {
+    await runStructuralMutation("outdent-row", async () => {
       await updatePlacementParent(row, nextParentPlacementId);
       await updateCanonicalParent(row.atom, nextParentAtomId);
     });
-  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId, updateCanonicalParent, updatePlacementParent]);
+  }, [
+    isGateOpen,
+    runStructuralMutation,
+    treeData.rowByPlacementId,
+    uiState.selectedPlacementId,
+    updateCanonicalParent,
+    updatePlacementParent
+  ]);
 
   const dropReorderRow = useCallback(
     async (
@@ -1265,7 +1928,9 @@ export function NotepadScreen(): JSX.Element {
           (placementId, index) => placementId !== treeData.orderedPlacementIds[index]
         );
 
-      const mutated = await runMutation(async () => {
+      const mutated = await runStructuralMutation(
+        intent === "inside" ? "nest-block" : "move-block",
+        async () => {
         await updatePlacementParent(sourceRow, dropPlan.nextParentPlacementId);
         await updateCanonicalParent(sourceRow.atom, nextParentAtomId);
         if (orderChanged) {
@@ -1277,7 +1942,8 @@ export function NotepadScreen(): JSX.Element {
         selectedPlacementRef.current = sourcePlacementId;
         uiDispatch({ type: "set_selected_placement", placementId: sourcePlacementId });
         uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
-      });
+        }
+      );
       if (!mutated) {
         return;
       }
@@ -1315,7 +1981,7 @@ export function NotepadScreen(): JSX.Element {
       flushDraft,
       isGateOpen,
       queueDragUndo,
-      runMutation,
+      runStructuralMutation,
       treeData.effectiveParentByPlacementId,
       treeData.orderedPlacementIds,
       treeData.rowByPlacementId,
@@ -1444,7 +2110,7 @@ export function NotepadScreen(): JSX.Element {
       selectedPlacementRef.current = fallbackSelection;
       uiDispatch({ type: "set_selected_placement", placementId: fallbackSelection });
 
-      await runMutation(async () => {
+      await runStructuralMutation("delete-row", async () => {
         await placementDelete(row.placement.id, idempotencyKey());
         const remainingPlacements = await listAllPages((cursor) => placementsList({ blockId: row.block.id, limit: 250, cursor }));
         if (!row.atom) {
@@ -1466,12 +2132,7 @@ export function NotepadScreen(): JSX.Element {
                 reason: "notepad_empty_row_deleted"
               });
 
-          if (atomHasNoMeaningfulContent(archivedAtom)) {
-            await atomDelete(archivedAtom.id, {
-              expectedRevision: archivedAtom.revision,
-              reason: "notepad_empty_row_pruned"
-            });
-          }
+          void archivedAtom;
           return;
         }
 
@@ -1485,7 +2146,7 @@ export function NotepadScreen(): JSX.Element {
         });
       });
     },
-    [flushDraft, isGateOpen, runMutation, treeData.flatRows, uiDispatch, uiState.draftsByPlacement]
+    [flushDraft, isGateOpen, runStructuralMutation, treeData.flatRows, uiDispatch, uiState.draftsByPlacement]
   );
 
   const copyOrCutSelected = useCallback(
@@ -1515,7 +2176,7 @@ export function NotepadScreen(): JSX.Element {
     const target = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
     const targetParentPlacementId = target?.effectiveParentPlacementId;
 
-    await runMutation(async () => {
+    await runStructuralMutation("paste-row", async () => {
       let destinationPlacementId: string | undefined;
 
       if (clipboard.mode === "cut" && clipboard.sourceViewId === uiState.activeNotepadId) {
@@ -1557,7 +2218,7 @@ export function NotepadScreen(): JSX.Element {
     });
   }, [
     isGateOpen,
-    runMutation,
+    runStructuralMutation,
     treeData.orderedPlacementIds,
     treeData.rowByPlacementId,
     uiDispatch,
@@ -1566,99 +2227,6 @@ export function NotepadScreen(): JSX.Element {
     uiState.selectedPlacementId,
     updatePlacementParent
   ]);
-
-  const moveSelectedToNotepad = useCallback(
-    async (targetNotepadId: string, mode: "copy" | "move"): Promise<void> => {
-      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-      if (!row || !targetNotepadId || !isGateOpen) {
-        return;
-      }
-      if (targetNotepadId === row.placement.viewId && mode === "move") {
-        return;
-      }
-
-      setSaving(true);
-      setError(undefined);
-      try {
-        const destinationPlacement = await placementSave({
-          viewId: targetNotepadId,
-          blockId: row.block.id,
-          idempotencyKey: idempotencyKey()
-        });
-        if (mode === "move") {
-          await placementDelete(row.placement.id, idempotencyKey());
-        }
-
-        if (targetNotepadId === uiState.activeNotepadId) {
-          await reloadActiveNotepad();
-          uiDispatch({ type: "set_selected_placement", placementId: destinationPlacement.id });
-        } else {
-          uiDispatch({ type: "set_active_notepad", notepadId: targetNotepadId });
-          uiDispatch({ type: "set_selected_placement", placementId: destinationPlacement.id });
-          await loadNotepadData(targetNotepadId);
-        }
-      } catch (nextError) {
-        setError(asErrorMessage(nextError));
-      } finally {
-        setSaving(false);
-      }
-    },
-    [
-      isGateOpen,
-      loadNotepadData,
-      reloadActiveNotepad,
-      treeData.rowByPlacementId,
-      uiDispatch,
-      uiState.activeNotepadId,
-      uiState.selectedPlacementId
-    ]
-  );
-
-  const updateSelectedTaskStatus = useCallback(
-    async (status: TaskStatus): Promise<void> => {
-      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-      const rowAtom = row?.atom;
-      if (!row || !rowAtom || !isGateOpen) {
-        return;
-      }
-      await runMutation(async () => {
-        const latestAtom = (await atomGet(rowAtom.id)) ?? rowAtom;
-        await taskStatusSet(latestAtom.id, {
-          expectedRevision: latestAtom.revision,
-          status
-        });
-      });
-    },
-    [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]
-  );
-
-  const updateSelectedPriority = useCallback(
-    async (priority: 1 | 2 | 3 | 4 | 5): Promise<void> => {
-      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-      const rowAtom = row?.atom;
-      if (!row || !rowAtom || !isGateOpen) {
-        return;
-      }
-      await runMutation(async () => {
-        const latestAtom = (await atomGet(rowAtom.id)) ?? rowAtom;
-        const existingTask = latestAtom.facetData.task ?? {
-          title: latestAtom.rawText.trim() || "Untitled",
-          status: "todo" as const,
-          priority: 3 as const
-        };
-        await atomUpdate(latestAtom.id, {
-          expectedRevision: latestAtom.revision,
-          facetDataPatch: {
-            task: {
-              ...existingTask,
-              priority
-            }
-          }
-        });
-      });
-    },
-    [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]
-  );
 
   const syncAttentionEngine = useCallback(async (): Promise<void> => {
     if (!isGateOpen || attentionBusy || !decayEngineEnabled) {
@@ -1681,117 +2249,315 @@ export function NotepadScreen(): JSX.Element {
     }
   }, [attentionBusy, decayEngineEnabled, decisionQueueEnabled, isGateOpen, loadNotepadData, uiState.activeNotepadId]);
 
-  const makeSelectedHot = useCallback(async (): Promise<void> => {
-    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-    const rowAtom = row?.atom;
-    if (!row || !rowAtom || !isGateOpen) {
-      return;
-    }
-    await runMutation(async () => {
-      const latestAtom = (await atomGet(rowAtom.id)) ?? rowAtom;
-      const existingTask = latestAtom.facetData.task ?? {
-        title: latestAtom.rawText.trim() || "Untitled",
-        status: "todo" as const,
-        priority: 3 as const
-      };
-      await atomUpdate(latestAtom.id, {
-        expectedRevision: latestAtom.revision,
-        facetDataPatch: {
-          task: {
-            ...existingTask,
-            attentionLayer: "l3",
-            priority: Math.min(existingTask.priority ?? 3, 2) as 1 | 2 | 3 | 4 | 5
-          },
-          attention: {
-            layer: "l3",
-            heatScore: Math.max(10, latestAtom.facetData.attention?.heatScore ?? 0),
-            dwellStartedAt: new Date().toISOString(),
-            explanation: "Pinned hot from notepad row action."
+  const makeRowHot = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      await runMutation(async () => {
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        const existingTask = latestAtom.facetData.task ?? {
+          title: latestAtom.rawText.trim() || "Untitled",
+          status: "todo" as const,
+          priority: 3 as const
+        };
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          facetDataPatch: {
+            task: {
+              ...existingTask,
+              attentionLayer: "l3",
+              priority: Math.min(existingTask.priority ?? 3, 2) as 1 | 2 | 3 | 4 | 5
+            },
+            attention: {
+              layer: "l3",
+              heatScore: Math.max(10, latestAtom.facetData.attention?.heatScore ?? 0),
+              dwellStartedAt: new Date().toISOString(),
+              explanation: "Pinned hot from context menu."
+            }
+          }
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const coolRowAttention = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      await runMutation(async () => {
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        const existingTask = latestAtom.facetData.task ?? {
+          title: latestAtom.rawText.trim() || "Untitled",
+          status: "todo" as const,
+          priority: 3 as const
+        };
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          facetDataPatch: {
+            task: {
+              ...existingTask,
+              attentionLayer: "long"
+            },
+            attention: {
+              ...latestAtom.facetData.attention,
+              layer: "long",
+              explanation: "Cooled from context menu."
+            }
+          }
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const snoozeRowUntilTomorrow = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      await runMutation(async () => {
+        await conditionSetDate({
+          atomId: row.atom!.id,
+          untilAt: tomorrow
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const setRowWaitingPerson = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      const person = window.prompt("Who are you waiting on?");
+      if (!person || !person.trim()) {
+        return;
+      }
+      await runMutation(async () => {
+        await conditionSetPerson({
+          atomId: row.atom!.id,
+          waitingOnPerson: person.trim(),
+          cadenceDays: 3
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const setRowBlockedByTask = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      const blockerAtomId = window.prompt("Blocker atom id (task this depends on):");
+      if (!blockerAtomId || !blockerAtomId.trim()) {
+        return;
+      }
+      await runMutation(async () => {
+        await conditionSetTask({
+          atomId: row.atom!.id,
+          blockerAtomId: blockerAtomId.trim()
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const clearRowConditions = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      const active = (conditionsByAtomId[row.atom.id] ?? []).filter((condition) => condition.status === "active");
+      if (active.length === 0) {
+        return;
+      }
+      await runMutation(async () => {
+        for (const condition of active) {
+          try {
+            await conditionResolve(condition.id, {
+              expectedRevision: condition.revision
+            });
+          } catch {
+            await conditionCancel(condition.id, {
+              expectedRevision: condition.revision,
+              reason: "user_clear_blocking"
+            });
           }
         }
       });
-      if (decayEngineEnabled) {
-        await systemApplyAttentionUpdate();
+    },
+    [conditionsByAtomId, isGateOpen, runMutation]
+  );
+
+  const addTagsToRow = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
       }
-      if (decisionQueueEnabled) {
-        await systemGenerateDecisionCards();
+      const value = window.prompt("Add labels/categories (comma-separated):");
+      if (!value || !value.trim()) {
+        return;
       }
-    });
-  }, [decayEngineEnabled, decisionQueueEnabled, isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
-
-  const snoozeSelectedUntilTomorrow = useCallback(async (): Promise<void> => {
-    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-    if (!row?.atom || !isGateOpen) {
-      return;
-    }
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await runMutation(async () => {
-      await conditionSetDate({
-        atomId: row.atom!.id,
-        untilAt: tomorrow
+      const tags = uniqueLowercase(
+        value
+          .split(",")
+          .map((entry) => normalizeCategoryName(entry))
+          .filter((entry) => entry.length > 0)
+      );
+      if (tags.length === 0) {
+        return;
+      }
+      await runMutation(async () => {
+        const resolved = await ensureCategoryRegistryEntries(tags);
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        const existingLabels = latestAtom.facetData.meta?.labels ?? [];
+        const existingCategories = latestAtom.facetData.meta?.categories ?? [];
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          facetDataPatch: {
+            meta: {
+              ...(latestAtom.facetData.meta ?? {}),
+              labels: uniqueLowercase([...existingLabels, ...resolved.categories]),
+              categories: uniqueLowercase([...existingCategories, ...resolved.categories])
+            }
+          }
+        });
       });
-    });
-  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
+    },
+    [ensureCategoryRegistryEntries, isGateOpen, runMutation]
+  );
 
-  const setSelectedWaitingPerson = useCallback(async (): Promise<void> => {
-    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-    if (!row?.atom || !isGateOpen) {
-      return;
-    }
-    const person = window.prompt("Who are you waiting on?");
-    if (!person || !person.trim()) {
-      return;
-    }
-    await runMutation(async () => {
-      await conditionSetPerson({
-        atomId: row.atom!.id,
-        waitingOnPerson: person.trim(),
-        cadenceDays: 3
+  const addThreadsToRow = useCallback(
+    async (row: FlatRow): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      const value = window.prompt("Add thread(s) (comma-separated names):");
+      if (!value || !value.trim()) {
+        return;
+      }
+      const names = uniqueLowercase(
+        value
+          .split(",")
+          .map((entry) => normalizeCategoryName(entry))
+          .filter((entry) => entry.length > 0)
+      );
+      if (names.length === 0) {
+        return;
+      }
+      await runMutation(async () => {
+        const threadIds = await ensureThreadRegistryEntries(names);
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          relationsPatch: {
+            ...latestAtom.relations,
+            threadIds: uniqueLowercase([...(latestAtom.relations.threadIds ?? []), ...threadIds])
+          }
+        });
       });
-    });
-  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
+    },
+    [ensureThreadRegistryEntries, isGateOpen, runMutation]
+  );
 
-  const setSelectedBlockedByTask = useCallback(async (): Promise<void> => {
-    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-    if (!row?.atom || !isGateOpen) {
-      return;
-    }
-    const blockerAtomId = window.prompt("Blocker atom id (task this depends on):");
-    if (!blockerAtomId || !blockerAtomId.trim()) {
-      return;
-    }
-    await runMutation(async () => {
-      await conditionSetTask({
-        atomId: row.atom!.id,
-        blockerAtomId: blockerAtomId.trim()
+  const setRowCommitmentLevel = useCallback(
+    async (row: FlatRow, level: "hard" | "soft" | null): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      await runMutation(async () => {
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        const existingTask = latestAtom.facetData.task ?? {
+          title: latestAtom.rawText.trim() || "Untitled",
+          status: "todo" as const,
+          priority: 3 as const
+        };
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          facetDataPatch: {
+            task: {
+              ...existingTask,
+              commitmentLevel: level ?? undefined
+            },
+            commitment: level
+              ? {
+                  level,
+                  rationale: "Set from context menu"
+                }
+              : undefined
+          }
+        });
       });
-    });
-  }, [isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
+    },
+    [isGateOpen, runMutation]
+  );
 
-  const clearSelectedConditions = useCallback(async (): Promise<void> => {
-    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
-    if (!row?.atom || !isGateOpen) {
-      return;
-    }
-    const active = (conditionsByAtomId[row.atom.id] ?? []).filter((condition) => condition.status === "active");
-    if (active.length === 0) {
-      return;
-    }
-    await runMutation(async () => {
-      for (const condition of active) {
-        try {
-          await conditionResolve(condition.id, {
-            expectedRevision: condition.revision
-          });
-        } catch {
-          await conditionCancel(condition.id, {
-            expectedRevision: condition.revision,
-            reason: "user_clear_blocking"
-          });
+  const setRowTaskStatus = useCallback(
+    async (row: FlatRow, status: TaskStatus): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      await runMutation(async () => {
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        await taskStatusSet(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          status
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const setRowPriority = useCallback(
+    async (row: FlatRow, priority: 1 | 2 | 3 | 4 | 5): Promise<void> => {
+      if (!row.atom || !isGateOpen) {
+        return;
+      }
+      await runMutation(async () => {
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        const existingTask = latestAtom.facetData.task ?? {
+          title: latestAtom.rawText.trim() || "Untitled",
+          status: "todo" as const,
+          priority: 3 as const
+        };
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          facetDataPatch: {
+            task: {
+              ...existingTask,
+              priority
+            }
+          }
+        });
+      });
+    },
+    [isGateOpen, runMutation]
+  );
+
+  const moveRowToNotepad = useCallback(
+    async (row: FlatRow, targetNotepadId: string, mode: "copy" | "move"): Promise<void> => {
+      if (!row.atom || !targetNotepadId || !isGateOpen) {
+        return;
+      }
+      await runMutation(async () => {
+        await placementSave({
+          viewId: targetNotepadId,
+          blockId: row.block.id,
+          orderKey: `z|${Date.now()}`
+        });
+        if (mode === "move") {
+          await placementDelete(row.placement.id);
         }
-      }
-    });
-  }, [conditionsByAtomId, isGateOpen, runMutation, treeData.rowByPlacementId, uiState.selectedPlacementId]);
+      });
+    },
+    [isGateOpen, runMutation]
+  );
 
   const createNotepad = useCallback(
     async (event: FormEvent): Promise<void> => {
@@ -1801,11 +2567,11 @@ export function NotepadScreen(): JSX.Element {
       }
       const trimmedName = createName.trim();
       if (!trimmedName) {
-        setError("Project name is required.");
+        setError("Notepad name is required.");
         return;
       }
       const inferredCategory = slugify(trimmedName);
-      const categories = parseCategories(createCategories) ?? (inferredCategory ? [inferredCategory] : undefined);
+      const requestedCategories = parseCategories(createCategories) ?? (inferredCategory ? [inferredCategory] : []);
       setCreatingNotepad(true);
       setError(undefined);
       try {
@@ -1818,9 +2584,16 @@ export function NotepadScreen(): JSX.Element {
           index += 1;
         }
 
+        const resolvedCategories = await ensureCategoryRegistryEntries(requestedCategories);
+        const categories = resolvedCategories.categories.length > 0 ? resolvedCategories.categories : undefined;
+        const categoryIds = resolvedCategories.categoryIds.length > 0 ? resolvedCategories.categoryIds : undefined;
         const filters: NotepadFilter = {
           includeArchived: false,
-          categories
+          categories,
+          labels: categories,
+          categoryIds,
+          labelIds: categoryIds,
+          categoryFilterMode: "or"
         };
 
         await notepadSave({
@@ -1837,7 +2610,10 @@ export function NotepadScreen(): JSX.Element {
               initialFacets: ["task"],
               taskStatus: "todo",
               taskPriority: 3,
-              categories
+              categories,
+              labels: categories,
+              categoryIds,
+              labelIds: categoryIds
             },
             layoutMode: "outline"
           }
@@ -1856,7 +2632,17 @@ export function NotepadScreen(): JSX.Element {
         setCreatingNotepad(false);
       }
     },
-    [createCategories, createDescription, createName, creatingNotepad, isGateOpen, loadNotepadsIntoState, notepads, uiDispatch]
+    [
+      createCategories,
+      createDescription,
+      createName,
+      creatingNotepad,
+      ensureCategoryRegistryEntries,
+      isGateOpen,
+      loadNotepadsIntoState,
+      notepads,
+      uiDispatch
+    ]
   );
 
   const saveNotepadEdits = useCallback(
@@ -1867,13 +2653,16 @@ export function NotepadScreen(): JSX.Element {
       }
       const trimmedName = editName.trim();
       if (!trimmedName) {
-        setError("Active project name cannot be empty.");
+        setError("Active notepad name cannot be empty.");
         return;
       }
       setEditingNotepad(true);
       setError(undefined);
       try {
-        const categories = parseCategories(editCategories);
+        const requestedCategories = parseCategories(editCategories) ?? [];
+        const resolvedCategories = await ensureCategoryRegistryEntries(requestedCategories);
+        const categories = resolvedCategories.categories.length > 0 ? resolvedCategories.categories : undefined;
+        const categoryIds = resolvedCategories.categoryIds.length > 0 ? resolvedCategories.categoryIds : undefined;
         await notepadSave({
           expectedRevision: activeNotepad.revision,
           idempotencyKey: idempotencyKey(),
@@ -1885,12 +2674,19 @@ export function NotepadScreen(): JSX.Element {
             isSystem: activeNotepad.isSystem,
             filters: {
               ...activeNotepad.filters,
-              categories
+              categories,
+              labels: categories,
+              categoryIds,
+              labelIds: categoryIds,
+              categoryFilterMode: activeNotepad.filters.categoryFilterMode ?? "or"
             },
             sorts: activeNotepad.sorts,
             captureDefaults: {
               ...(activeNotepad.captureDefaults ?? {}),
-              categories
+              categories,
+              labels: categories,
+              categoryIds,
+              labelIds: categoryIds
             },
             layoutMode: activeNotepad.layoutMode
           }
@@ -1903,7 +2699,17 @@ export function NotepadScreen(): JSX.Element {
         setEditingNotepad(false);
       }
     },
-    [activeNotepad, editCategories, editDescription, editName, editingNotepad, isGateOpen, loadNotepadsIntoState, reloadActiveNotepad]
+    [
+      activeNotepad,
+      editCategories,
+      editDescription,
+      editName,
+      editingNotepad,
+      ensureCategoryRegistryEntries,
+      isGateOpen,
+      loadNotepadsIntoState,
+      reloadActiveNotepad
+    ]
   );
 
   const setStatusPreset = useCallback(
@@ -2053,12 +2859,14 @@ export function NotepadScreen(): JSX.Element {
       return;
     }
     dismissHint();
-    setInspectorOpen(true);
-    setShowMoveCopyPanel(true);
-    window.requestAnimationFrame(() => {
-      quickTargetSelectRef.current?.focus();
-    });
-  }, [dismissHint, selectedRow]);
+    const editor = document.querySelector<HTMLElement>(
+      `[data-placement-id="${selectedRow.placement.id}"]`
+    );
+    const rect = editor?.getBoundingClientRect();
+    const x = rect ? rect.right : window.innerWidth / 2;
+    const y = rect ? rect.top : window.innerHeight / 2;
+    openRowContextMenu(selectedRow.placement.id, x, y);
+  }, [dismissHint, openRowContextMenu, selectedRow]);
 
   const moveEditorSelection = useCallback(
     (row: FlatRow, direction: "up" | "down"): void => {
@@ -2077,6 +2885,215 @@ export function NotepadScreen(): JSX.Element {
       uiDispatch({ type: "set_interaction_mode", mode: "edit" });
     },
     [treeData.flatRows, uiDispatch]
+  );
+
+  const mergeRowWithAdjacentSibling = useCallback(
+    async (row: FlatRow, direction: "previous" | "next"): Promise<void> => {
+      if (!isGateOpen || !row.atom || !uiState.activeNotepadId) {
+        return;
+      }
+      const parentKey = row.effectiveParentPlacementId ?? ROOT_KEY;
+      const siblings = treeData.childrenByParentKey[parentKey] ?? [];
+      const rowIndex = siblings.indexOf(row.placement.id);
+      if (rowIndex === -1) {
+        return;
+      }
+      const siblingPlacementId =
+        direction === "next" ? siblings[rowIndex + 1] : siblings[rowIndex - 1];
+      if (!siblingPlacementId) {
+        return;
+      }
+      const siblingRow = treeData.rowByPlacementId[siblingPlacementId];
+      if (!siblingRow?.atom) {
+        return;
+      }
+
+      // Keep the row under cursor as the surviving identity whenever possible.
+      const primaryRow = row;
+      const secondaryRow = siblingRow;
+      const primaryText = rowText(primaryRow, uiState.draftsByPlacement[primaryRow.placement.id]);
+      const secondaryText = rowText(secondaryRow, uiState.draftsByPlacement[secondaryRow.placement.id]);
+      const leftText = direction === "previous" ? secondaryText : primaryText;
+      const rightText = direction === "previous" ? primaryText : secondaryText;
+      const mergedText = mergeRowText(leftText, rightText);
+      const selectionOffset = mergeBoundaryOffset(leftText, rightText);
+
+      await flushDraft(primaryRow.placement.id);
+      await flushDraft(secondaryRow.placement.id);
+
+      const mutated = await runStructuralMutation(direction === "next" ? "merge-with-next" : "merge-with-previous", async () => {
+        const latestPrimaryAtom = (await atomGet(primaryRow.atom!.id)) ?? primaryRow.atom!;
+        await atomUpdate(latestPrimaryAtom.id, {
+          expectedRevision: latestPrimaryAtom.revision,
+          rawText: mergedText
+        });
+
+        const secondaryDirectChildPlacementIds = treeData.orderedPlacementIds.filter(
+          (placementId) => treeData.effectiveParentByPlacementId[placementId] === secondaryRow.placement.id
+        );
+
+        if (secondaryDirectChildPlacementIds.length > 0) {
+          const [allPlacements, allBlocks] = await Promise.all([
+            listAllPages((cursor) => placementsList({ viewId: uiState.activeNotepadId, limit: 250, cursor })),
+            listAllPages((cursor) => blocksList({ notepadId: uiState.activeNotepadId, limit: 250, cursor }))
+          ]);
+          const placementById = new Map(allPlacements.map((placement) => [placement.id, placement]));
+          const blockById = new Map(allBlocks.map((block) => [block.id, block]));
+
+          for (const childPlacementId of secondaryDirectChildPlacementIds) {
+            const childPlacement = placementById.get(childPlacementId);
+            if (!childPlacement) {
+              continue;
+            }
+            await placementSave({
+              id: childPlacement.id,
+              viewId: childPlacement.viewId,
+              blockId: childPlacement.blockId,
+              parentPlacementId: primaryRow.placement.id,
+              orderKey: childPlacement.orderKey,
+              pinned: childPlacement.pinned,
+              expectedRevision: childPlacement.revision,
+              idempotencyKey: idempotencyKey()
+            });
+
+            const childBlock = blockById.get(childPlacement.blockId);
+            if (!childBlock?.atomId) {
+              continue;
+            }
+            const childAtom = await atomGet(childBlock.atomId);
+            if (!childAtom) {
+              continue;
+            }
+            await updateCanonicalParent(childAtom, latestPrimaryAtom.id);
+          }
+        }
+
+        await placementDelete(secondaryRow.placement.id, idempotencyKey());
+        const remainingPlacements = await listAllPages((cursor) =>
+          placementsList({ blockId: secondaryRow.block.id, limit: 250, cursor })
+        );
+        const latestSecondaryAtom = await atomGet(secondaryRow.atom!.id);
+        if (!latestSecondaryAtom || remainingPlacements.length > 0) {
+          return;
+        }
+        await atomArchive(latestSecondaryAtom.id, {
+          expectedRevision: latestSecondaryAtom.revision,
+          reason: "notepad_merged_into_sibling"
+        });
+      });
+      if (!mutated) {
+        return;
+      }
+
+      selectedPlacementRef.current = primaryRow.placement.id;
+      uiDispatch({ type: "set_selected_placement", placementId: primaryRow.placement.id });
+      uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+      focusEditorSelectionForPlacement(primaryRow.placement.id, selectionOffset, selectionOffset);
+    },
+    [
+      focusEditorSelectionForPlacement,
+      flushDraft,
+      isGateOpen,
+      runStructuralMutation,
+      treeData.childrenByParentKey,
+      treeData.effectiveParentByPlacementId,
+      treeData.orderedPlacementIds,
+      treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.activeNotepadId,
+      uiState.draftsByPlacement,
+      updateCanonicalParent
+    ]
+  );
+
+  const splitRowAtSelection = useCallback(
+    async (row: FlatRow, selectionStart: number, selectionEnd: number): Promise<void> => {
+      if (!uiState.activeNotepadId || !isGateOpen || !row.atom) {
+        return;
+      }
+      const sourceText = rowText(row, uiState.draftsByPlacement[row.placement.id]);
+      const start = Math.max(0, Math.min(selectionStart, sourceText.length));
+      const end = Math.max(start, Math.min(selectionEnd, sourceText.length));
+      const beforeText = sourceText.slice(0, start);
+      const afterText = sourceText.slice(end);
+
+      await flushDraft(row.placement.id);
+      const parentPlacementId = row.effectiveParentPlacementId;
+      const parentRow = parentPlacementId ? treeData.rowByPlacementId[parentPlacementId] : undefined;
+      const parentAtomId = parentRow?.atom?.id;
+
+      const mutated = await runStructuralMutation("split-row", async () => {
+        const latestAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
+        await atomUpdate(latestAtom.id, {
+          expectedRevision: latestAtom.revision,
+          rawText: afterText
+        });
+
+        const created = await notepadBlockCreate({
+          notepadId: uiState.activeNotepadId,
+          rawText: beforeText
+        });
+        let createdPlacement = await findPlacementForBlockInView(created.id, uiState.activeNotepadId);
+        if (!createdPlacement) {
+          throw new Error("Unable to locate placement for split row");
+        }
+
+        if (createdPlacement.parentPlacementId !== parentPlacementId) {
+          createdPlacement = await placementSave({
+            id: createdPlacement.id,
+            viewId: createdPlacement.viewId,
+            blockId: createdPlacement.blockId,
+            parentPlacementId,
+            orderKey: createdPlacement.orderKey,
+            pinned: createdPlacement.pinned,
+            expectedRevision: createdPlacement.revision,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+
+        const reordered = treeData.orderedPlacementIds.filter((placementId) => placementId !== createdPlacement.id);
+        const insertionIndex = reordered.indexOf(row.placement.id);
+        if (insertionIndex === -1) {
+          reordered.push(createdPlacement.id);
+        } else {
+          reordered.splice(insertionIndex, 0, createdPlacement.id);
+        }
+        if (reordered.length > 1) {
+          await placementsReorder(uiState.activeNotepadId, {
+            orderedPlacementIds: reordered,
+            idempotencyKey: idempotencyKey()
+          });
+        }
+
+        if (created.atomId && parentAtomId) {
+          const createdAtom = await atomGet(created.atomId);
+          if (createdAtom) {
+            await updateCanonicalParent(createdAtom, parentAtomId);
+          }
+        }
+      });
+      if (!mutated) {
+        return;
+      }
+
+      selectedPlacementRef.current = row.placement.id;
+      uiDispatch({ type: "set_selected_placement", placementId: row.placement.id });
+      uiDispatch({ type: "set_interaction_mode", mode: "edit" });
+      focusEditorSelectionForPlacement(row.placement.id, 0, 0);
+    },
+    [
+      findPlacementForBlockInView,
+      focusEditorSelectionForPlacement,
+      flushDraft,
+      isGateOpen,
+      runStructuralMutation,
+      treeData.orderedPlacementIds,
+      treeData.rowByPlacementId,
+      uiDispatch,
+      uiState.activeNotepadId,
+      uiState.draftsByPlacement,
+      updateCanonicalParent
+    ]
   );
 
   const onRowEditorKeyDown = useCallback(
@@ -2099,6 +3116,14 @@ export function NotepadScreen(): JSX.Element {
 
       switch (action.type) {
         case "none":
+          return;
+        case "undo_structure":
+          event.preventDefault();
+          void undoStructuralChange();
+          return;
+        case "redo_structure":
+          event.preventDefault();
+          void redoStructuralChange();
           return;
         case "open_quick_actions":
           event.preventDefault();
@@ -2134,6 +3159,11 @@ export function NotepadScreen(): JSX.Element {
           return;
         case "create_sibling":
           event.preventDefault();
+          if (selectionStart > 0 && selectionStart < rowText(row, uiState.draftsByPlacement[row.placement.id]).length) {
+            target.blur();
+            void splitRowAtSelection(row, selectionStart, selectionEnd);
+            return;
+          }
           if (selectionStart === 0 && selectionEnd === 0) {
             // Split-at-start semantics: insert an empty sibling above and keep caret at start of current row.
             target.blur();
@@ -2157,103 +3187,13 @@ export function NotepadScreen(): JSX.Element {
           event.preventDefault();
           void deleteRow(row, { preferPrevious: true, focusEditor: true });
           return;
+        case "merge_with_previous_sibling":
+          event.preventDefault();
+          void mergeRowWithAdjacentSibling(row, "previous");
+          return;
         case "merge_with_next_sibling":
           event.preventDefault();
-          void (async () => {
-            if (!isGateOpen || !row.atom || !uiState.activeNotepadId) {
-              return;
-            }
-            const parentKey = row.effectiveParentPlacementId ?? ROOT_KEY;
-            const siblings = treeData.childrenByParentKey[parentKey] ?? [];
-            const rowIndex = siblings.indexOf(row.placement.id);
-            if (rowIndex === -1) {
-              return;
-            }
-            const nextSiblingPlacementId = siblings[rowIndex + 1];
-            if (!nextSiblingPlacementId) {
-              return;
-            }
-            const nextSiblingRow = treeData.rowByPlacementId[nextSiblingPlacementId];
-            if (!nextSiblingRow || !nextSiblingRow.atom) {
-              return;
-            }
-
-            const currentText = rowText(row, uiState.draftsByPlacement[row.placement.id]);
-            const nextText = rowText(nextSiblingRow, uiState.draftsByPlacement[nextSiblingRow.placement.id]);
-            const mergedText = mergeRowText(currentText, nextText);
-
-            await flushDraft(row.placement.id);
-            await flushDraft(nextSiblingRow.placement.id);
-
-            pendingEditorFocusPlacementIdRef.current = row.placement.id;
-            selectedPlacementRef.current = row.placement.id;
-            uiDispatch({ type: "set_selected_placement", placementId: row.placement.id });
-            uiDispatch({ type: "set_interaction_mode", mode: "edit" });
-
-            await runMutation(async () => {
-              const latestRowAtom = (await atomGet(row.atom!.id)) ?? row.atom!;
-              await atomUpdate(latestRowAtom.id, {
-                expectedRevision: latestRowAtom.revision,
-                rawText: mergedText
-              });
-
-              const nextSiblingDirectChildPlacementIds = treeData.orderedPlacementIds.filter(
-                (placementId) => treeData.effectiveParentByPlacementId[placementId] === nextSiblingRow.placement.id
-              );
-
-              if (nextSiblingDirectChildPlacementIds.length > 0) {
-                const [allPlacements, allBlocks] = await Promise.all([
-                  listAllPages((cursor) => placementsList({ viewId: uiState.activeNotepadId, limit: 250, cursor })),
-                  listAllPages((cursor) => blocksList({ notepadId: uiState.activeNotepadId, limit: 250, cursor }))
-                ]);
-                const placementById = new Map(allPlacements.map((placement) => [placement.id, placement]));
-                const blockById = new Map(allBlocks.map((block) => [block.id, block]));
-
-                for (const childPlacementId of nextSiblingDirectChildPlacementIds) {
-                  const childPlacement = placementById.get(childPlacementId);
-                  if (!childPlacement) {
-                    continue;
-                  }
-                  await placementSave({
-                    id: childPlacement.id,
-                    viewId: childPlacement.viewId,
-                    blockId: childPlacement.blockId,
-                    parentPlacementId: row.placement.id,
-                    orderKey: childPlacement.orderKey,
-                    pinned: childPlacement.pinned,
-                    expectedRevision: childPlacement.revision,
-                    idempotencyKey: idempotencyKey()
-                  });
-
-                  const childBlock = blockById.get(childPlacement.blockId);
-                  if (!childBlock?.atomId) {
-                    continue;
-                  }
-                  const childAtom = await atomGet(childBlock.atomId);
-                  if (!childAtom) {
-                    continue;
-                  }
-                  await updateCanonicalParent(childAtom, latestRowAtom.id);
-                }
-              }
-
-              await placementDelete(nextSiblingRow.placement.id, idempotencyKey());
-              const remainingPlacements = await listAllPages((cursor) =>
-                placementsList({ blockId: nextSiblingRow.block.id, limit: 250, cursor })
-              );
-              const latestSiblingAtom = await atomGet(nextSiblingRow.atom!.id);
-              if (!latestSiblingAtom) {
-                return;
-              }
-              if (remainingPlacements.length > 0) {
-                return;
-              }
-              await atomArchive(latestSiblingAtom.id, {
-                expectedRevision: latestSiblingAtom.revision,
-                reason: "notepad_merged_into_previous_sibling"
-              });
-            });
-          })();
+          void mergeRowWithAdjacentSibling(row, "next");
           return;
         case "exit_edit_mode":
           event.preventDefault();
@@ -2269,32 +3209,297 @@ export function NotepadScreen(): JSX.Element {
       createRow,
       deleteRow,
       dismissHint,
-      flushDraft,
       indentSelected,
       insertSiblingBeforeAndKeepFocus,
-      isGateOpen,
+      mergeRowWithAdjacentSibling,
       moveEditorSelection,
       openQuickActions,
       outdentSelected,
       pasteAfterSelected,
+      redoStructuralChange,
       reorderSelected,
-      runMutation,
-      treeData.childrenByParentKey,
-      treeData.effectiveParentByPlacementId,
-      treeData.orderedPlacementIds,
-      treeData.rowByPlacementId,
+      splitRowAtSelection,
+      undoStructuralChange,
       uiDispatch,
-      uiState.activeNotepadId,
-      uiState.draftsByPlacement,
-      updateCanonicalParent
+      uiState.draftsByPlacement
     ]
   );
+
+  const navigateSiblingSelection = useCallback(
+    (direction: "up" | "down"): void => {
+      const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+      if (!row) {
+        return;
+      }
+      const parentKey = row.effectiveParentPlacementId ?? ROOT_KEY;
+      const siblings = treeData.childrenByParentKey[parentKey] ?? [];
+      const index = siblings.indexOf(row.placement.id);
+      if (index === -1) {
+        return;
+      }
+      const nextIndex = direction === "up" ? index - 1 : index + 1;
+      const nextPlacementId = siblings[nextIndex];
+      if (!nextPlacementId) {
+        return;
+      }
+      uiDispatch({ type: "set_selected_placement", placementId: nextPlacementId });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    },
+    [treeData.childrenByParentKey, treeData.rowByPlacementId, uiDispatch, uiState.selectedPlacementId]
+  );
+
+  const jumpSelectionToParent = useCallback((): void => {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row?.effectiveParentPlacementId) {
+      return;
+    }
+    uiDispatch({ type: "set_selected_placement", placementId: row.effectiveParentPlacementId });
+    uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+  }, [treeData.rowByPlacementId, uiDispatch, uiState.selectedPlacementId]);
+
+  const jumpSelectionToFirstChild = useCallback((): void => {
+    const row = uiState.selectedPlacementId ? treeData.rowByPlacementId[uiState.selectedPlacementId] : undefined;
+    if (!row) {
+      return;
+    }
+    const children = treeData.childrenByParentKey[row.placement.id] ?? [];
+    if (children.length === 0) {
+      return;
+    }
+    uiDispatch({ type: "set_selected_placement", placementId: children[0] });
+    uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+  }, [treeData.childrenByParentKey, treeData.rowByPlacementId, uiDispatch, uiState.selectedPlacementId]);
+
+  const setSelectedSubtreeCollapsed = useCallback(
+    (collapsed: boolean): void => {
+      const selectedPlacementId = uiState.selectedPlacementId;
+      if (!selectedPlacementId) {
+        return;
+      }
+      const subtree = collectSubtreePlacementIds(
+        selectedPlacementId,
+        treeData.effectiveParentByPlacementId,
+        treeData.orderedPlacementIds
+      );
+      const hasChildrenSet = new Set(Object.values(treeData.effectiveParentByPlacementId).filter((value): value is string => !!value));
+      for (const placementId of subtree) {
+        if (!hasChildrenSet.has(placementId)) {
+          continue;
+        }
+        uiDispatch({ type: "set_row_collapsed", placementId, collapsed });
+      }
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    },
+    [
+      treeData.effectiveParentByPlacementId,
+      treeData.orderedPlacementIds,
+      uiDispatch,
+      uiState.selectedPlacementId
+    ]
+  );
+
+  const moveKeyboardDragTarget = useCallback(
+    (direction: "up" | "down"): void => {
+      if (!keyboardDrag) {
+        return;
+      }
+      const sourceSubtreeIds = new Set(collectVisibleSubtreePlacementIds(treeData.flatRows, keyboardDrag.sourcePlacementId));
+      const candidateIds = treeData.flatRows
+        .map((row) => row.placement.id)
+        .filter((placementId) => !sourceSubtreeIds.has(placementId));
+      if (candidateIds.length === 0) {
+        return;
+      }
+      const currentIndex = candidateIds.indexOf(keyboardDrag.targetPlacementId);
+      const fallbackIndex = currentIndex === -1 ? 0 : currentIndex;
+      const nextIndex =
+        direction === "up"
+          ? Math.max(0, fallbackIndex - 1)
+          : Math.min(candidateIds.length - 1, fallbackIndex + 1);
+      const nextTarget = candidateIds[nextIndex];
+      if (!nextTarget) {
+        return;
+      }
+      setKeyboardDrag((current) =>
+        current
+          ? {
+              ...current,
+              targetPlacementId: nextTarget
+            }
+          : current
+      );
+      uiDispatch({ type: "set_selected_placement", placementId: nextTarget });
+      uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
+    },
+    [keyboardDrag, treeData.flatRows, uiDispatch]
+  );
+
+  const cycleKeyboardDragIntent = useCallback((reverse = false): void => {
+    const intents: PlacementDropIntent[] = ["before", "after", "inside"];
+    setKeyboardDrag((current) => {
+      if (!current) {
+        return current;
+      }
+      const index = intents.indexOf(current.intent);
+      const nextIndex = reverse
+        ? (index - 1 + intents.length) % intents.length
+        : (index + 1) % intents.length;
+      const nextIntent = intents[nextIndex];
+      announceDragAction(
+        nextIntent === "inside"
+          ? "Keyboard drag intent: nest under target."
+          : nextIntent === "before"
+            ? "Keyboard drag intent: move above target."
+            : "Keyboard drag intent: move below target."
+      );
+      return {
+        ...current,
+        intent: nextIntent
+      };
+    });
+  }, [announceDragAction]);
+
+  const startKeyboardDrag = useCallback((): void => {
+    const sourcePlacementId = uiState.selectedPlacementId;
+    if (!sourcePlacementId) {
+      return;
+    }
+    const sourceSubtreeIds = new Set(collectVisibleSubtreePlacementIds(treeData.flatRows, sourcePlacementId));
+    const candidateIds = treeData.flatRows
+      .map((row) => row.placement.id)
+      .filter((placementId) => !sourceSubtreeIds.has(placementId));
+    if (candidateIds.length === 0) {
+      return;
+    }
+
+    const sourceIndex = treeData.flatRows.findIndex((row) => row.placement.id === sourcePlacementId);
+    const targetAfter = treeData.flatRows
+      .slice(sourceIndex + 1)
+      .find((row) => !sourceSubtreeIds.has(row.placement.id))
+      ?.placement.id;
+    const targetBefore = [...treeData.flatRows]
+      .slice(0, Math.max(0, sourceIndex))
+      .reverse()
+      .find((row) => !sourceSubtreeIds.has(row.placement.id))
+      ?.placement.id;
+    const targetPlacementId = targetAfter ?? targetBefore ?? candidateIds[0];
+    const intent: PlacementDropIntent = targetAfter ? "after" : "before";
+
+    setKeyboardDrag({
+      sourcePlacementId,
+      targetPlacementId,
+      intent
+    });
+    announceDragAction("Keyboard drag started. Arrow keys move target, Tab changes placement, Enter drops.");
+  }, [announceDragAction, treeData.flatRows, uiState.selectedPlacementId]);
+
+  const cancelKeyboardDrag = useCallback((): void => {
+    if (!keyboardDrag) {
+      return;
+    }
+    setKeyboardDrag(null);
+    announceDragAction("Keyboard drag canceled.");
+  }, [announceDragAction, keyboardDrag]);
+
+  const dropKeyboardDrag = useCallback(async (): Promise<void> => {
+    if (!keyboardDrag) {
+      return;
+    }
+    const payload = keyboardDrag;
+    setKeyboardDrag(null);
+    await dropReorderRow(payload.sourcePlacementId, payload.targetPlacementId, payload.intent);
+  }, [dropReorderRow, keyboardDrag]);
 
   const onTreeContainerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>): void => {
       if (event.target instanceof HTMLTextAreaElement) {
         return;
       }
+
+      if (keyboardDrag) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancelKeyboardDrag();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void dropKeyboardDrag();
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          moveKeyboardDragTarget("up");
+          return;
+        }
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          moveKeyboardDragTarget("down");
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          cycleKeyboardDragIntent(event.shiftKey);
+          return;
+        }
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "m") {
+        event.preventDefault();
+        if (keyboardDrag) {
+          void dropKeyboardDrag();
+        } else {
+          startKeyboardDrag();
+        }
+        return;
+      }
+
+      if (event.altKey && event.key === "ArrowUp") {
+        event.preventDefault();
+        navigateSiblingSelection("up");
+        return;
+      }
+      if (event.altKey && event.key === "ArrowDown") {
+        event.preventDefault();
+        navigateSiblingSelection("down");
+        return;
+      }
+      if (event.altKey && event.key === "ArrowLeft") {
+        event.preventDefault();
+        jumpSelectionToParent();
+        return;
+      }
+      if (event.altKey && event.key === "ArrowRight") {
+        event.preventDefault();
+        jumpSelectionToFirstChild();
+        return;
+      }
+      if (event.key === "[") {
+        event.preventDefault();
+        setSelectedSubtreeCollapsed(true);
+        return;
+      }
+      if (event.key === "]") {
+        event.preventDefault();
+        setSelectedSubtreeCollapsed(false);
+        return;
+      }
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        const placementId = uiState.selectedPlacementId;
+        if (!placementId) {
+          return;
+        }
+        event.preventDefault();
+        const rowElement = document.querySelector<HTMLElement>(`.notepad-row[data-placement-id="${placementId}"]`);
+        if (rowElement) {
+          const rect = rowElement.getBoundingClientRect();
+          openRowContextMenu(placementId, rect.left + Math.min(140, rect.width * 0.4), rect.top + rect.height * 0.55);
+        } else {
+          openRowContextMenu(placementId, window.innerWidth * 0.5, window.innerHeight * 0.45);
+        }
+        return;
+      }
+
       if (event.key === "Enter" && treeData.flatRows.length === 0) {
         event.preventDefault();
         dismissHint();
@@ -2315,6 +3520,14 @@ export function NotepadScreen(): JSX.Element {
 
       switch (action.type) {
         case "none":
+          return;
+        case "undo_structure":
+          event.preventDefault();
+          void undoStructuralChange();
+          return;
+        case "redo_structure":
+          event.preventDefault();
+          void redoStructuralChange();
           return;
         case "navigate_up":
           event.preventDefault();
@@ -2386,88 +3599,113 @@ export function NotepadScreen(): JSX.Element {
     [
       copyOrCutSelected,
       createRow,
+      cycleKeyboardDragIntent,
+      cancelKeyboardDrag,
       dismissHint,
+      dropKeyboardDrag,
       focusEditorForPlacement,
       indentSelected,
+      jumpSelectionToFirstChild,
+      jumpSelectionToParent,
+      keyboardDrag,
+      moveKeyboardDragTarget,
+      navigateSiblingSelection,
       navigateHorizontalSelection,
       navigateSelection,
+      openRowContextMenu,
       openQuickActions,
       outdentSelected,
       pasteAfterSelected,
+      redoStructuralChange,
       reorderSelected,
+      setSelectedSubtreeCollapsed,
+      startKeyboardDrag,
       treeData.flatRows.length,
+      undoStructuralChange,
       uiState.selectedPlacementId
     ]
   );
 
-  const selectedRowText = selectedRow ? rowText(selectedRow, uiState.draftsByPlacement[selectedRow.placement.id]) : "";
+  const contextMenuPosition = useMemo(() => {
+    if (!rowContextMenu || typeof window === "undefined") {
+      return undefined;
+    }
+    const width = 260;
+    const height = 360;
+    const margin = 10;
+    const x = Math.max(margin, Math.min(rowContextMenu.x, window.innerWidth - width - margin));
+    const y = Math.max(margin, Math.min(rowContextMenu.y, window.innerHeight - height - margin));
+    return { left: x, top: y };
+  }, [rowContextMenu]);
 
   return (
     <section className="notepad-screen screen">
       <div className="notepad-live-announcer" role="status" aria-live="polite" aria-atomic="true">
         {dragAnnouncement}
       </div>
-      <NotepadToolbar
-        notepads={notepads}
-        activeNotepadId={uiState.activeNotepadId}
-        activeNotepad={activeNotepad}
-        loading={loading}
-        saving={saving}
-        capabilities={capabilities}
-        health={health}
-        featureFlags={featureFlags}
-        isFeatureGateOpen={isGateOpen}
-        statusPreset={statusPreset}
-        onSelectNotepad={(notepadId) => uiDispatch({ type: "set_active_notepad", notepadId })}
-        onSetStatusPreset={(preset) => void setStatusPreset(preset)}
-        createName={createName}
-        createCategories={createCategories}
-        createDescription={createDescription}
-        creatingNotepad={creatingNotepad}
-        onChangeCreateName={setCreateName}
-        onChangeCreateCategories={setCreateCategories}
-        onChangeCreateDescription={setCreateDescription}
-        onCreateNotepad={(event) => void createNotepad(event)}
-        editName={editName}
-        editCategories={editCategories}
-        editDescription={editDescription}
-        editingNotepad={editingNotepad}
-        onChangeEditName={setEditName}
-        onChangeEditCategories={setEditCategories}
-        onChangeEditDescription={setEditDescription}
-        onSaveNotepadEdits={(event) => void saveNotepadEdits(event)}
-      />
 
-      {gateError && <div className="banner error">{gateError}</div>}
-      {error && <div className="banner error">{error}</div>}
-      {(loading || saving) && <div className="banner info">{loading ? "Loading project..." : "Saving..."}</div>}
-      {dragUndo && dragUndo.notepadId === uiState.activeNotepadId && (
-        <div className="banner info notepad-undo-banner">
-          <span>{dragUndo.message}</span>
-          <button type="button" onClick={() => void undoLastDrop()} disabled={saving || loading}>
-            Undo
-          </button>
-        </div>
-      )}
+      <div className="page-sidebar-layout">
+        <NotepadListSidebar
+          notepads={notepads}
+          activeNotepadId={uiState.activeNotepadId}
+          onSelectNotepad={(notepadId) => uiDispatch({ type: "set_active_notepad", notepadId })}
+          createName={createName}
+          createCategories={createCategories}
+          createDescription={createDescription}
+          creatingNotepad={creatingNotepad}
+          onChangeCreateName={setCreateName}
+          onChangeCreateCategories={setCreateCategories}
+          onChangeCreateDescription={setCreateDescription}
+          onCreateNotepad={(event) => void createNotepad(event)}
+          editName={editName}
+          editCategories={editCategories}
+          editDescription={editDescription}
+          editingNotepad={editingNotepad}
+          onChangeEditName={setEditName}
+          onChangeEditCategories={setEditCategories}
+          onChangeEditDescription={setEditDescription}
+          onSaveNotepadEdits={(event) => void saveNotepadEdits(event)}
+          capabilities={capabilities}
+          health={health}
+          featureFlags={featureFlags}
+          isFeatureGateOpen={isGateOpen}
+          loading={loading}
+          saving={saving}
+        />
 
-      <div className="notepad-layout">
+        <div className="page-sidebar-main">
+          {gateError && <div className="banner error">{gateError}</div>}
+          {error && <div className="banner error">{error}</div>}
+          {(loading || saving) && <div className="banner info">{loading ? "Loading notepad..." : "Saving..."}</div>}
+          {dragUndo && dragUndo.notepadId === uiState.activeNotepadId && (
+            <div className="banner info notepad-undo-banner">
+              <span>{dragUndo.message}</span>
+              <button type="button" onClick={() => void undoLastDrop()} disabled={saving || loading}>
+                Undo
+              </button>
+            </div>
+          )}
+
         <div className="card notepad-outline">
           <header className="notepad-outline-header">
-            <h3>{activeNotepad?.name ?? "Project"}</h3>
+            <h3>{activeNotepad?.name ?? "Notepad"}</h3>
             <div className="notepad-outline-meta">
               <small className="notepad-meta-pill">
                 {treeData.flatRows.length} row{treeData.flatRows.length === 1 ? "" : "s"}
               </small>
-              <small className="notepad-meta-pill">
-                {activeRowCount} active
-              </small>
-              {projectCategories.length > 0 && (
+              <button
+                type="button"
+                className={`notepad-meta-pill notepad-meta-action${statusPreset === "active" ? " active" : ""}`}
+                onClick={() => void setStatusPreset(statusPreset === "active" ? "all" : "active")}
+                disabled={saving || !activeNotepad || !isGateOpen}
+                title={statusPreset === "active" ? "Showing active rows only — click to show all" : "Showing all rows — click to hide done"}
+              >
+                {activeRowCount} active{statusPreset === "all" ? " / all" : ""}
+              </button>
+              {activeCategories.length > 0 && (
                 <small className="notepad-meta-pill">
-                  {projectCategories.join(", ")}
+                  {activeCategories.join(", ")}
                 </small>
-              )}
-              {latestRowUpdate && (
-                <small className="notepad-meta-pill">Updated {new Date(latestRowUpdate).toLocaleString()}</small>
               )}
             </div>
           </header>
@@ -2509,12 +3747,21 @@ export function NotepadScreen(): JSX.Element {
           )}
           {!hintDismissed && (
             <small className="settings-hint">
-              Keyboard-first tip: Enter creates (or inserts above at line start), Tab indents, Backspace removes empty rows, Delete merges with next sibling.
+              Keyboard-first tip: Enter creates/splits rows, Tab indents, Backspace/Delete merge siblings, Cmd/Ctrl+Z undoes structure.
             </small>
           )}
           <NotepadTree
             rows={treeData.flatRows}
             selectedPlacementId={uiState.selectedPlacementId}
+            keyboardDropTarget={
+              keyboardDrag
+                ? {
+                    sourcePlacementId: keyboardDrag.sourcePlacementId,
+                    targetPlacementId: keyboardDrag.targetPlacementId,
+                    intent: keyboardDrag.intent
+                  }
+                : undefined
+            }
             getRowText={(row) => rowText(row, uiState.draftsByPlacement[row.placement.id])}
             isTaskRow={isTaskRow}
             parseOverlayMode={(row) => parseOverlayMode(row.overlay)}
@@ -2568,6 +3815,9 @@ export function NotepadScreen(): JSX.Element {
               uiDispatch({ type: "set_interaction_mode", mode: "navigation" });
             }}
             onEditorKeyDown={onRowEditorKeyDown}
+            onOpenContextMenu={(placementId, x, y) => {
+              openRowContextMenu(placementId, x, y);
+            }}
             onContainerKeyDown={onTreeContainerKeyDown}
             onDropRow={({ sourcePlacementId, targetPlacementId, intent }) => {
               dismissHint();
@@ -2578,198 +3828,234 @@ export function NotepadScreen(): JSX.Element {
             }}
           />
         </div>
-
-        <aside className={`card notepad-inspector${inspectorOpen ? " open" : " collapsed"}`}>
-          <div className="notepad-inspector-header">
-            <h3>Row Details</h3>
-            <button
-              type="button"
-              className={inspectorOpen ? "primary" : ""}
-              onClick={() => {
-                dismissHint();
-                setInspectorOpen((current) => !current);
-              }}
-              aria-expanded={inspectorOpen}
-            >
-              {inspectorOpen ? "Hide" : "Show"}
-            </button>
-          </div>
-          {!selectedRow && <p className="settings-hint">Select a row to inspect and edit metadata.</p>}
-          {selectedRow && !inspectorOpen && (
-            <p className="settings-hint">
-              Selected: <strong>{rowTitle(selectedRow)}</strong>
-            </p>
-          )}
-          {selectedRow && inspectorOpen && (
-            <div className="notepad-inspector-grid">
-              <p>
-                <strong>{rowTitle(selectedRow)}</strong>
-              </p>
-
-              {isTaskRow(selectedRow) && selectedRow.atom && (
+        </div>{/* end page-sidebar-main */}
+      </div>{/* end page-sidebar-layout */}
+      {rowContextMenu && contextMenuRow && contextMenuPosition && (
+        <div
+          className="notepad-context-menu"
+          role="menu"
+          aria-label="Row actions"
+          style={{ left: `${contextMenuPosition.left}px`, top: `${contextMenuPosition.top}px` }}
+        >
+          {contextSubmenu === "none" && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setContextSubmenu("status")}
+                disabled={!contextMenuRow.atom}
+              >
+                Status{contextMenuRow.atom?.facetData.task?.status ? ` (${contextMenuRow.atom.facetData.task.status})` : ""}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setContextSubmenu("priority")}
+                disabled={!contextMenuRow.atom}
+              >
+                Priority{contextMenuRow.atom?.facetData.task?.priority ? ` (P${contextMenuRow.atom.facetData.task.priority})` : ""}
+              </button>
+              <hr className="notepad-context-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void makeRowHot(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Make Hot (L3)
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void coolRowAttention(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Cool to Long
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void setRowCommitmentLevel(contextMenuRow, "hard");
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Set Hard Commitment
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void setRowCommitmentLevel(contextMenuRow, null);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Clear Commitment
+              </button>
+              <hr className="notepad-context-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void addTagsToRow(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Add Labels/Categories
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void addThreadsToRow(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Add Thread
+              </button>
+              <hr className="notepad-context-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void snoozeRowUntilTomorrow(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Snooze 1 day
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void setRowWaitingPerson(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Waiting on person
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void setRowBlockedByTask(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Blocked by task
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowContextMenu();
+                  void clearRowConditions(contextMenuRow);
+                }}
+                disabled={!contextMenuRow.atom}
+              >
+                Clear Blocking
+              </button>
+              {notepads.length > 1 && (
                 <>
-                  <label>
-                    Status
-                    <select
-                      value={selectedRow.atom.facetData.task?.status ?? "todo"}
-                      onChange={(event) => void updateSelectedTaskStatus(event.target.value as TaskStatus)}
-                    >
-                      {STATUS_OPTIONS.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    Priority
-                    <select
-                      value={selectedRow.atom.facetData.task?.priority ?? 3}
-                      onChange={(event) => void updateSelectedPriority(Number(event.target.value) as 1 | 2 | 3 | 4 | 5)}
-                    >
-                      <option value={1}>P1</option>
-                      <option value={2}>P2</option>
-                      <option value={3}>P3</option>
-                      <option value={4}>P4</option>
-                      <option value={5}>P5</option>
-                    </select>
-                  </label>
-                  <small className="settings-hint">
-                    Current priority: {priorityLabel(selectedRow.atom.facetData.task?.priority ?? 3)}
-                  </small>
-                  <div className="notepad-inspector-actions">
-                    <button type="button" onClick={() => void makeSelectedHot()} disabled={!isGateOpen || !decayEngineEnabled}>
-                      Make Hot (L3)
-                    </button>
-                    <button type="button" onClick={() => appActions?.selectScreen("tasks")} disabled={!decisionQueueEnabled}>
-                      Open Decision Queue
-                    </button>
-                  </div>
-                  <small className="settings-hint">
-                    Attention: {(selectedRow.atom.facetData.task?.attentionLayer ?? selectedRow.atom.facetData.attention?.layer ?? "long").toUpperCase()}
-                    {typeof selectedRow.atom.facetData.attention?.heatScore === "number"
-                      ? ` · Heat ${selectedRow.atom.facetData.attention.heatScore.toFixed(1)}`
-                      : ""}
-                  </small>
-                  {selectedAttentionWhy && <small className="settings-hint">Why surfaced: {selectedAttentionWhy}</small>}
+                  <hr className="notepad-context-divider" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setContextSubmenu("move")}
+                    disabled={!contextMenuRow.atom}
+                  >
+                    Move / Copy to Notepad
+                  </button>
                 </>
               )}
-
-              <div className="notepad-inspector-toggle-row" role="group" aria-label="Row detail panels">
-                <button
-                  type="button"
-                  className={showMoveCopyPanel ? "primary" : ""}
-                  onClick={() => {
-                    dismissHint();
-                    setShowMoveCopyPanel((current) => !current);
-                  }}
-                  aria-expanded={showMoveCopyPanel}
-                >
-                  Move/Copy
-                </button>
-                <button
-                  type="button"
-                  className={showBlockingPanel ? "primary" : ""}
-                  onClick={() => {
-                    dismissHint();
-                    setShowBlockingPanel((current) => !current);
-                  }}
-                  aria-expanded={showBlockingPanel}
-                  disabled={!selectedRow.atom}
-                >
-                  Blocking
-                </button>
-                <button
-                  type="button"
-                  className={showAdvancedPanel ? "primary" : ""}
-                  onClick={() => {
-                    dismissHint();
-                    setShowAdvancedPanel((current) => !current);
-                  }}
-                  aria-expanded={showAdvancedPanel}
-                >
-                  Advanced
-                </button>
-              </div>
-
-              {showMoveCopyPanel && (
-                <div className="card quick-actions-panel">
-                  <h4>Move or Copy</h4>
-                  <label>
-                    Destination project
-                    <select
-                      ref={quickTargetSelectRef}
-                      value={quickTargetNotepadId}
-                      onChange={(event) => setQuickTargetNotepadId(event.target.value)}
-                    >
-                      <option value="">Select project</option>
-                      {notepads
-                        .filter((value) => value.id !== uiState.activeNotepadId)
-                        .map((value) => (
-                          <option key={value.id} value={value.id}>
-                            {value.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <div className="notepad-inspector-actions">
-                    <button type="button" onClick={() => void moveSelectedToNotepad(quickTargetNotepadId, "copy")} disabled={!quickTargetNotepadId}>
-                      Copy to Project
-                    </button>
-                    <button type="button" onClick={() => void moveSelectedToNotepad(quickTargetNotepadId, "move")} disabled={!quickTargetNotepadId}>
-                      Move to Project
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {showBlockingPanel && (
-                <div className="card quick-actions-panel">
-                  <h4>Blocking</h4>
-                  <div className="notepad-inspector-actions">
-                    <button type="button" onClick={() => void snoozeSelectedUntilTomorrow()} disabled={!selectedRow.atom || !isGateOpen}>
-                      Snooze 1 day
-                    </button>
-                    <button type="button" onClick={() => void setSelectedWaitingPerson()} disabled={!selectedRow.atom || !isGateOpen}>
-                      Waiting on person
-                    </button>
-                    <button type="button" onClick={() => void setSelectedBlockedByTask()} disabled={!selectedRow.atom || !isGateOpen}>
-                      Blocked by task
-                    </button>
-                    <button type="button" onClick={() => void clearSelectedConditions()} disabled={!selectedRow.atom || !isGateOpen}>
-                      Clear blocking
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {showAdvancedPanel && (
-                <div className="card quick-actions-panel">
-                  <h4>Advanced</h4>
-                  <small className="settings-hint">Block: {selectedRow.block.id}</small>
-                  {selectedRow.atom && <small className="settings-hint">Atom: {selectedRow.atom.id}</small>}
-                  <small className="settings-hint">Updated {new Date(selectedRow.block.updatedAt).toLocaleString()}</small>
-                  <small className="settings-hint">Text length: {selectedRowText.length}</small>
-                  {selectedRow.overlay && (
-                    <small className="settings-hint">
-                      Active condition: {selectedRow.overlay.mode}
-                      {selectedRow.overlay.waitingOnPerson ? ` (${selectedRow.overlay.waitingOnPerson})` : ""}
-                    </small>
-                  )}
-                </div>
-              )}
-
-              {selectedRow.overlay && !showAdvancedPanel && (
-                <small className="settings-hint">
-                  Active condition: {selectedRow.overlay.mode}
-                  {selectedRow.overlay.waitingOnPerson ? ` (${selectedRow.overlay.waitingOnPerson})` : ""}
-                </small>
-              )}
-            </div>
+            </>
           )}
-        </aside>
-      </div>
+
+          {contextSubmenu === "status" && (
+            <>
+              <button type="button" role="menuitem" onClick={() => setContextSubmenu("none")}>
+                Back
+              </button>
+              <hr className="notepad-context-divider" />
+              {STATUS_OPTIONS.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  role="menuitem"
+                  className={contextMenuRow.atom?.facetData.task?.status === status ? "active" : ""}
+                  onClick={() => {
+                    closeRowContextMenu();
+                    void setRowTaskStatus(contextMenuRow, status);
+                  }}
+                >
+                  {status.charAt(0).toUpperCase() + status.slice(1)}
+                </button>
+              ))}
+            </>
+          )}
+
+          {contextSubmenu === "priority" && (
+            <>
+              <button type="button" role="menuitem" onClick={() => setContextSubmenu("none")}>
+                Back
+              </button>
+              <hr className="notepad-context-divider" />
+              {([1, 2, 3, 4, 5] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  role="menuitem"
+                  className={contextMenuRow.atom?.facetData.task?.priority === p ? "active" : ""}
+                  onClick={() => {
+                    closeRowContextMenu();
+                    void setRowPriority(contextMenuRow, p);
+                  }}
+                >
+                  P{p}
+                </button>
+              ))}
+            </>
+          )}
+
+          {contextSubmenu === "move" && (
+            <>
+              <button type="button" role="menuitem" onClick={() => setContextSubmenu("none")}>
+                Back
+              </button>
+              <hr className="notepad-context-divider" />
+              {notepads
+                .filter((n) => n.id !== uiState.activeNotepadId)
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((n) => (
+                  <button
+                    key={n.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeRowContextMenu();
+                      void moveRowToNotepad(contextMenuRow, n.id, "move");
+                    }}
+                  >
+                    Move to {n.name}
+                  </button>
+                ))}
+            </>
+          )}
+        </div>
+      )}
     </section>
   );
 }

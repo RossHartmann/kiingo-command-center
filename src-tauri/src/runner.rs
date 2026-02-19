@@ -22,10 +22,10 @@ use crate::models::{
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
     DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest,
     ListConversationsFilters, ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse,
-    MetricSnapshot, MetricSnapshotStatus, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider,
+    MetricSnapshot, MetricSnapshotStatus, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, ProjectDefinition, ProjectOpenResponse,
     RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
     RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
-    SaveNotepadViewRequest, SetTaskStatusRequest, TaskReopenRequest,
+    SaveNotepadViewRequest, SaveProjectDefinitionRequest, SetTaskStatusRequest, TaskReopenRequest,
     ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
     UnbindMetricResponse,
     StartRunPayload, StartRunResponse, StreamEnvelope, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord,
@@ -2230,6 +2230,40 @@ impl RunnerCore {
     ) -> AppResult<BooleanResponse> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::notepad_delete(&root, notepad_id, idempotency_key)
+    }
+
+    pub fn projects_list(&self) -> AppResult<Vec<ProjectDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::projects_list(&root)
+    }
+
+    pub fn project_get(&self, project_id: &str) -> AppResult<Option<ProjectDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::project_get(&root, project_id)
+    }
+
+    pub fn project_save(&self, request: SaveProjectDefinitionRequest) -> AppResult<ProjectDefinition> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::project_save(&root, request)
+    }
+
+    pub fn project_delete(
+        &self,
+        project_id: &str,
+        idempotency_key: Option<String>,
+    ) -> AppResult<BooleanResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::project_delete(&root, project_id, idempotency_key)
+    }
+
+    pub fn project_open(&self, project_id: &str) -> AppResult<ProjectOpenResponse> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::project_open(&root, project_id)
+    }
+
+    pub fn project_views_list(&self, project_id: &str) -> AppResult<Vec<NotepadViewDefinition>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::project_views_list(&root, project_id)
     }
 
     pub fn notepad_atoms_list(

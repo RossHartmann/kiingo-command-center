@@ -16,6 +16,7 @@ interface NotepadRowProps {
   onEditorChange: (placementId: string, nextText: string) => void;
   onEditorBlur: (placementId: string, event: FocusEvent<HTMLTextAreaElement>) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
+  onOpenContextMenu?: (placementId: string, x: number, y: number) => void;
   dragHandleAttributes?: DraggableAttributes;
   dragHandleListeners?: DraggableSyntheticListeners;
   setDragHandleRef?: (element: HTMLElement | null) => void;
@@ -34,6 +35,7 @@ export function NotepadRow({
   onEditorChange,
   onEditorBlur,
   onEditorKeyDown,
+  onOpenContextMenu,
   dragHandleAttributes,
   dragHandleListeners,
   setDragHandleRef,
@@ -84,6 +86,15 @@ export function NotepadRow({
     }
   };
 
+  const handleContextMenu = (event: MouseEvent<HTMLElement>): void => {
+    if (!onOpenContextMenu) {
+      return;
+    }
+    event.preventDefault();
+    onSelect(row.placement.id);
+    onOpenContextMenu(row.placement.id, event.clientX, event.clientY);
+  };
+
   return (
     <article
       className={`notepad-row ${selected ? "selected" : ""}${dragging ? " dragging" : ""}`}
@@ -91,6 +102,7 @@ export function NotepadRow({
       data-placement-id={row.placement.id}
       onMouseDownCapture={handleMouseDownCapture}
       onClick={handleRowClick}
+      onContextMenu={handleContextMenu}
       tabIndex={-1}
       role="treeitem"
       aria-selected={selected}

@@ -103,6 +103,7 @@ export type Screen =
   | "team-scorecard"
   | "team-rocks"
   | "tasks"
+  | "projects"
   | "notepad"
   | "chat"
   | "composer"
@@ -124,7 +125,9 @@ export type Screen =
   | "cco-principles"
   | "chro-principles"
   | "discovery-calls"
-  | "follow-up-calls";
+  | "follow-up-calls"
+  | "sales-followup"
+  | "ops-followup";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 

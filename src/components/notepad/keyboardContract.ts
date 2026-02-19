@@ -19,6 +19,8 @@ export interface ContainerKeyContext extends KeyContextBase {
 
 export type EditorKeyAction =
   | { type: "none" }
+  | { type: "undo_structure" }
+  | { type: "redo_structure" }
   | { type: "open_quick_actions" }
   | { type: "clipboard_copy" }
   | { type: "clipboard_cut" }
@@ -31,11 +33,14 @@ export type EditorKeyAction =
   | { type: "indent" }
   | { type: "outdent" }
   | { type: "delete_empty_row" }
+  | { type: "merge_with_previous_sibling" }
   | { type: "merge_with_next_sibling" }
   | { type: "exit_edit_mode" };
 
 export type ContainerKeyAction =
   | { type: "none" }
+  | { type: "undo_structure" }
+  | { type: "redo_structure" }
   | { type: "navigate_up" }
   | { type: "navigate_down" }
   | { type: "navigate_start" }
@@ -68,6 +73,14 @@ export function resolveEditorKeyAction(ctx: EditorKeyContext): EditorKeyAction {
   const modifier = isModifierPressed(ctx);
   const lowerKey = ctx.key.toLowerCase();
   const hasSelection = ctx.selectionEnd > ctx.selectionStart;
+
+  if (modifier && !ctx.shiftKey && lowerKey === "z") {
+    return { type: "undo_structure" };
+  }
+
+  if ((modifier && ctx.shiftKey && lowerKey === "z") || (ctx.ctrlKey && !ctx.metaKey && !ctx.shiftKey && lowerKey === "y")) {
+    return { type: "redo_structure" };
+  }
 
   if (ctx.key === "Escape") {
     return { type: "exit_edit_mode" };
@@ -145,6 +158,17 @@ export function resolveEditorKeyAction(ctx: EditorKeyContext): EditorKeyAction {
   }
 
   if (
+    ctx.key === "Backspace" &&
+    !modifier &&
+    !ctx.shiftKey &&
+    !hasSelection &&
+    ctx.selectionStart === 0 &&
+    ctx.selectionEnd === 0
+  ) {
+    return { type: "merge_with_previous_sibling" };
+  }
+
+  if (
     ctx.key === "Delete" &&
     !modifier &&
     !ctx.shiftKey &&
@@ -161,6 +185,14 @@ export function resolveEditorKeyAction(ctx: EditorKeyContext): EditorKeyAction {
 export function resolveContainerKeyAction(ctx: ContainerKeyContext): ContainerKeyAction {
   const modifier = isModifierPressed(ctx);
   const lowerKey = ctx.key.toLowerCase();
+
+  if (modifier && !ctx.shiftKey && lowerKey === "z") {
+    return { type: "undo_structure" };
+  }
+
+  if ((modifier && ctx.shiftKey && lowerKey === "z") || (ctx.ctrlKey && !ctx.metaKey && !ctx.shiftKey && lowerKey === "y")) {
+    return { type: "redo_structure" };
+  }
 
   if (modifier && ctx.shiftKey && ctx.hasSelectedRow && ctx.key === "ArrowUp") {
     return { type: "reorder_up" };

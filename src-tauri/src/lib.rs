@@ -18,9 +18,9 @@ use crate::models::{
     CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
     DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest, ListConversationsFilters,
     ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse, MetricSnapshot,
-    NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, RecurrenceInstance,
+    NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, ProjectDefinition, ProjectOpenResponse, RecurrenceInstance,
     RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
-    SaveMetricDefinitionPayload, SaveNotepadViewRequest, SaveProfilePayload, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
+    SaveMetricDefinitionPayload, SaveNotepadViewRequest, SaveProfilePayload, SaveProjectDefinitionRequest, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
     SetTaskStatusRequest, TaskReopenRequest,
     SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
     UnbindMetricResponse, UpdateAtomRequest, UpdateScreenMetricLayoutPayload, WorkspaceCapabilities,
@@ -542,6 +542,55 @@ fn notepad_delete(
         .runner
         .notepad_delete(&notepad_id, idempotency_key)
         .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn projects_list(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectDefinition>, String> {
+    state.runner.projects_list().map_err(to_client_error)
+}
+
+#[tauri::command]
+fn project_get(
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+) -> Result<Option<ProjectDefinition>, String> {
+    state.runner.project_get(&project_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn project_save(
+    state: tauri::State<'_, AppState>,
+    payload: SaveProjectDefinitionRequest,
+) -> Result<ProjectDefinition, String> {
+    state.runner.project_save(payload).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn project_delete(
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+    idempotency_key: Option<String>,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .project_delete(&project_id, idempotency_key)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn project_open(
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+) -> Result<ProjectOpenResponse, String> {
+    state.runner.project_open(&project_id).map_err(to_client_error)
+}
+
+#[tauri::command]
+fn project_views_list(
+    state: tauri::State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<NotepadViewDefinition>, String> {
+    state.runner.project_views_list(&project_id).map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1524,6 +1573,12 @@ pub fn run() {
             notepad_get,
             notepad_save,
             notepad_delete,
+            projects_list,
+            project_get,
+            project_save,
+            project_delete,
+            project_open,
+            project_views_list,
             notepad_atoms_list,
             notepad_block_create,
             blocks_list,

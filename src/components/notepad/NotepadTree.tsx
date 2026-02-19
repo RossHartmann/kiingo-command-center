@@ -27,6 +27,7 @@ interface NotepadTreeDropPayload {
 interface NotepadTreeProps {
   rows: FlatRow[];
   selectedPlacementId?: string;
+  keyboardDropTarget?: NotepadTreeDropPayload;
   getRowText: (row: FlatRow) => string;
   isTaskRow: (row: FlatRow) => boolean;
   parseOverlayMode: (row: FlatRow) => "person" | "task" | "date" | undefined;
@@ -36,6 +37,7 @@ interface NotepadTreeProps {
   onEditorChange: (placementId: string, nextText: string) => void;
   onEditorBlur: (placementId: string, event: FocusEvent<HTMLTextAreaElement>) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
+  onOpenContextMenu?: (placementId: string, x: number, y: number) => void;
   onContainerKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   onDropRow: (payload: NotepadTreeDropPayload) => void;
   onAutoExpandRow: (placementId: string) => void;
@@ -57,6 +59,7 @@ interface SortableNotepadRowProps {
   onEditorChange: (placementId: string, nextText: string) => void;
   onEditorBlur: (placementId: string, event: FocusEvent<HTMLTextAreaElement>) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>, row: FlatRow) => void;
+  onOpenContextMenu?: (placementId: string, x: number, y: number) => void;
 }
 
 function SortableNotepadRow({
@@ -74,7 +77,8 @@ function SortableNotepadRow({
   onEditorFocus,
   onEditorChange,
   onEditorBlur,
-  onEditorKeyDown
+  onEditorKeyDown,
+  onOpenContextMenu
 }: SortableNotepadRowProps): JSX.Element {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: row.placement.id
@@ -107,6 +111,7 @@ function SortableNotepadRow({
         onEditorChange={onEditorChange}
         onEditorBlur={onEditorBlur}
         onEditorKeyDown={onEditorKeyDown}
+        onOpenContextMenu={onOpenContextMenu}
         dragHandleAttributes={attributes}
         dragHandleListeners={listeners}
         setDragHandleRef={setActivatorNodeRef}
@@ -116,7 +121,11 @@ function SortableNotepadRow({
   );
 }
 
-function resolveDropIntent(event: DragOverEvent | DragEndEvent, targetDepth: number): PlacementDropIntent {
+function resolveDropIntent(
+  event: DragOverEvent | DragEndEvent,
+  targetDepth: number,
+  forceSiblingOnly: boolean
+): PlacementDropIntent {
   const overRect = event.over?.rect;
   if (!overRect) {
     return "after";
@@ -142,7 +151,7 @@ function resolveDropIntent(event: DragOverEvent | DragEndEvent, targetDepth: num
   }
 
   // Nesting should feel intentional: move to the center band and drag right past the nesting guide.
-  if (nestingIntentional) {
+  if (nestingIntentional && !forceSiblingOnly) {
     return "inside";
   }
 
@@ -161,7 +170,8 @@ function resolveDropIntent(event: DragOverEvent | DragEndEvent, targetDepth: num
 
 function resolveDropTarget(
   event: DragOverEvent | DragEndEvent,
-  rowDepthByPlacementId: Record<string, number>
+  rowDepthByPlacementId: Record<string, number>,
+  forceSiblingOnly: boolean
 ): Omit<NotepadTreeDropPayload, "sourcePlacementId"> | undefined {
   if (!event.over) {
     return undefined;
@@ -170,7 +180,7 @@ function resolveDropTarget(
   const targetDepth = rowDepthByPlacementId[targetPlacementId] ?? 0;
   return {
     targetPlacementId,
-    intent: resolveDropIntent(event, targetDepth)
+    intent: resolveDropIntent(event, targetDepth, forceSiblingOnly)
   };
 }
 
@@ -183,6 +193,7 @@ function dropIntentLabel(intent: PlacementDropIntent): string {
 export function NotepadTree({
   rows,
   selectedPlacementId,
+  keyboardDropTarget,
   getRowText,
   isTaskRow,
   parseOverlayMode,
@@ -192,6 +203,7 @@ export function NotepadTree({
   onEditorChange,
   onEditorBlur,
   onEditorKeyDown,
+  onOpenContextMenu,
   onContainerKeyDown,
   onDropRow,
   onAutoExpandRow
@@ -199,6 +211,7 @@ export function NotepadTree({
   const [activePlacementId, setActivePlacementId] = useState<string>();
   const [dropTarget, setDropTarget] = useState<Omit<NotepadTreeDropPayload, "sourcePlacementId">>();
   const [dragDelta, setDragDelta] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [forceSiblingDrop, setForceSiblingDrop] = useState(false);
   const expandHoverTimerRef = useRef<number>();
   const expandHoverTargetIdRef = useRef<string>();
   const rowIds = useMemo(() => rows.map((row) => row.placement.id), [rows]);
@@ -251,6 +264,30 @@ export function NotepadTree({
     };
   }, [clearExpandHoverTimer]);
 
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.altKey || event.key === "Alt") {
+        setForceSiblingDrop(true);
+      }
+    };
+    const onKeyUp = (event: globalThis.KeyboardEvent): void => {
+      if (!event.altKey) {
+        setForceSiblingDrop(false);
+      }
+    };
+    const onWindowBlur = (): void => {
+      setForceSiblingDrop(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, []);
+
   const resetDragState = (): void => {
     setActivePlacementId(undefined);
     setDropTarget(undefined);
@@ -270,7 +307,7 @@ export function NotepadTree({
   };
 
   const handleDragOver = (event: DragOverEvent): void => {
-    const nextDropTarget = resolveDropTarget(event, rowDepthByPlacementId);
+    const nextDropTarget = resolveDropTarget(event, rowDepthByPlacementId, forceSiblingDrop);
     setDropTarget(nextDropTarget);
 
     if (!nextDropTarget || nextDropTarget.intent !== "inside") {
@@ -296,7 +333,7 @@ export function NotepadTree({
 
   const handleDragEnd = (event: DragEndEvent): void => {
     const sourcePlacementId = String(event.active.id);
-    const nextDropTarget = resolveDropTarget(event, rowDepthByPlacementId);
+    const nextDropTarget = resolveDropTarget(event, rowDepthByPlacementId, forceSiblingDrop);
     resetDragState();
     if (!nextDropTarget) {
       return;
@@ -326,38 +363,44 @@ export function NotepadTree({
       >
         <SortableContext items={rowIds} strategy={verticalListSortingStrategy}>
           <div className="notepad-tree-inner">
-            {rows.map((row) => (
-              <SortableNotepadRow
-                key={row.placement.id}
-                row={row}
-                selected={selectedPlacementId === row.placement.id}
-                textValue={getRowText(row)}
-                overlayMode={parseOverlayMode(row)}
-                isTask={isTaskRow(row)}
-                dropHint={
-                  dropTarget?.targetPlacementId === row.placement.id && activePlacementId !== row.placement.id
-                    ? dropTarget.intent
-                    : undefined
-                }
-                dropIntentLabel={
-                  dropTarget?.targetPlacementId === row.placement.id && activePlacementId !== row.placement.id
-                    ? dropIntentLabel(dropTarget.intent)
-                    : undefined
-                }
-                followsParentDrag={
-                  !!activePlacementId &&
-                  row.placement.id !== activePlacementId &&
-                  activeSubtreeSet.has(row.placement.id)
-                }
-                parentDragDelta={dragDelta}
-                onSelect={onSelectRow}
-                onToggleCollapsed={onToggleCollapsed}
-                onEditorFocus={onEditorFocus}
-                onEditorChange={onEditorChange}
-                onEditorBlur={onEditorBlur}
-                onEditorKeyDown={onEditorKeyDown}
-              />
-            ))}
+            {rows.map((row) => {
+              const effectiveActivePlacementId = activePlacementId ?? keyboardDropTarget?.sourcePlacementId;
+              const pointerDropTarget =
+                dropTarget?.targetPlacementId === row.placement.id && effectiveActivePlacementId !== row.placement.id
+                  ? dropTarget
+                  : undefined;
+              const keyboardDrop =
+                keyboardDropTarget?.targetPlacementId === row.placement.id &&
+                keyboardDropTarget.sourcePlacementId !== row.placement.id
+                  ? keyboardDropTarget
+                  : undefined;
+              const effectiveDropIntent = pointerDropTarget?.intent ?? keyboardDrop?.intent;
+              return (
+                <SortableNotepadRow
+                  key={row.placement.id}
+                  row={row}
+                  selected={selectedPlacementId === row.placement.id}
+                  textValue={getRowText(row)}
+                  overlayMode={parseOverlayMode(row)}
+                  isTask={isTaskRow(row)}
+                  dropHint={effectiveDropIntent}
+                  dropIntentLabel={effectiveDropIntent ? dropIntentLabel(effectiveDropIntent) : undefined}
+                  followsParentDrag={
+                    !!activePlacementId &&
+                    row.placement.id !== activePlacementId &&
+                    activeSubtreeSet.has(row.placement.id)
+                  }
+                  parentDragDelta={dragDelta}
+                  onSelect={onSelectRow}
+                  onToggleCollapsed={onToggleCollapsed}
+                  onEditorFocus={onEditorFocus}
+                  onEditorChange={onEditorChange}
+                  onEditorBlur={onEditorBlur}
+                  onEditorKeyDown={onEditorKeyDown}
+                  onOpenContextMenu={onOpenContextMenu}
+                />
+              );
+            })}
           </div>
         </SortableContext>
       </div>
