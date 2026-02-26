@@ -13,9 +13,12 @@ import {
   conditionsList,
   decisionsList,
   featureFlagsList,
+  notepadArchive,
   notepadAtomsList,
   notepadBlockCreate,
+  notepadDelete,
   notepadsList,
+  notepadRestore,
   notepadSave,
   registryEntriesList,
   registryEntrySave,
@@ -65,7 +68,7 @@ import {
   type PlacementDropIntent
 } from "../components/notepad/treeData";
 import { ROOT_KEY, type FlatRow } from "../components/notepad/types";
-import { OMNI_OPEN_NOTEPAD, OMNI_OPEN_NOTEPAD_BY_CATEGORY } from "../components/OmniSearch";
+import { OMNI_OPEN_NOTEPAD, OMNI_OPEN_NOTEPAD_BY_CATEGORY, type OmniOpenNotepadDetail } from "../components/OmniSearch";
 import { useOptionalAppActions } from "../state/appState";
 import { useNotepadUiState } from "../state/notepadState";
 
@@ -140,6 +143,17 @@ function asErrorMessage(error: unknown): string {
 
 function isConflictError(error: unknown): boolean {
   return asErrorMessage(error).includes("CONFLICT");
+}
+
+function confirmDestructiveAction(message: string): boolean {
+  if (typeof window === "undefined" || typeof window.confirm !== "function") {
+    return true;
+  }
+  try {
+    return window.confirm(message);
+  } catch {
+    return true;
+  }
 }
 
 async function listAllPages<T>(fetchPage: (cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>): Promise<T[]> {
@@ -358,8 +372,9 @@ export function NotepadScreen(): JSX.Element {
   const [editCategories, setEditCategories] = useState("");
   const [editingNotepad, setEditingNotepad] = useState(false);
 
-  const [pendingNotepadId, setPendingNotepadId] = useState<string>();
+  const [pendingNotepadOpen, setPendingNotepadOpen] = useState<OmniOpenNotepadDetail>();
   const [pendingCategoryOpen, setPendingCategoryOpen] = useState<PendingCategoryOpenRequest>();
+  const [activeCaptureProjectId, setActiveCaptureProjectId] = useState<string>();
   const [rowContextMenu, setRowContextMenu] = useState<RowContextMenuState | null>(null);
   const [hintDismissed, setHintDismissed] = useState<boolean>(() =>
     loadNotepadBoolPreference(NOTEPAD_HINT_DISMISSED_KEY, false)
@@ -599,12 +614,12 @@ export function NotepadScreen(): JSX.Element {
 
   useEffect(() => {
     const onOpenNotepad = (event: Event): void => {
-      const detail = (event as CustomEvent<{ notepadId?: string }>).detail;
+      const detail = (event as CustomEvent<OmniOpenNotepadDetail>).detail;
       const notepadId = detail?.notepadId;
       if (!notepadId) {
         return;
       }
-      setPendingNotepadId(notepadId);
+      setPendingNotepadOpen({ notepadId, projectId: detail?.projectId });
     };
     const onOpenCategoryNotepad = (event: Event): void => {
       const detail = (event as CustomEvent<{ categories?: string[]; filterMode?: "or" | "and" }>).detail;
@@ -612,6 +627,7 @@ export function NotepadScreen(): JSX.Element {
       if (categories.length === 0) {
         return;
       }
+      setActiveCaptureProjectId(undefined);
       setPendingCategoryOpen({
         categories: uniqueLowercase(categories),
         filterMode: detail?.filterMode === "and" ? "and" : "or"
@@ -626,15 +642,16 @@ export function NotepadScreen(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (!pendingNotepadId) {
+    if (!pendingNotepadOpen?.notepadId) {
       return;
     }
-    if (!notepads.some((view) => view.id === pendingNotepadId)) {
+    if (!notepads.some((view) => view.id === pendingNotepadOpen.notepadId)) {
       return;
     }
-    uiDispatch({ type: "set_active_notepad", notepadId: pendingNotepadId });
-    setPendingNotepadId(undefined);
-  }, [notepads, pendingNotepadId, uiDispatch]);
+    uiDispatch({ type: "set_active_notepad", notepadId: pendingNotepadOpen.notepadId });
+    setActiveCaptureProjectId(pendingNotepadOpen.projectId);
+    setPendingNotepadOpen(undefined);
+  }, [notepads, pendingNotepadOpen, uiDispatch]);
 
   const loadWorkspaceGate = useCallback(async (): Promise<void> => {
     const [nextCapabilities, nextHealth, nextFlags] = await Promise.all([
@@ -1679,6 +1696,7 @@ export function NotepadScreen(): JSX.Element {
       await runStructuralMutation("insert-row-above", async () => {
         const created = await notepadBlockCreate({
           notepadId: uiState.activeNotepadId,
+          projectId: activeCaptureProjectId,
           rawText: ""
         });
         let createdPlacement = await findPlacementForBlockInView(created.id, uiState.activeNotepadId);
@@ -1740,6 +1758,7 @@ export function NotepadScreen(): JSX.Element {
       treeData.rowByPlacementId,
       uiDispatch,
       uiState.activeNotepadId,
+      activeCaptureProjectId,
       updateCanonicalParent
     ]
   );
@@ -1764,6 +1783,7 @@ export function NotepadScreen(): JSX.Element {
       await runStructuralMutation("create-row", async () => {
         const created = await notepadBlockCreate({
           notepadId: uiState.activeNotepadId,
+          projectId: activeCaptureProjectId,
           rawText: ""
         });
         let createdPlacement = await findPlacementForBlockInView(created.id, uiState.activeNotepadId);
@@ -2749,6 +2769,89 @@ export function NotepadScreen(): JSX.Element {
     [activeNotepad, isGateOpen, loadNotepadData, loadNotepadsIntoState, saving]
   );
 
+  const handleDeleteOrArchive = useCallback(
+    async (notepadId: string): Promise<void> => {
+      if (notepadId === "now" || saving || loading) {
+        return;
+      }
+      const target = notepads.find((n) => n.id === notepadId);
+      if (!target || target.isSystem) {
+        return;
+      }
+      setSaving(true);
+      setError(undefined);
+      try {
+        const page = await placementsList({ viewId: notepadId, limit: 1 });
+        const isEmpty = page.items.length === 0;
+        if (isEmpty) {
+          await notepadDelete(notepadId);
+        } else {
+          await notepadArchive(target);
+        }
+        const views = await loadNotepadsIntoState();
+        if (uiState.activeNotepadId === notepadId) {
+          const nextId = views.find((v) => v.id === "now")?.id ?? views[0]?.id;
+          if (nextId) {
+            uiDispatch({ type: "set_active_notepad", notepadId: nextId });
+          }
+        }
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [loading, loadNotepadsIntoState, notepads, saving, uiDispatch, uiState.activeNotepadId]
+  );
+
+  const handleRestoreNotepad = useCallback(
+    async (notepadId: string): Promise<void> => {
+      const target = notepads.find((n) => n.id === notepadId);
+      if (!target || saving) {
+        return;
+      }
+      setSaving(true);
+      setError(undefined);
+      try {
+        await notepadRestore(target);
+        await loadNotepadsIntoState();
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [loadNotepadsIntoState, notepads, saving]
+  );
+
+  const handlePermanentDelete = useCallback(
+    async (notepadId: string): Promise<void> => {
+      if (notepadId === "now" || saving) {
+        return;
+      }
+      if (!confirmDestructiveAction("Delete this archived notepad permanently? This cannot be undone.")) {
+        return;
+      }
+      setSaving(true);
+      setError(undefined);
+      try {
+        await notepadDelete(notepadId);
+        const views = await loadNotepadsIntoState();
+        if (uiState.activeNotepadId === notepadId) {
+          const nextId = views.find((v) => v.id === "now")?.id ?? views[0]?.id;
+          if (nextId) {
+            uiDispatch({ type: "set_active_notepad", notepadId: nextId });
+          }
+        }
+      } catch (nextError) {
+        setError(asErrorMessage(nextError));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [loadNotepadsIntoState, saving, uiDispatch, uiState.activeNotepadId]
+  );
+
   const navigateSelection = useCallback(
     (target: "up" | "down" | "start" | "end"): void => {
       const rows = treeData.flatRows;
@@ -3001,6 +3104,7 @@ export function NotepadScreen(): JSX.Element {
       treeData.rowByPlacementId,
       uiDispatch,
       uiState.activeNotepadId,
+      activeCaptureProjectId,
       uiState.draftsByPlacement,
       updateCanonicalParent
     ]
@@ -3031,6 +3135,7 @@ export function NotepadScreen(): JSX.Element {
 
         const created = await notepadBlockCreate({
           notepadId: uiState.activeNotepadId,
+          projectId: activeCaptureProjectId,
           rawText: beforeText
         });
         let createdPlacement = await findPlacementForBlockInView(created.id, uiState.activeNotepadId);
@@ -3091,6 +3196,7 @@ export function NotepadScreen(): JSX.Element {
       treeData.rowByPlacementId,
       uiDispatch,
       uiState.activeNotepadId,
+      activeCaptureProjectId,
       uiState.draftsByPlacement,
       updateCanonicalParent
     ]
@@ -3648,7 +3754,10 @@ export function NotepadScreen(): JSX.Element {
         <NotepadListSidebar
           notepads={notepads}
           activeNotepadId={uiState.activeNotepadId}
-          onSelectNotepad={(notepadId) => uiDispatch({ type: "set_active_notepad", notepadId })}
+          onSelectNotepad={(notepadId) => {
+            setActiveCaptureProjectId(undefined);
+            uiDispatch({ type: "set_active_notepad", notepadId });
+          }}
           createName={createName}
           createCategories={createCategories}
           createDescription={createDescription}
@@ -3665,6 +3774,9 @@ export function NotepadScreen(): JSX.Element {
           onChangeEditCategories={setEditCategories}
           onChangeEditDescription={setEditDescription}
           onSaveNotepadEdits={(event) => void saveNotepadEdits(event)}
+          onDeleteOrArchive={(notepadId) => void handleDeleteOrArchive(notepadId)}
+          onRestoreNotepad={(notepadId) => void handleRestoreNotepad(notepadId)}
+          onPermanentDelete={(notepadId) => void handlePermanentDelete(notepadId)}
           capabilities={capabilities}
           health={health}
           featureFlags={featureFlags}

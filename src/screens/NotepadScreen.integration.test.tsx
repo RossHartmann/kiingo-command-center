@@ -47,15 +47,33 @@ async function settleNotepad(): Promise<void> {
   });
 }
 
-async function renderNotepadAndSwitch(notepadId: string): Promise<HTMLSelectElement> {
-  render(<NotepadScreen />);
-  const selector = (await screen.findByLabelText("Active notepad")) as HTMLSelectElement;
-  fireEvent.change(selector, { target: { value: notepadId } });
+async function switchToNotepad(notepadId: string): Promise<void> {
+  const list = await screen.findByRole("listbox", { name: "Notepad list" });
+  const button = Array.from(list.querySelectorAll<HTMLButtonElement>("button.notepad-list-item-btn")).find((candidate) =>
+    candidate.textContent?.includes(notepadId)
+  );
+  expect(button).toBeTruthy();
+  fireEvent.click(button!);
   await waitFor(() => {
-    expect(selector.value).toBe(notepadId);
+    expect(screen.getByRole("heading", { level: 3, name: notepadId })).toBeInTheDocument();
   });
+}
+
+async function renderNotepadAndSwitch(notepadId: string): Promise<void> {
+  render(<NotepadScreen />);
   await settleNotepad();
-  return selector;
+  await switchToNotepad(notepadId);
+  await settleNotepad();
+}
+
+async function openMoveCopySubmenu(): Promise<HTMLElement> {
+  let menu = await screen.findByRole("menu", { name: "Row actions" });
+  const moveCopyItem = within(menu).queryByRole("menuitem", { name: "Move / Copy to Notepad" });
+  if (moveCopyItem) {
+    fireEvent.click(moveCopyItem);
+    menu = await screen.findByRole("menu", { name: "Row actions" });
+  }
+  return menu;
 }
 
 async function clickNewRow(): Promise<void> {
@@ -545,7 +563,7 @@ describe("NotepadScreen integration", () => {
     expect(document.querySelector(`textarea.notepad-editor[data-placement-id="${childPlacementId}"]`)).toBeTruthy();
   });
 
-  it("re-targets move/copy destination when switching active project", async () => {
+  it("re-targets move/copy destination when switching active notepad", async () => {
     const sourceNotepadId = uniqueNotepadId("itest-move-source");
     const targetNotepadId = uniqueNotepadId("itest-move-target");
     await createTestNotepad(sourceNotepadId);
@@ -554,32 +572,24 @@ describe("NotepadScreen integration", () => {
     await seedRow(targetNotepadId, "target-row");
     await renderNotepadAndSwitch(sourceNotepadId);
 
-    const inspectorToggle = screen.getByRole("button", { name: /Show|Hide/ });
-    if (inspectorToggle.getAttribute("aria-expanded") !== "true") {
-      fireEvent.click(inspectorToggle);
-    }
-    const moveCopyToggle = screen.getByRole("button", { name: "Move/Copy" });
-    if (moveCopyToggle.getAttribute("aria-expanded") !== "true") {
-      fireEvent.click(moveCopyToggle);
-    }
-
-    const destinationBefore = (await screen.findByLabelText("Destination notepad")) as HTMLSelectElement;
-    fireEvent.change(destinationBefore, { target: { value: targetNotepadId } });
-    expect(destinationBefore.value).toBe(targetNotepadId);
-
-    const activeProject = (await screen.findByLabelText("Active notepad")) as HTMLSelectElement;
-    fireEvent.change(activeProject, { target: { value: targetNotepadId } });
+    const sourceRow = await screen.findByRole("treeitem", { name: /source-row/ });
+    fireEvent.contextMenu(sourceRow, { clientX: 120, clientY: 80 });
+    let menu = await openMoveCopySubmenu();
+    expect(within(menu).getByRole("menuitem", { name: `Move to ${targetNotepadId}` })).toBeTruthy();
+    expect(within(menu).queryByRole("menuitem", { name: `Move to ${sourceNotepadId}` })).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
-      expect(activeProject.value).toBe(targetNotepadId);
+      expect(screen.queryByRole("menu", { name: "Row actions" })).toBeNull();
     });
+
+    await switchToNotepad(targetNotepadId);
     await settleNotepad();
 
-    const destinationAfter = (await screen.findByLabelText("Destination notepad")) as HTMLSelectElement;
-    const available = Array.from(destinationAfter.options)
-      .map((option) => option.value)
-      .filter((value) => value.length > 0);
-    expect(available).not.toContain(targetNotepadId);
-    expect(available).toContain(destinationAfter.value);
+    const targetRow = await screen.findByRole("treeitem", { name: /target-row/ });
+    fireEvent.contextMenu(targetRow, { clientX: 120, clientY: 80 });
+    menu = await openMoveCopySubmenu();
+    expect(within(menu).getByRole("menuitem", { name: `Move to ${sourceNotepadId}` })).toBeTruthy();
+    expect(within(menu).queryByRole("menuitem", { name: `Move to ${targetNotepadId}` })).toBeNull();
   });
 
   it("persists inline row text changes to atom rawText", async () => {

@@ -109,7 +109,10 @@ import type {
   RegistryEntriesListRequest,
   FeatureFlagUpdateRequest,
   MigrationPlanCreateRequest,
-  EntityId
+  EntityId,
+  JournalEntry,
+  JournalEntryMeta,
+  JournalType
 } from "./types";
 import { deriveTaskTitle, taskDisplayTitle } from "./taskTitle";
 
@@ -1284,6 +1287,13 @@ export async function getMetricDefinition(id: string): Promise<MetricDefinition 
   return mockStore.metricDefinitions.find((d) => d.id === id) ?? null;
 }
 
+export async function getMetricDefinitionBySlug(slug: string): Promise<MetricDefinition | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("get_metric_definition_by_slug", { slug });
+  }
+  return null;
+}
+
 export async function listMetricDefinitions(includeArchived = false): Promise<MetricDefinition[]> {
   if (IS_TAURI) {
     return tauriInvoke("list_metric_definitions", { includeArchived });
@@ -1632,6 +1642,109 @@ export async function obsidianTasksSync(): Promise<ObsidianTaskSyncResult> {
 function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomRecord[] {
   const filter = request?.filter;
   let result = [...atoms];
+  const includeCategoryDescendants = filter?.includeCategoryDescendants ?? false;
+  const needsRegistryIndex = Boolean(
+    filter?.labelIds?.length ||
+      filter?.categoryIds?.length ||
+      includeCategoryDescendants
+  );
+  const aliasToId = new Map<string, string>();
+  const idToKind = new Map<string, string>();
+  const parentToChildren = new Map<string, string[]>();
+  if (needsRegistryIndex) {
+    for (const entry of mockStore.registryEntries) {
+      const id = entry.id.trim();
+      if (!id) continue;
+      idToKind.set(id, entry.kind);
+      aliasToId.set(entry.name.trim().toLowerCase(), id);
+      for (const alias of entry.aliases) {
+        const normalized = alias.trim().toLowerCase();
+        if (!normalized) continue;
+        aliasToId.set(normalized, id);
+      }
+      for (const parentId of entry.parentIds) {
+        const normalizedParent = parentId.trim();
+        if (!normalizedParent) continue;
+        const existing = parentToChildren.get(normalizedParent);
+        if (existing) {
+          existing.push(id);
+        } else {
+          parentToChildren.set(normalizedParent, [id]);
+        }
+      }
+    }
+  }
+  const expandCategoryDescendants = (seed: Set<string>): Set<string> => {
+    if (!needsRegistryIndex || seed.size === 0) return seed;
+    const expanded = new Set(seed);
+    const stack = [...seed];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+      for (const childId of parentToChildren.get(current) ?? []) {
+        if (idToKind.get(childId) !== "category") continue;
+        if (!expanded.has(childId)) {
+          expanded.add(childId);
+          stack.push(childId);
+        }
+      }
+    }
+    return expanded;
+  };
+  const atomLabelIds = (atom: AtomRecord): Set<string> => {
+    const ids = new Set<string>();
+    for (const threadId of atom.relations.threadIds ?? []) {
+      const normalized = threadId.trim();
+      if (normalized) ids.add(normalized);
+    }
+    for (const value of [...(atom.facetData.meta?.labels ?? []), ...(atom.facetData.meta?.categories ?? [])]) {
+      const resolved = aliasToId.get(value.trim().toLowerCase());
+      if (resolved) ids.add(resolved);
+    }
+    return ids;
+  };
+  const atomCategoryIds = (atom: AtomRecord): Set<string> => {
+    const ids = new Set<string>();
+    for (const value of [...(atom.facetData.meta?.categories ?? []), ...(atom.facetData.meta?.labels ?? [])]) {
+      const resolved = aliasToId.get(value.trim().toLowerCase());
+      if (resolved && idToKind.get(resolved) === "category") {
+        ids.add(resolved);
+      }
+    }
+    return ids;
+  };
+  const setMatches = (mode: "or" | "and", expected: Set<string>, actual: Set<string>): boolean => {
+    if (expected.size === 0) return true;
+    if (mode === "and") {
+      return [...expected].every((value) => actual.has(value));
+    }
+    return [...actual].some((value) => expected.has(value));
+  };
+  const labelIdExpected =
+    filter?.labelIds?.length && needsRegistryIndex ? new Set(filter.labelIds.map((value) => value.trim()).filter(Boolean)) : undefined;
+  const categoryMode = filter?.categoryFilterMode ?? "or";
+  const categoryIdExpectedRaw =
+    filter?.categoryIds?.length && needsRegistryIndex
+      ? new Set(filter.categoryIds.map((value) => value.trim()).filter(Boolean))
+      : undefined;
+  const categoryIdExpected = categoryIdExpectedRaw
+    ? includeCategoryDescendants
+      ? expandCategoryDescendants(categoryIdExpectedRaw)
+      : categoryIdExpectedRaw
+    : undefined;
+  const categoryNamesExpectedFromDescendants = (() => {
+    if (!includeCategoryDescendants || !filter?.categories?.length || !needsRegistryIndex) {
+      return undefined;
+    }
+    const seed = new Set<string>();
+    for (const value of filter.categories) {
+      const resolved = aliasToId.get(value.trim().toLowerCase());
+      if (resolved) seed.add(resolved);
+    }
+    if (seed.size === 0) return undefined;
+    return expandCategoryDescendants(seed);
+  })();
+
   const includeArchived = filter?.includeArchived ?? false;
   if (!includeArchived) {
     result = result.filter((atom) => !atom.archivedAt);
@@ -1668,17 +1781,27 @@ function applyAtomFilter(atoms: AtomRecord[], request?: ListAtomsRequest): AtomR
       return normalized.some((label) => expected.has(label));
     });
   }
+  if (labelIdExpected) {
+    const mode = filter?.labelFilterMode ?? "or";
+    result = result.filter((atom) => setMatches(mode, labelIdExpected, atomLabelIds(atom)));
+  }
   if (filter?.categories?.length) {
     const expected = new Set(filter.categories.map((value) => value.toLowerCase()));
-    const mode = filter.categoryFilterMode ?? "or";
-    result = result.filter((atom) => {
-      const categories = atom.facetData.meta?.categories ?? [];
-      const normalized = categories.map((category) => category.toLowerCase());
-      if (mode === "and") {
-        return [...expected].every((category) => normalized.includes(category));
-      }
-      return normalized.some((category) => expected.has(category));
-    });
+    if (categoryNamesExpectedFromDescendants) {
+      result = result.filter((atom) => setMatches(categoryMode, categoryNamesExpectedFromDescendants, atomCategoryIds(atom)));
+    } else {
+      result = result.filter((atom) => {
+        const categories = atom.facetData.meta?.categories ?? [];
+        const normalized = categories.map((category) => category.toLowerCase());
+        if (categoryMode === "and") {
+          return [...expected].every((category) => normalized.includes(category));
+        }
+        return normalized.some((category) => expected.has(category));
+      });
+    }
+  }
+  if (categoryIdExpected) {
+    result = result.filter((atom) => setMatches(categoryMode, categoryIdExpected, atomCategoryIds(atom)));
   }
   if (filter?.attentionLayers?.length) {
     const expected = new Set(filter.attentionLayers);
@@ -2075,6 +2198,22 @@ export async function notepadSave(payload: SaveNotepadViewRequest): Promise<Note
   return next;
 }
 
+export async function notepadArchive(notepad: NotepadViewDefinition): Promise<NotepadViewDefinition> {
+  const { createdAt: _, updatedAt: __, revision: ___, ...rest } = notepad;
+  return notepadSave({
+    expectedRevision: notepad.revision,
+    definition: { ...rest, archivedAt: new Date().toISOString() }
+  });
+}
+
+export async function notepadRestore(notepad: NotepadViewDefinition): Promise<NotepadViewDefinition> {
+  const { createdAt: _, updatedAt: __, revision: ___, archivedAt: ____, ...rest } = notepad;
+  return notepadSave({
+    expectedRevision: notepad.revision,
+    definition: { ...rest, archivedAt: undefined }
+  });
+}
+
 export async function notepadDelete(notepadId: string): Promise<{ success: boolean }> {
   const idempotencyKey = ensureIdempotencyKey();
   if (IS_TAURI) {
@@ -2090,6 +2229,27 @@ export async function notepadDelete(notepadId: string): Promise<{ success: boole
   mockStore.notepads.splice(idx, 1);
   persistMockStore();
   return { success: true };
+}
+
+export async function journalListEntries(journalType: JournalType): Promise<JournalEntryMeta[]> {
+  if (IS_TAURI) {
+    return tauriInvoke("journal_list_entries", { journalType });
+  }
+  return [];
+}
+
+export async function journalGetEntry(journalType: JournalType, date: string): Promise<JournalEntry | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("journal_get_entry", { journalType, date });
+  }
+  return null;
+}
+
+export async function journalSaveEntry(journalType: JournalType, date: string, content: string): Promise<JournalEntry | null> {
+  if (IS_TAURI) {
+    return tauriInvoke("journal_save_entry", { journalType, date, content });
+  }
+  return null;
 }
 
 export async function projectsList(): Promise<ProjectDefinition[]> {
@@ -2203,6 +2363,32 @@ export async function notepadAtomsList(
   return atomsList({ limit, cursor, filter: notepad.filters, sort: notepad.sorts });
 }
 
+function mergeOptionalIdList(primary?: string[], secondary?: string[]): string[] | undefined {
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const value of [...(primary ?? []), ...(secondary ?? [])]) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    next.push(trimmed);
+  }
+  return next.length > 0 ? next : undefined;
+}
+
+function mergeOptionalLabelList(primary?: string[], secondary?: string[]): string[] | undefined {
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const value of [...(primary ?? []), ...(secondary ?? [])]) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(trimmed);
+  }
+  return next.length > 0 ? next : undefined;
+}
+
 export async function notepadBlockCreate(request: CreateBlockInNotepadRequest): Promise<BlockRecord> {
   const payload: CreateBlockInNotepadRequest = {
     ...request,
@@ -2216,22 +2402,48 @@ export async function notepadBlockCreate(request: CreateBlockInNotepadRequest): 
     throw new Error(`Notepad not found: ${payload.notepadId}`);
   }
   const capture = notepad.captureDefaults;
+  const projectCapture = payload.projectId ? (await projectGet(payload.projectId))?.captureDefaults : undefined;
+  const mergedThreadIds = mergeOptionalIdList(capture?.threadIds, projectCapture?.threadIds) ?? [];
+  const mergedLabelIds = mergeOptionalIdList(capture?.labelIds, projectCapture?.labelIds) ?? [];
+  const mergedCategoryIds = mergeOptionalIdList(capture?.categoryIds, projectCapture?.categoryIds) ?? [];
+  const resolvedThreadIds = [...mergedThreadIds];
+  const resolvedLabels = mergeOptionalLabelList(capture?.labels, projectCapture?.labels) ?? [];
+  const resolvedCategories = mergeOptionalLabelList(capture?.categories, projectCapture?.categories) ?? [];
+  const allRegistryIds = [...mergedThreadIds, ...mergedLabelIds, ...mergedCategoryIds]
+    .map((value) => value.trim())
+    .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+  for (const registryId of allRegistryIds) {
+    const entry = mockStore.registryEntries.find((candidate) => candidate.id === registryId);
+    if (!entry) continue;
+    if (!resolvedLabels.some((label) => label.toLowerCase() === entry.name.toLowerCase())) {
+      resolvedLabels.push(entry.name);
+    }
+    if (entry.kind === "thread") {
+      if (!resolvedThreadIds.includes(entry.id)) {
+        resolvedThreadIds.push(entry.id);
+      }
+      continue;
+    }
+    if (!resolvedCategories.some((category) => category.toLowerCase() === entry.name.toLowerCase())) {
+      resolvedCategories.push(entry.name);
+    }
+  }
   const atom = await atomCreate({
     rawText: payload.rawText,
     body: payload.body,
     captureSource: payload.captureSource ?? "ui",
     initialFacets: capture?.initialFacets ?? ["task"],
-    relations: { threadIds: capture?.threadIds ?? [] },
+    relations: { threadIds: resolvedThreadIds },
     facetData: {
       task: {
-        status: capture?.taskStatus ?? "todo",
-        priority: capture?.taskPriority ?? 3,
+        status: capture?.taskStatus ?? projectCapture?.taskStatus ?? "todo",
+        priority: capture?.taskPriority ?? projectCapture?.taskPriority ?? 3,
         commitmentLevel: capture?.commitmentLevel,
         attentionLayer: capture?.attentionLayer
       },
       meta: {
-        labels: capture?.labels,
-        categories: capture?.categories
+        labels: resolvedLabels.length > 0 ? resolvedLabels : undefined,
+        categories: resolvedCategories.length > 0 ? resolvedCategories : undefined
       }
     }
   });
@@ -2784,11 +2996,9 @@ export async function atomClassify(
 }
 
 function ensureFeatureFlags(): void {
-  if (mockStore.featureFlags.length > 0) {
-    return;
-  }
   const now = nowIso();
   const defaultEnabled = new Set<FeatureFlag["key"]>([
+    "workspace.registry",
     "workspace.notepad_ui_v2",
     "workspace.notepad_open_notepad_v2",
     "workspace.inline_tags",
@@ -2796,6 +3006,8 @@ function ensureFeatureFlags(): void {
     "workspace.projects_v1",
     "workspace.notepad_project_split_ui",
     "workspace.project_default_views",
+    "workspace.project_context_chips_v1",
+    "workspace.label_registry_ui_v1",
     "workspace.scheduler",
     "workspace.decay_engine",
     "workspace.decision_queue",
@@ -2825,13 +3037,43 @@ function ensureFeatureFlags(): void {
     "workspace.notepad_context_menu",
     "workspace.projects_v1",
     "workspace.notepad_project_split_ui",
-    "workspace.project_default_views"
+    "workspace.project_default_views",
+    "workspace.project_context_chips_v1",
+    "workspace.label_registry_ui_v1"
   ];
-  mockStore.featureFlags = keys.map((key) => ({
-    key,
-    enabled: defaultEnabled.has(key),
-    updatedAt: now
-  }));
+  if (mockStore.featureFlags.length === 0) {
+    mockStore.featureFlags = keys.map((key) => ({
+      key,
+      enabled: defaultEnabled.has(key),
+      updatedAt: now
+    }));
+    return;
+  }
+  let changed = false;
+  const known = new Set(mockStore.featureFlags.map((flag) => flag.key));
+  for (const key of keys) {
+    if (known.has(key)) {
+      continue;
+    }
+    mockStore.featureFlags.push({
+      key,
+      enabled: defaultEnabled.has(key),
+      updatedAt: now
+    });
+    changed = true;
+  }
+  const labelsUiEnabled = mockStore.featureFlags.find((flag) => flag.key === "workspace.label_registry_ui_v1")?.enabled ?? true;
+  if (labelsUiEnabled) {
+    const registryFlag = mockStore.featureFlags.find((flag) => flag.key === "workspace.registry");
+    if (registryFlag && !registryFlag.enabled) {
+      registryFlag.enabled = true;
+      registryFlag.updatedAt = now;
+      changed = true;
+    }
+  }
+  if (changed) {
+    persistMockStore();
+  }
 }
 
 function ensureDefaultWorkspaceJobs(): void {

@@ -43,7 +43,10 @@ impl SessionManager {
         let sender = {
             let sessions = self.sessions.lock().await;
             let Some(handle) = sessions.get(run_id) else {
-                return Err(AppError::NotFound(format!("No active session for run {}", run_id)));
+                return Err(AppError::NotFound(format!(
+                    "No active session for run {}",
+                    run_id
+                )));
             };
             handle.sender.clone()
         };
@@ -56,7 +59,7 @@ impl SessionManager {
         Ok(())
     }
 
-pub async fn close_session(&self, run_id: &str) {
+    pub async fn close_session(&self, run_id: &str) {
         let mut sessions = self.sessions.lock().await;
         sessions.remove(run_id);
     }

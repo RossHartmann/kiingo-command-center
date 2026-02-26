@@ -1,6 +1,7 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AppSettings, CapabilityProfile, CliAllowlistMode, Provider, SandboxMode, StartRunPayload, WorkspaceGrant,
+    AppSettings, CapabilityProfile, CliAllowlistMode, Provider, SandboxMode, StartRunPayload,
+    WorkspaceGrant,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -72,10 +73,14 @@ impl PolicyEngine {
         .map(ToString::to_string)
         .collect();
 
-        let advanced_flags = ["mcp-config", "strict-mcp-config", "dangerously-skip-permissions"]
-            .into_iter()
-            .map(ToString::to_string)
-            .collect();
+        let advanced_flags = [
+            "mcp-config",
+            "strict-mcp-config",
+            "dangerously-skip-permissions",
+        ]
+        .into_iter()
+        .map(ToString::to_string)
+        .collect();
 
         Self {
             codex_base_flags,
@@ -94,7 +99,12 @@ impl PolicyEngine {
         self.validate_workspace(&payload.cwd, workspace_grants)?;
         self.validate_runtime_bounds(payload)?;
         self.validate_harness(payload)?;
-        self.validate_flags(payload.provider, &payload.optional_flags, settings, capability)?;
+        self.validate_flags(
+            payload.provider,
+            &payload.optional_flags,
+            settings,
+            capability,
+        )?;
 
         if capability.blocked {
             return Err(AppError::Cli(format!(
@@ -190,9 +200,7 @@ impl PolicyEngine {
         };
 
         if let Some(permissions) = &harness.permissions {
-            if permissions.auto_approve
-                && permissions.sandbox_mode == SandboxMode::FullAccess
-            {
+            if permissions.auto_approve && permissions.sandbox_mode == SandboxMode::FullAccess {
                 return Err(AppError::Policy(
                     "autoApprove + full-access sandbox is denied by policy".to_string(),
                 ));
@@ -201,11 +209,15 @@ impl PolicyEngine {
 
         if let Some(allowlist) = &harness.cli_allowlist {
             if allowlist.entries.is_empty() {
-                return Err(AppError::Policy("cliAllowlist.entries cannot be empty".to_string()));
+                return Err(AppError::Policy(
+                    "cliAllowlist.entries cannot be empty".to_string(),
+                ));
             }
             for entry in &allowlist.entries {
                 if entry.name.trim().is_empty() {
-                    return Err(AppError::Policy("cliAllowlist entry name cannot be empty".to_string()));
+                    return Err(AppError::Policy(
+                        "cliAllowlist entry name cannot be empty".to_string(),
+                    ));
                 }
                 if entry.path.trim().is_empty() {
                     return Err(AppError::Policy(format!(
@@ -215,7 +227,12 @@ impl PolicyEngine {
                 }
             }
             if allowlist.mode == Some(CliAllowlistMode::Wrapper)
-                && allowlist.wrapper_name.as_deref().map(str::trim).unwrap_or_default().is_empty()
+                && allowlist
+                    .wrapper_name
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .is_empty()
             {
                 return Err(AppError::Policy(
                     "cliAllowlist.wrapperName cannot be empty in wrapper mode".to_string(),
@@ -225,7 +242,9 @@ impl PolicyEngine {
 
         if let Some(prelude) = &harness.shell_prelude {
             if prelude.content.trim().is_empty() {
-                return Err(AppError::Policy("shellPrelude content cannot be empty".to_string()));
+                return Err(AppError::Policy(
+                    "shellPrelude content cannot be empty".to_string(),
+                ));
             }
         }
 
@@ -252,7 +271,9 @@ impl PolicyEngine {
         let mut seen_flags = Vec::new();
         for arg in args {
             if arg.contains('\0') {
-                return Err(AppError::Policy("Resolved command contains null byte".to_string()));
+                return Err(AppError::Policy(
+                    "Resolved command contains null byte".to_string(),
+                ));
             }
 
             if arg
@@ -268,7 +289,9 @@ impl PolicyEngine {
             if let Some(raw_key) = arg.strip_prefix("--") {
                 let key = raw_key.split('=').next().unwrap_or_default();
                 if key.is_empty() {
-                    return Err(AppError::Policy("Resolved command contains empty long flag".to_string()));
+                    return Err(AppError::Policy(
+                        "Resolved command contains empty long flag".to_string(),
+                    ));
                 }
                 self.validate_flag_key(
                     key,
@@ -303,7 +326,9 @@ impl PolicyEngine {
             .map(|grant| normalize_path(&grant.path))
             .collect::<AppResult<Vec<_>>>()?;
 
-        let allowed = active_grants.iter().any(|grant| cwd_path.starts_with(grant));
+        let allowed = active_grants
+            .iter()
+            .any(|grant| cwd_path.starts_with(grant));
         if !allowed {
             return Err(AppError::Policy(format!(
                 "Workspace {} is not granted. Add a workspace grant in Settings.",
@@ -589,7 +614,10 @@ mod tests {
         let path = cwd.to_string_lossy().to_string();
 
         let mut flags = BTreeMap::new();
-        flags.insert("__resume_session_id".to_string(), serde_json::json!("session-1"));
+        flags.insert(
+            "__resume_session_id".to_string(),
+            serde_json::json!("session-1"),
+        );
 
         let payload = StartRunPayload {
             provider: Provider::Codex,

@@ -18,7 +18,12 @@ pub fn apply_harness_capabilities(
         };
     };
 
-    let supports = |flag: &str| capabilities.supported_flags.iter().any(|value| value == flag);
+    let supports = |flag: &str| {
+        capabilities
+            .supported_flags
+            .iter()
+            .any(|value| value == flag)
+    };
     let supports_any = |flags: &[&str]| flags.iter().any(|flag| supports(flag));
 
     if (harness.resume_session_id.is_some() || harness.continue_session == Some(true))
@@ -78,7 +83,11 @@ pub fn apply_harness_capabilities(
         harness.append_system_prompt = None;
     }
 
-    if harness.tools.as_ref().map(|tools| !tools.is_empty()).unwrap_or(false)
+    if harness
+        .tools
+        .as_ref()
+        .map(|tools| !tools.is_empty())
+        .unwrap_or(false)
         && !supports_any(&["--tools", "--allowedTools"])
     {
         warnings.push(
@@ -88,7 +97,11 @@ pub fn apply_harness_capabilities(
         harness.tools = None;
     }
 
-    if harness.images.as_ref().map(|images| !images.is_empty()).unwrap_or(false)
+    if harness
+        .images
+        .as_ref()
+        .map(|images| !images.is_empty())
+        .unwrap_or(false)
         && !supports_any(&["--image", "--input-format"])
     {
         warnings.push(

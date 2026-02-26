@@ -129,6 +129,10 @@ async function loadAllMetricBindings(): Promise<MetricBinding[]> {
 export const OMNI_SCROLL_TO_METRIC = "omni:scroll-to-metric";
 export const OMNI_OPEN_NOTEPAD = "omni:open-notepad";
 export const OMNI_OPEN_NOTEPAD_BY_CATEGORY = "omni:open-notepad-by-category";
+export interface OmniOpenNotepadDetail {
+  notepadId?: string;
+  projectId?: string;
+}
 
 function parseCategoryQuery(query: string): { categories: string[]; filterMode: "or" | "and" } {
   let trimmed = query.trim();
@@ -437,7 +441,11 @@ export function OmniSearch() {
             const opened = await projectOpen(result.projectId);
             actions.selectScreen("notepad");
             setTimeout(() => {
-              window.dispatchEvent(new CustomEvent(OMNI_OPEN_NOTEPAD, { detail: { notepadId: opened.defaultViewId } }));
+              window.dispatchEvent(
+                new CustomEvent<OmniOpenNotepadDetail>(OMNI_OPEN_NOTEPAD, {
+                  detail: { notepadId: opened.defaultViewId, projectId: opened.projectId }
+                })
+              );
             }, 120);
           } catch {
             actions.selectScreen("projects");
@@ -447,7 +455,7 @@ export function OmniSearch() {
         actions.selectScreen("notepad");
         const notepadId = result.notepadId;
         setTimeout(() => {
-          window.dispatchEvent(new CustomEvent(OMNI_OPEN_NOTEPAD, { detail: { notepadId } }));
+          window.dispatchEvent(new CustomEvent<OmniOpenNotepadDetail>(OMNI_OPEN_NOTEPAD, { detail: { notepadId } }));
         }, 120);
       } else if (result.kind === "command" && result.command === "open_notepad") {
         setMode("open_notepad");

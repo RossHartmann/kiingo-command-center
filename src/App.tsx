@@ -25,7 +25,9 @@ import { CcoPrinciplesScreen } from "./screens/CcoPrinciplesScreen";
 import { ChroPrinciplesScreen } from "./screens/ChroPrinciplesScreen";
 import { TasksScreen } from "./screens/TasksScreen";
 import { NotepadScreen } from "./screens/NotepadScreen";
+import { JournalScreen } from "./screens/JournalScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
+import { LabelRegistryScreen } from "./screens/LabelRegistryScreen";
 
 export default function App(): JSX.Element {
   const state = useAppState();
@@ -53,6 +55,12 @@ export default function App(): JSX.Element {
         return <ProjectsScreen />;
       case "notepad":
         return <NotepadScreen />;
+      case "journal":
+        return <JournalScreen journalType="journal" />;
+      case "food-journal":
+        return <JournalScreen journalType="food-journal" />;
+      case "labels":
+        return <LabelRegistryScreen />;
       case "settings":
         return <SettingsScreen />;
       case "chat":

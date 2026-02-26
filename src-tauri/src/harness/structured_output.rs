@@ -57,7 +57,10 @@ pub fn validate_structured_output(
         Err(error) => {
             return StructuredOutputValidationResult {
                 value: Some(value),
-                error: Some(format!("Failed to validate structured output schema: {}", error)),
+                error: Some(format!(
+                    "Failed to validate structured output schema: {}",
+                    error
+                )),
                 errors: vec![],
             }
         }
@@ -115,10 +118,8 @@ mod tests {
             "required": ["ok"],
             "additionalProperties": false
         });
-        let validation = validate_structured_output(
-            Some(serde_json::json!({"ok": "nope"})),
-            Some(&schema),
-        );
+        let validation =
+            validate_structured_output(Some(serde_json::json!({"ok": "nope"})), Some(&schema));
         assert!(validation.error.is_some());
         assert!(!validation.errors.is_empty());
     }

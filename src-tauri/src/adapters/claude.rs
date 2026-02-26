@@ -37,7 +37,9 @@ impl Adapter for ClaudeAdapter {
         binary_path: &str,
     ) -> AppResult<ValidatedCommand> {
         if capability.blocked {
-            return Err(AppError::Cli("Claude CLI is blocked by compatibility profile".to_string()));
+            return Err(AppError::Cli(
+                "Claude CLI is blocked by compatibility profile".to_string(),
+            ));
         }
 
         let mut args = Vec::new();
@@ -75,8 +77,16 @@ impl Adapter for ClaudeAdapter {
             .as_ref()
             .map(|harness| {
                 harness.input_format.as_deref() == Some("stream-json")
-                    || harness.piped_content.as_deref().map(|content| !content.trim().is_empty()).unwrap_or(false)
-                    || harness.images.as_ref().map(|images| !images.is_empty()).unwrap_or(false)
+                    || harness
+                        .piped_content
+                        .as_deref()
+                        .map(|content| !content.trim().is_empty())
+                        .unwrap_or(false)
+                    || harness
+                        .images
+                        .as_ref()
+                        .map(|images| !images.is_empty())
+                        .unwrap_or(false)
             })
             .unwrap_or(false);
 
@@ -155,7 +165,10 @@ impl Adapter for ClaudeAdapter {
                 for server in &mcp.servers {
                     let mut value = serde_json::Map::new();
                     if let Some(command) = &server.command {
-                        value.insert("command".to_string(), serde_json::Value::String(command.clone()));
+                        value.insert(
+                            "command".to_string(),
+                            serde_json::Value::String(command.clone()),
+                        );
                     }
                     if let Some(args) = &server.args {
                         value.insert("args".to_string(), serde_json::json!(args));
@@ -170,7 +183,10 @@ impl Adapter for ClaudeAdapter {
                         value.insert("headers".to_string(), serde_json::json!(headers));
                     }
                     if let Some(transport) = &server.r#type {
-                        value.insert("type".to_string(), serde_json::Value::String(transport.clone()));
+                        value.insert(
+                            "type".to_string(),
+                            serde_json::Value::String(transport.clone()),
+                        );
                     }
                     servers.insert(server.name.clone(), serde_json::Value::Object(value));
                 }
@@ -183,8 +199,8 @@ impl Adapter for ClaudeAdapter {
 
             if let Some(structured_output) = &harness.structured_output {
                 if !use_stream_input {
-                    let schema_path =
-                        std::env::temp_dir().join(format!("claude-schema-{}.json", uuid::Uuid::new_v4()));
+                    let schema_path = std::env::temp_dir()
+                        .join(format!("claude-schema-{}.json", uuid::Uuid::new_v4()));
                     std::fs::write(
                         &schema_path,
                         serde_json::to_vec_pretty(&structured_output.schema)
@@ -193,7 +209,8 @@ impl Adapter for ClaudeAdapter {
                     .map_err(|error| AppError::Io(error.to_string()))?;
                     args.push("--json-schema".to_string());
                     args.push(schema_path.to_string_lossy().to_string());
-                    meta.cleanup_paths.push(schema_path.to_string_lossy().to_string());
+                    meta.cleanup_paths
+                        .push(schema_path.to_string_lossy().to_string());
                 }
                 meta.structured_output_schema = Some(structured_output.schema.clone());
                 meta.structured_output_strict = structured_output.strict.unwrap_or(false);
@@ -324,7 +341,10 @@ impl Adapter for ClaudeAdapter {
                 .unwrap_or_default();
 
             if event_type == "assistant" {
-                if let Some(message) = parsed_obj.get("message").and_then(|value| value.as_object()) {
+                if let Some(message) = parsed_obj
+                    .get("message")
+                    .and_then(|value| value.as_object())
+                {
                     if let Some(model) = message.get("model").and_then(|value| value.as_str()) {
                         state.model = Some(model.to_string());
                     }
@@ -347,13 +367,19 @@ impl Adapter for ClaudeAdapter {
             }
 
             if event_type == "user" {
-                if let Some(message) = parsed_obj.get("message").and_then(|value| value.as_object()) {
-                    if let Some(content) = message.get("content").and_then(|value| value.as_array()) {
+                if let Some(message) = parsed_obj
+                    .get("message")
+                    .and_then(|value| value.as_object())
+                {
+                    if let Some(content) = message.get("content").and_then(|value| value.as_array())
+                    {
                         for part in content {
                             let Some(part_obj) = part.as_object() else {
                                 continue;
                             };
-                            if part_obj.get("type").and_then(|value| value.as_str()) != Some("tool_result") {
+                            if part_obj.get("type").and_then(|value| value.as_str())
+                                != Some("tool_result")
+                            {
                                 continue;
                             }
                             let tool_use_id = part_obj
@@ -393,9 +419,14 @@ impl Adapter for ClaudeAdapter {
             }
 
             if event_type == "message_start" {
-                if let Some(message) = parsed_obj.get("message").and_then(|value| value.as_object()) {
+                if let Some(message) = parsed_obj
+                    .get("message")
+                    .and_then(|value| value.as_object())
+                {
                     if let Some(usage) = message.get("usage").and_then(|value| value.as_object()) {
-                        if let Some(input_tokens) = usage.get("input_tokens").and_then(|value| value.as_i64()) {
+                        if let Some(input_tokens) =
+                            usage.get("input_tokens").and_then(|value| value.as_i64())
+                        {
                             state.input_tokens = input_tokens;
                         }
                     }
@@ -407,7 +438,9 @@ impl Adapter for ClaudeAdapter {
 
             if event_type == "message_delta" {
                 if let Some(usage) = parsed_obj.get("usage").and_then(|value| value.as_object()) {
-                    if let Some(output_tokens) = usage.get("output_tokens").and_then(|value| value.as_i64()) {
+                    if let Some(output_tokens) =
+                        usage.get("output_tokens").and_then(|value| value.as_i64())
+                    {
                         state.output_tokens = output_tokens;
                     }
                     if let Some(cached_tokens) = usage
@@ -428,9 +461,15 @@ impl Adapter for ClaudeAdapter {
                     .get("content_block")
                     .and_then(|value| value.as_object())
                 {
-                    let block_type = block.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+                    let block_type = block
+                        .get("type")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default();
                     if block_type == "tool_use" {
-                        let tool_id = block.get("id").cloned().unwrap_or_else(|| serde_json::json!(format!("tool_{}", index)));
+                        let tool_id = block
+                            .get("id")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!(format!("tool_{}", index)));
                         let tool_name = block
                             .get("name")
                             .and_then(|value| value.as_str())
@@ -473,9 +512,15 @@ impl Adapter for ClaudeAdapter {
                     .and_then(|value| value.as_u64())
                     .unwrap_or(0) as usize;
                 if let Some(delta) = parsed_obj.get("delta").and_then(|value| value.as_object()) {
-                    let delta_type = delta.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+                    let delta_type = delta
+                        .get("type")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default();
                     if delta_type == "text_delta" {
-                        let text = delta.get("text").and_then(|value| value.as_str()).unwrap_or_default();
+                        let text = delta
+                            .get("text")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default();
                         events.push(serde_json::json!({
                             "type": "text_delta",
                             "text": text
@@ -510,7 +555,9 @@ impl Adapter for ClaudeAdapter {
                         serde_json::json!({})
                     } else {
                         serde_json::from_str::<serde_json::Value>(&tool_state.input_buffer)
-                            .unwrap_or_else(|_| serde_json::json!({ "raw": tool_state.input_buffer }))
+                            .unwrap_or_else(
+                                |_| serde_json::json!({ "raw": tool_state.input_buffer }),
+                            )
                     };
                     if let Some(tool_obj) = tool_state.tool.as_object_mut() {
                         tool_obj.insert("input".to_string(), input.clone());
@@ -537,7 +584,8 @@ impl Adapter for ClaudeAdapter {
 
             if event_type == "result" {
                 if !state.has_text {
-                    if let Some(result) = parsed_obj.get("result").and_then(|value| value.as_str()) {
+                    if let Some(result) = parsed_obj.get("result").and_then(|value| value.as_str())
+                    {
                         if !result.trim().is_empty() {
                             events.push(serde_json::json!({
                                 "type": "text_complete",
@@ -547,17 +595,24 @@ impl Adapter for ClaudeAdapter {
                         }
                     }
                 }
-                if let Some(session_id) = parsed_obj.get("session_id").and_then(|value| value.as_str()) {
+                if let Some(session_id) = parsed_obj
+                    .get("session_id")
+                    .and_then(|value| value.as_str())
+                {
                     state.session_id = Some(session_id.to_string());
                 }
                 if let Some(model) = parsed_obj.get("model").and_then(|value| value.as_str()) {
                     state.model = Some(model.to_string());
                 }
                 if let Some(usage) = parsed_obj.get("usage").and_then(|value| value.as_object()) {
-                    if let Some(input_tokens) = usage.get("input_tokens").and_then(|value| value.as_i64()) {
+                    if let Some(input_tokens) =
+                        usage.get("input_tokens").and_then(|value| value.as_i64())
+                    {
                         state.input_tokens = input_tokens;
                     }
-                    if let Some(output_tokens) = usage.get("output_tokens").and_then(|value| value.as_i64()) {
+                    if let Some(output_tokens) =
+                        usage.get("output_tokens").and_then(|value| value.as_i64())
+                    {
                         state.output_tokens = output_tokens;
                     }
                     if let Some(cached_tokens) = usage
@@ -567,13 +622,19 @@ impl Adapter for ClaudeAdapter {
                         state.cached_tokens = cached_tokens;
                     }
                 }
-                if let Some(cost) = parsed_obj.get("total_cost_usd").and_then(|value| value.as_f64()) {
+                if let Some(cost) = parsed_obj
+                    .get("total_cost_usd")
+                    .and_then(|value| value.as_f64())
+                {
                     state.cost_usd = Some(cost);
                 }
                 if let Some(cost) = parsed_obj.get("cost_usd").and_then(|value| value.as_f64()) {
                     state.cost_usd = Some(cost);
                 }
-                if let Some(duration_ms) = parsed_obj.get("duration_ms").and_then(|value| value.as_f64()) {
+                if let Some(duration_ms) = parsed_obj
+                    .get("duration_ms")
+                    .and_then(|value| value.as_f64())
+                {
                     state.duration_ms = Some(duration_ms);
                 } else if state.duration_ms.is_none() {
                     if let Some(duration_ms) = parsed_obj
@@ -679,8 +740,14 @@ fn extract_message_text(message: &serde_json::Map<String, serde_json::Value>) ->
         let Some(part_obj) = part.as_object() else {
             continue;
         };
-        let part_type = part_obj.get("type").and_then(|value| value.as_str()).unwrap_or_default();
-        let part_text = part_obj.get("text").and_then(|value| value.as_str()).unwrap_or_default();
+        let part_type = part_obj
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let part_text = part_obj
+            .get("text")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
         if part_type == "text" {
             text.push_str(part_text);
         } else if part_type == "thinking" {
@@ -861,7 +928,8 @@ mod tests {
     use super::{extract_claude_result_text, resume_session_id, ClaudeAdapter};
     use crate::adapters::Adapter;
     use crate::models::{
-        CapabilityProfile, HarnessRequestOptions, Provider, RunMode, StartRunPayload, UnifiedPermission, UnifiedTool,
+        CapabilityProfile, HarnessRequestOptions, Provider, RunMode, StartRunPayload,
+        UnifiedPermission, UnifiedTool,
     };
     use std::collections::BTreeMap;
 
@@ -906,9 +974,10 @@ mod tests {
     fn builds_resume_command_with_stream_json_flags() {
         let adapter = ClaudeAdapter::default();
         let mut payload = base_payload();
-        payload
-            .optional_flags
-            .insert("__resume_session_id".to_string(), serde_json::json!("session-abc"));
+        payload.optional_flags.insert(
+            "__resume_session_id".to_string(),
+            serde_json::json!("session-abc"),
+        );
 
         let built = adapter
             .build_command(&payload, &capability(), "claude")
@@ -934,9 +1003,10 @@ mod tests {
     #[test]
     fn reads_internal_resume_id() {
         let mut payload = base_payload();
-        payload
-            .optional_flags
-            .insert("__resume_session_id".to_string(), serde_json::json!("  123  "));
+        payload.optional_flags.insert(
+            "__resume_session_id".to_string(),
+            serde_json::json!("  123  "),
+        );
         assert_eq!(resume_session_id(&payload), Some("123"));
     }
 
@@ -993,7 +1063,8 @@ mod tests {
         assert_eq!(
             assistant_events
                 .iter()
-                .filter(|event| event.get("type").and_then(|value| value.as_str()) == Some("text_complete"))
+                .filter(|event| event.get("type").and_then(|value| value.as_str())
+                    == Some("text_complete"))
                 .count(),
             1
         );
@@ -1006,7 +1077,8 @@ mod tests {
         assert_eq!(
             result_events
                 .iter()
-                .filter(|event| event.get("type").and_then(|value| value.as_str()) == Some("text_complete"))
+                .filter(|event| event.get("type").and_then(|value| value.as_str())
+                    == Some("text_complete"))
                 .count(),
             0
         );

@@ -11,30 +11,35 @@ mod session;
 mod workspace;
 
 use crate::models::{
-    AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
-    ArchiveAtomRequest, AtomRecord, AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord,
-    DeleteAtomRequest,
-    ClassificationResult, ClassificationSource, CreateAtomRequest, CreateBlockInNotepadRequest,
-    CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
-    DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest, ListConversationsFilters,
-    ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse, MetricSnapshot,
-    NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, ProjectDefinition, ProjectOpenResponse, RecurrenceInstance,
-    RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
-    SaveMetricDefinitionPayload, SaveNotepadViewRequest, SaveProfilePayload, SaveProjectDefinitionRequest, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
-    SetTaskStatusRequest, TaskReopenRequest,
-    SendConversationMessagePayload, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
-    UnbindMetricResponse, UpdateAtomRequest, UpdateScreenMetricLayoutPayload, WorkspaceCapabilities,
-    WorkspaceEventRecord, WorkspaceGrant, WorkspaceHealth,
-    GovernanceMeta, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload, JobDefinition,
-    JobMutationPayload, JobRunRecord, DecisionMutationPayload, DecisionPrompt, NotificationDeliveryRecord,
-    NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint, ProjectionDefinition,
-    ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
-    RegistrySuggestionsResponse, SemanticChunk, SemanticReindexResponse, SemanticSearchRequest,
-    SemanticSearchResponse, GovernancePoliciesResponse, FeatureFlag, WorkspaceCapabilitySnapshot, MigrationPlan,
-    MigrationRun, WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord,
-    WorkSessionStartRequest, WorkspaceMutationPayload, ConditionCancelRequest, ConditionFollowupRequest,
-    ConditionRecord, ConditionResolveRequest, ConditionSetDateRequest, ConditionSetPersonRequest,
-    ConditionSetTaskRequest, ListConditionsRequest, ObsidianTaskSyncResult,
+    AcceptedResponse, AppSettings, ArchiveAtomRequest, ArchiveConversationPayload, AtomRecord,
+    AttentionUpdateRequest, AttentionUpdateResponse, BindMetricToScreenPayload, BlockRecord,
+    BooleanResponse, CapabilitySnapshot, ClassificationResult, ClassificationSource,
+    ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest,
+    ConditionSetDateRequest, ConditionSetPersonRequest, ConditionSetTaskRequest,
+    ConversationDetail, ConversationRecord, ConversationSummary, CreateAtomRequest,
+    CreateBlockInNotepadRequest, CreateConversationPayload, DecisionGenerateRequest,
+    DecisionGenerateResponse, DecisionMutationPayload, DecisionPrompt, DeleteAtomRequest,
+    ExportResponse, FeatureFlag, GovernanceMeta, GovernancePoliciesResponse, JobDefinition,
+    JobMutationPayload, JobRunRecord, JournalEntry, JournalEntryMeta, ListAtomsRequest,
+    ListBlocksRequest, ListConditionsRequest, ListConversationsFilters, ListEventsRequest,
+    ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics,
+    MetricRefreshResponse, MetricSnapshot, MigrationPlan, MigrationRun, NotepadViewDefinition,
+    NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload,
+    ObsidianTaskSyncResult, PageResponse, PlacementRecord, PlacementReorderRequest, Profile,
+    ProjectDefinition, ProjectOpenResponse, ProjectionCheckpoint, ProjectionDefinition,
+    ProjectionMutationPayload, ProjectionRebuildResponse, Provider, RecurrenceInstance,
+    RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RegistryEntry,
+    RegistryMutationPayload, RegistrySuggestionsResponse, RenameConversationPayload, RerunResponse,
+    RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload, RunDetail,
+    SaveMetricDefinitionPayload, SaveNotepadViewRequest, SaveProfilePayload,
+    SaveProjectDefinitionRequest, SchedulerJob, ScreenMetricBinding, ScreenMetricView,
+    SemanticChunk, SemanticReindexResponse, SemanticSearchRequest, SemanticSearchResponse,
+    SendConversationMessagePayload, SetTaskStatusRequest, StartInteractiveSessionResponse,
+    StartRunPayload, StartRunResponse, TaskReopenRequest, UnbindMetricResponse, UpdateAtomRequest,
+    UpdateScreenMetricLayoutPayload, WorkSessionCancelRequest, WorkSessionEndRequest,
+    WorkSessionNoteRequest, WorkSessionRecord, WorkSessionStartRequest, WorkspaceCapabilities,
+    WorkspaceCapabilitySnapshot, WorkspaceEventRecord, WorkspaceGrant, WorkspaceHealth,
+    WorkspaceMutationPayload,
 };
 use crate::runner::RunnerCore;
 use std::path::Path;
@@ -50,8 +55,15 @@ struct AppState {
 }
 
 #[tauri::command]
-async fn start_run(state: tauri::State<'_, AppState>, payload: StartRunPayload) -> Result<StartRunResponse, String> {
-    state.runner.start_run(payload).await.map_err(to_client_error)
+async fn start_run(
+    state: tauri::State<'_, AppState>,
+    payload: StartRunPayload,
+) -> Result<StartRunResponse, String> {
+    state
+        .runner
+        .start_run(payload)
+        .await
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -59,7 +71,10 @@ fn create_conversation(
     state: tauri::State<'_, AppState>,
     payload: CreateConversationPayload,
 ) -> Result<ConversationRecord, String> {
-    state.runner.create_conversation(payload).map_err(to_client_error)
+    state
+        .runner
+        .create_conversation(payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -119,8 +134,15 @@ fn archive_conversation(
 }
 
 #[tauri::command]
-async fn cancel_run(state: tauri::State<'_, AppState>, run_id: String) -> Result<BooleanResponse, String> {
-    state.runner.cancel_run(&run_id).await.map_err(to_client_error)
+async fn cancel_run(
+    state: tauri::State<'_, AppState>,
+    run_id: String,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .cancel_run(&run_id)
+        .await
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -129,7 +151,10 @@ fn get_run(state: tauri::State<'_, AppState>, run_id: String) -> Result<Option<R
 }
 
 #[tauri::command]
-fn list_runs(state: tauri::State<'_, AppState>, filters: ListRunsFilters) -> Result<Vec<crate::models::RunRecord>, String> {
+fn list_runs(
+    state: tauri::State<'_, AppState>,
+    filters: ListRunsFilters,
+) -> Result<Vec<crate::models::RunRecord>, String> {
     state.runner.list_runs(filters).map_err(to_client_error)
 }
 
@@ -139,7 +164,11 @@ async fn rerun(
     run_id: String,
     overrides: serde_json::Value,
 ) -> Result<RerunResponse, String> {
-    state.runner.rerun(&run_id, overrides).await.map_err(to_client_error)
+    state
+        .runner
+        .rerun(&run_id, overrides)
+        .await
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -168,8 +197,15 @@ async fn send_session_input(
 }
 
 #[tauri::command]
-async fn end_session(state: tauri::State<'_, AppState>, run_id: String) -> Result<BooleanResponse, String> {
-    state.runner.end_session(&run_id).await.map_err(to_client_error)
+async fn end_session(
+    state: tauri::State<'_, AppState>,
+    run_id: String,
+) -> Result<BooleanResponse, String> {
+    state
+        .runner
+        .end_session(&run_id)
+        .await
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -195,7 +231,10 @@ fn list_profiles(state: tauri::State<'_, AppState>) -> Result<Vec<Profile>, Stri
 }
 
 #[tauri::command]
-fn save_profile(state: tauri::State<'_, AppState>, payload: SaveProfilePayload) -> Result<Profile, String> {
+fn save_profile(
+    state: tauri::State<'_, AppState>,
+    payload: SaveProfilePayload,
+) -> Result<Profile, String> {
     state.runner.save_profile(payload).map_err(to_client_error)
 }
 
@@ -223,11 +262,17 @@ async fn update_settings(
 
 #[tauri::command]
 fn list_workspace_grants(state: tauri::State<'_, AppState>) -> Result<Vec<WorkspaceGrant>, String> {
-    state.runner.list_workspace_grants().map_err(to_client_error)
+    state
+        .runner
+        .list_workspace_grants()
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
-fn grant_workspace(state: tauri::State<'_, AppState>, path: String) -> Result<WorkspaceGrant, String> {
+fn grant_workspace(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<WorkspaceGrant, String> {
     state.runner.grant_workspace(&path).map_err(to_client_error)
 }
 
@@ -237,7 +282,10 @@ fn export_run(
     run_id: String,
     format: String,
 ) -> Result<ExportResponse, String> {
-    state.runner.export_run(&run_id, &format).map_err(to_client_error)
+    state
+        .runner
+        .export_run(&run_id, &format)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -284,7 +332,10 @@ fn save_metric_definition(
     state: tauri::State<'_, AppState>,
     payload: SaveMetricDefinitionPayload,
 ) -> Result<MetricDefinition, String> {
-    state.runner.save_metric_definition(payload).map_err(to_client_error)
+    state
+        .runner
+        .save_metric_definition(payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -292,7 +343,21 @@ fn get_metric_definition(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<Option<MetricDefinition>, String> {
-    state.runner.get_metric_definition(&id).map_err(to_client_error)
+    state
+        .runner
+        .get_metric_definition(&id)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn get_metric_definition_by_slug(
+    state: tauri::State<'_, AppState>,
+    slug: String,
+) -> Result<Option<MetricDefinition>, String> {
+    state
+        .runner
+        .get_metric_definition_by_slug(&slug)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -300,7 +365,10 @@ fn list_metric_definitions(
     state: tauri::State<'_, AppState>,
     include_archived: Option<bool>,
 ) -> Result<Vec<MetricDefinition>, String> {
-    state.runner.list_metric_definitions(include_archived.unwrap_or(false)).map_err(to_client_error)
+    state
+        .runner
+        .list_metric_definitions(include_archived.unwrap_or(false))
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -308,7 +376,10 @@ fn archive_metric_definition(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<BooleanResponse, String> {
-    state.runner.archive_metric_definition(&id).map_err(to_client_error)
+    state
+        .runner
+        .archive_metric_definition(&id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -316,7 +387,10 @@ fn delete_metric_definition(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<BooleanResponse, String> {
-    state.runner.delete_metric_definition(&id).map_err(to_client_error)
+    state
+        .runner
+        .delete_metric_definition(&id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -324,7 +398,10 @@ fn get_latest_metric_snapshot(
     state: tauri::State<'_, AppState>,
     metric_id: String,
 ) -> Result<Option<MetricSnapshot>, String> {
-    state.runner.get_latest_metric_snapshot(&metric_id).map_err(to_client_error)
+    state
+        .runner
+        .get_latest_metric_snapshot(&metric_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -333,7 +410,10 @@ fn list_metric_snapshots(
     metric_id: String,
     limit: Option<u32>,
 ) -> Result<Vec<MetricSnapshot>, String> {
-    state.runner.list_metric_snapshots(&metric_id, limit).map_err(to_client_error)
+    state
+        .runner
+        .list_metric_snapshots(&metric_id, limit)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -341,7 +421,10 @@ fn get_metric_diagnostics(
     state: tauri::State<'_, AppState>,
     metric_id: String,
 ) -> Result<MetricDiagnostics, String> {
-    state.runner.get_metric_diagnostics(&metric_id).map_err(to_client_error)
+    state
+        .runner
+        .get_metric_diagnostics(&metric_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -349,7 +432,10 @@ fn bind_metric_to_screen(
     state: tauri::State<'_, AppState>,
     payload: BindMetricToScreenPayload,
 ) -> Result<ScreenMetricBinding, String> {
-    state.runner.bind_metric_to_screen(payload).map_err(to_client_error)
+    state
+        .runner
+        .bind_metric_to_screen(payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -358,7 +444,10 @@ fn reorder_screen_metrics(
     screen_id: String,
     metric_ids: Vec<String>,
 ) -> Result<BooleanResponse, String> {
-    state.runner.reorder_screen_metrics(&screen_id, &metric_ids).map_err(to_client_error)
+    state
+        .runner
+        .reorder_screen_metrics(&screen_id, &metric_ids)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -366,7 +455,10 @@ fn update_screen_metric_layout(
     state: tauri::State<'_, AppState>,
     payload: UpdateScreenMetricLayoutPayload,
 ) -> Result<BooleanResponse, String> {
-    state.runner.update_screen_metric_layout(&payload.screen_id, &payload.layouts).map_err(to_client_error)
+    state
+        .runner
+        .update_screen_metric_layout(&payload.screen_id, &payload.layouts)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -374,7 +466,10 @@ fn unbind_metric_from_screen(
     state: tauri::State<'_, AppState>,
     binding_id: String,
 ) -> Result<UnbindMetricResponse, String> {
-    state.runner.unbind_metric_from_screen(&binding_id).map_err(to_client_error)
+    state
+        .runner
+        .unbind_metric_from_screen(&binding_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -382,7 +477,10 @@ fn get_screen_metrics(
     state: tauri::State<'_, AppState>,
     screen_id: String,
 ) -> Result<Vec<ScreenMetricView>, String> {
-    state.runner.get_screen_metrics(&screen_id).map_err(to_client_error)
+    state
+        .runner
+        .get_screen_metrics(&screen_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -390,7 +488,11 @@ async fn refresh_metric(
     state: tauri::State<'_, AppState>,
     metric_id: String,
 ) -> Result<MetricRefreshResponse, String> {
-    state.runner.refresh_metric(&metric_id).await.map_err(to_client_error)
+    state
+        .runner
+        .refresh_metric(&metric_id)
+        .await
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -398,14 +500,23 @@ async fn refresh_screen_metrics(
     state: tauri::State<'_, AppState>,
     screen_id: String,
 ) -> Result<Vec<MetricRefreshResponse>, String> {
-    state.runner.refresh_screen_metrics(&screen_id).await.map_err(to_client_error)
+    state
+        .runner
+        .refresh_screen_metrics(&screen_id)
+        .await
+        .map_err(to_client_error)
 }
 
 // ─── Workspace Commands ──────────────────────────────────────────────────
 
 #[tauri::command]
-fn workspace_capabilities_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceCapabilities, String> {
-    state.runner.workspace_capabilities_get().map_err(to_client_error)
+fn workspace_capabilities_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCapabilities, String> {
+    state
+        .runner
+        .workspace_capabilities_get()
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -414,7 +525,9 @@ fn workspace_health_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceHe
 }
 
 #[tauri::command]
-async fn obsidian_tasks_sync(state: tauri::State<'_, AppState>) -> Result<ObsidianTaskSyncResult, String> {
+async fn obsidian_tasks_sync(
+    state: tauri::State<'_, AppState>,
+) -> Result<ObsidianTaskSyncResult, String> {
     let runner = state.runner.clone();
     match tauri::async_runtime::spawn_blocking(move || runner.obsidian_tasks_sync()).await {
         Ok(result) => result.map_err(to_client_error),
@@ -431,12 +544,18 @@ fn atoms_list(
 }
 
 #[tauri::command]
-fn atom_get(state: tauri::State<'_, AppState>, atom_id: String) -> Result<Option<AtomRecord>, String> {
+fn atom_get(
+    state: tauri::State<'_, AppState>,
+    atom_id: String,
+) -> Result<Option<AtomRecord>, String> {
     state.runner.atom_get(&atom_id).map_err(to_client_error)
 }
 
 #[tauri::command]
-fn atom_create(state: tauri::State<'_, AppState>, payload: CreateAtomRequest) -> Result<AtomRecord, String> {
+fn atom_create(
+    state: tauri::State<'_, AppState>,
+    payload: CreateAtomRequest,
+) -> Result<AtomRecord, String> {
     state.runner.atom_create(payload).map_err(to_client_error)
 }
 
@@ -446,7 +565,10 @@ fn atom_update(
     atom_id: String,
     payload: UpdateAtomRequest,
 ) -> Result<AtomRecord, String> {
-    state.runner.atom_update(&atom_id, payload).map_err(to_client_error)
+    state
+        .runner
+        .atom_update(&atom_id, payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -455,7 +577,10 @@ fn task_status_set(
     atom_id: String,
     payload: SetTaskStatusRequest,
 ) -> Result<AtomRecord, String> {
-    state.runner.task_status_set(&atom_id, payload).map_err(to_client_error)
+    state
+        .runner
+        .task_status_set(&atom_id, payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -477,7 +602,10 @@ fn task_reopen(
     atom_id: String,
     payload: TaskReopenRequest,
 ) -> Result<AtomRecord, String> {
-    state.runner.task_reopen(&atom_id, payload).map_err(to_client_error)
+    state
+        .runner
+        .task_reopen(&atom_id, payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -486,7 +614,10 @@ fn atom_archive(
     atom_id: String,
     payload: ArchiveAtomRequest,
 ) -> Result<AtomRecord, String> {
-    state.runner.atom_archive(&atom_id, payload).map_err(to_client_error)
+    state
+        .runner
+        .atom_archive(&atom_id, payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -495,7 +626,10 @@ fn atom_delete(
     atom_id: String,
     payload: DeleteAtomRequest,
 ) -> Result<BooleanResponse, String> {
-    state.runner.atom_delete(&atom_id, payload).map_err(to_client_error)
+    state
+        .runner
+        .atom_delete(&atom_id, payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -521,7 +655,10 @@ fn notepad_get(
     state: tauri::State<'_, AppState>,
     notepad_id: String,
 ) -> Result<Option<NotepadViewDefinition>, String> {
-    state.runner.notepad_get(&notepad_id).map_err(to_client_error)
+    state
+        .runner
+        .notepad_get(&notepad_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -545,6 +682,42 @@ fn notepad_delete(
 }
 
 #[tauri::command]
+fn journal_list_entries(
+    state: tauri::State<'_, AppState>,
+    journal_type: String,
+) -> Result<Vec<JournalEntryMeta>, String> {
+    state
+        .runner
+        .journal_list_entries(&journal_type)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn journal_get_entry(
+    state: tauri::State<'_, AppState>,
+    journal_type: String,
+    date: String,
+) -> Result<Option<JournalEntry>, String> {
+    state
+        .runner
+        .journal_get_entry(&journal_type, &date)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
+fn journal_save_entry(
+    state: tauri::State<'_, AppState>,
+    journal_type: String,
+    date: String,
+    content: String,
+) -> Result<Option<JournalEntry>, String> {
+    state
+        .runner
+        .journal_save_entry(&journal_type, &date, &content)
+        .map_err(to_client_error)
+}
+
+#[tauri::command]
 fn projects_list(state: tauri::State<'_, AppState>) -> Result<Vec<ProjectDefinition>, String> {
     state.runner.projects_list().map_err(to_client_error)
 }
@@ -554,7 +727,10 @@ fn project_get(
     state: tauri::State<'_, AppState>,
     project_id: String,
 ) -> Result<Option<ProjectDefinition>, String> {
-    state.runner.project_get(&project_id).map_err(to_client_error)
+    state
+        .runner
+        .project_get(&project_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -582,7 +758,10 @@ fn project_open(
     state: tauri::State<'_, AppState>,
     project_id: String,
 ) -> Result<ProjectOpenResponse, String> {
-    state.runner.project_open(&project_id).map_err(to_client_error)
+    state
+        .runner
+        .project_open(&project_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -590,7 +769,10 @@ fn project_views_list(
     state: tauri::State<'_, AppState>,
     project_id: String,
 ) -> Result<Vec<NotepadViewDefinition>, String> {
-    state.runner.project_views_list(&project_id).map_err(to_client_error)
+    state
+        .runner
+        .project_views_list(&project_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -626,7 +808,10 @@ fn blocks_list(
 }
 
 #[tauri::command]
-fn block_get(state: tauri::State<'_, AppState>, block_id: String) -> Result<Option<BlockRecord>, String> {
+fn block_get(
+    state: tauri::State<'_, AppState>,
+    block_id: String,
+) -> Result<Option<BlockRecord>, String> {
     state.runner.block_get(&block_id).map_err(to_client_error)
 }
 
@@ -635,7 +820,10 @@ fn placements_list(
     state: tauri::State<'_, AppState>,
     request: ListPlacementsRequest,
 ) -> Result<PageResponse<PlacementRecord>, String> {
-    state.runner.placements_list(request).map_err(to_client_error)
+    state
+        .runner
+        .placements_list(request)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -643,7 +831,10 @@ fn placement_save(
     state: tauri::State<'_, AppState>,
     placement: WorkspaceMutationPayload,
 ) -> Result<PlacementRecord, String> {
-    state.runner.placement_save(placement).map_err(to_client_error)
+    state
+        .runner
+        .placement_save(placement)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -675,7 +866,10 @@ fn conditions_list(
     state: tauri::State<'_, AppState>,
     request: ListConditionsRequest,
 ) -> Result<PageResponse<ConditionRecord>, String> {
-    state.runner.conditions_list(request).map_err(to_client_error)
+    state
+        .runner
+        .conditions_list(request)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -784,7 +978,10 @@ fn classification_preview(
     state: tauri::State<'_, AppState>,
     raw_text: String,
 ) -> Result<ClassificationResult, String> {
-    state.runner.classification_preview(raw_text).map_err(to_client_error)
+    state
+        .runner
+        .classification_preview(raw_text)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -815,12 +1012,18 @@ fn rules_list(
 }
 
 #[tauri::command]
-fn rule_get(state: tauri::State<'_, AppState>, rule_id: String) -> Result<Option<RuleDefinition>, String> {
+fn rule_get(
+    state: tauri::State<'_, AppState>,
+    rule_id: String,
+) -> Result<Option<RuleDefinition>, String> {
     state.runner.rule_get(&rule_id).map_err(to_client_error)
 }
 
 #[tauri::command]
-fn rule_save(state: tauri::State<'_, AppState>, rule: RuleMutationPayload) -> Result<RuleDefinition, String> {
+fn rule_save(
+    state: tauri::State<'_, AppState>,
+    rule: RuleMutationPayload,
+) -> Result<RuleDefinition, String> {
     state.runner.rule_save(rule).map_err(to_client_error)
 }
 
@@ -862,12 +1065,18 @@ fn jobs_list(
 }
 
 #[tauri::command]
-fn job_get(state: tauri::State<'_, AppState>, job_id: String) -> Result<Option<JobDefinition>, String> {
+fn job_get(
+    state: tauri::State<'_, AppState>,
+    job_id: String,
+) -> Result<Option<JobDefinition>, String> {
     state.runner.job_get(&job_id).map_err(to_client_error)
 }
 
 #[tauri::command]
-fn job_save(state: tauri::State<'_, AppState>, job: JobMutationPayload) -> Result<JobDefinition, String> {
+fn job_save(
+    state: tauri::State<'_, AppState>,
+    job: JobMutationPayload,
+) -> Result<JobDefinition, String> {
     state.runner.job_save(job).map_err(to_client_error)
 }
 
@@ -936,7 +1145,10 @@ fn decision_create(
     state: tauri::State<'_, AppState>,
     prompt: DecisionMutationPayload,
 ) -> Result<DecisionPrompt, String> {
-    state.runner.decision_create(prompt).map_err(to_client_error)
+    state
+        .runner
+        .decision_create(prompt)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -944,7 +1156,10 @@ fn decision_get(
     state: tauri::State<'_, AppState>,
     decision_id: String,
 ) -> Result<Option<DecisionPrompt>, String> {
-    state.runner.decision_get(&decision_id).map_err(to_client_error)
+    state
+        .runner
+        .decision_get(&decision_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1005,7 +1220,10 @@ fn work_session_get(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<Option<WorkSessionRecord>, String> {
-    state.runner.work_session_get(&session_id).map_err(to_client_error)
+    state
+        .runner
+        .work_session_get(&session_id)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1013,7 +1231,10 @@ fn work_session_start(
     state: tauri::State<'_, AppState>,
     request: WorkSessionStartRequest,
 ) -> Result<WorkSessionRecord, String> {
-    state.runner.work_session_start(request).map_err(to_client_error)
+    state
+        .runner
+        .work_session_start(request)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1081,7 +1302,10 @@ fn recurrence_template_save(
     state: tauri::State<'_, AppState>,
     payload: WorkspaceMutationPayload,
 ) -> Result<RecurrenceTemplate, String> {
-    state.runner.recurrence_template_save(payload).map_err(to_client_error)
+    state
+        .runner
+        .recurrence_template_save(payload)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1115,7 +1339,10 @@ fn recurrence_spawn(
     state: tauri::State<'_, AppState>,
     request: RecurrenceSpawnRequest,
 ) -> Result<RecurrenceSpawnResponse, String> {
-    state.runner.recurrence_spawn(request).map_err(to_client_error)
+    state
+        .runner
+        .recurrence_spawn(request)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1153,7 +1380,10 @@ fn notification_send(
     state: tauri::State<'_, AppState>,
     message: NotificationMutationPayload,
 ) -> Result<NotificationMessage, String> {
-    state.runner.notification_send(message).map_err(to_client_error)
+    state
+        .runner
+        .notification_send(message)
+        .map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1348,7 +1578,9 @@ fn semantic_chunk_get(
 }
 
 #[tauri::command]
-fn governance_policies_get(state: tauri::State<'_, AppState>) -> Result<GovernancePoliciesResponse, String> {
+fn governance_policies_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<GovernancePoliciesResponse, String> {
     state
         .runner
         .governance_policies_get()
@@ -1371,10 +1603,7 @@ fn atom_governance_update(
 
 #[tauri::command]
 fn feature_flags_list(state: tauri::State<'_, AppState>) -> Result<Vec<FeatureFlag>, String> {
-    state
-        .runner
-        .feature_flags_list()
-        .map_err(to_client_error)
+    state.runner.feature_flags_list().map_err(to_client_error)
 }
 
 #[tauri::command]
@@ -1392,7 +1621,9 @@ fn feature_flag_update(
 }
 
 #[tauri::command]
-fn capability_snapshot_get(state: tauri::State<'_, AppState>) -> Result<WorkspaceCapabilitySnapshot, String> {
+fn capability_snapshot_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceCapabilitySnapshot, String> {
     state
         .runner
         .capability_snapshot_get()
@@ -1454,7 +1685,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())?;
             std::fs::create_dir_all(&app_data_dir).map_err(|error| error.to_string())?;
             init_tracing(&app_data_dir).map_err(|error| error.to_string())?;
 
@@ -1543,6 +1777,7 @@ pub fn run() {
             has_provider_token,
             save_metric_definition,
             get_metric_definition,
+            get_metric_definition_by_slug,
             list_metric_definitions,
             archive_metric_definition,
             delete_metric_definition,
@@ -1573,6 +1808,9 @@ pub fn run() {
             notepad_get,
             notepad_save,
             notepad_delete,
+            journal_list_entries,
+            journal_get_entry,
+            journal_save_entry,
             projects_list,
             project_get,
             project_save,

@@ -33,7 +33,9 @@ mod tests {
     #[test]
     fn detects_cli_missing_variants() {
         assert!(is_cli_missing_line("command not found: claude"));
-        assert!(is_cli_missing_line("is not recognized as an internal or external command"));
+        assert!(is_cli_missing_line(
+            "is not recognized as an internal or external command"
+        ));
         assert!(!is_cli_missing_line("normal stderr line"));
     }
 }

@@ -53,9 +53,14 @@ fn path_env_with_prepend(bin_dir: &Path) -> BTreeMap<String, String> {
     env
 }
 
-pub fn prepare_cli_allowlist(config: &CliAllowlistConfig, temp_dir: &Path) -> AppResult<PreparedCliAllowlist> {
+pub fn prepare_cli_allowlist(
+    config: &CliAllowlistConfig,
+    temp_dir: &Path,
+) -> AppResult<PreparedCliAllowlist> {
     if config.entries.is_empty() {
-        return Err(AppError::Policy("cliAllowlist.entries is required".to_string()));
+        return Err(AppError::Policy(
+            "cliAllowlist.entries is required".to_string(),
+        ));
     }
 
     let mode = config.mode.unwrap_or(CliAllowlistMode::Shims);
@@ -79,10 +84,16 @@ pub fn prepare_cli_allowlist(config: &CliAllowlistConfig, temp_dir: &Path) -> Ap
             for entry in &config.entries {
                 let name = normalize_name(&entry.name, "CLI name")?;
                 if !seen.insert(name.clone()) {
-                    return Err(AppError::Policy(format!("Duplicate allowed CLI name: {}", name)));
+                    return Err(AppError::Policy(format!(
+                        "Duplicate allowed CLI name: {}",
+                        name
+                    )));
                 }
                 if entry.path.trim().is_empty() {
-                    return Err(AppError::Policy(format!("CLI path is required for {}", name)));
+                    return Err(AppError::Policy(format!(
+                        "CLI path is required for {}",
+                        name
+                    )));
                 }
 
                 let args_prefix = entry
@@ -174,10 +185,7 @@ pub fn prepare_cli_allowlist(config: &CliAllowlistConfig, temp_dir: &Path) -> Ap
         }
         CliAllowlistMode::Wrapper => {
             let wrapper_name = normalize_name(
-                config
-                    .wrapper_name
-                    .as_deref()
-                    .unwrap_or("kiingo-cli"),
+                config.wrapper_name.as_deref().unwrap_or("kiingo-cli"),
                 "Wrapper name",
             )?;
 
@@ -214,7 +222,11 @@ pub fn prepare_cli_allowlist(config: &CliAllowlistConfig, temp_dir: &Path) -> Ap
                 if args_prefix.is_empty() {
                     lines.push(format!("    exec {} \"$@\"", shell_quote(&entry.path)));
                 } else {
-                    lines.push(format!("    exec {} {} \"$@\"", shell_quote(&entry.path), args_prefix));
+                    lines.push(format!(
+                        "    exec {} {} \"$@\"",
+                        shell_quote(&entry.path),
+                        args_prefix
+                    ));
                 }
                 lines.push("    ;;".to_string());
             }
@@ -226,7 +238,8 @@ pub fn prepare_cli_allowlist(config: &CliAllowlistConfig, temp_dir: &Path) -> Ap
             } else {
                 bin_dir.join(&wrapper_name)
             };
-            std::fs::write(&wrapper_path, lines.join("\n")).map_err(|err| AppError::Io(err.to_string()))?;
+            std::fs::write(&wrapper_path, lines.join("\n"))
+                .map_err(|err| AppError::Io(err.to_string()))?;
 
             #[cfg(unix)]
             {
@@ -273,7 +286,10 @@ mod tests {
         };
         let prepared = prepare_cli_allowlist(&config, dir.path()).expect("prepare");
         assert!(prepared.bin_dir.exists());
-        assert!(prepared.env.iter().any(|(key, _)| key.eq_ignore_ascii_case("PATH")));
+        assert!(prepared
+            .env
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("PATH")));
         assert_eq!(prepared.exposed_commands, vec!["echo-safe".to_string()]);
     }
 }

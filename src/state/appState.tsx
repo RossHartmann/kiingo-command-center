@@ -105,6 +105,7 @@ export type Screen =
   | "tasks"
   | "projects"
   | "notepad"
+  | "labels"
   | "chat"
   | "composer"
   | "live"
@@ -127,7 +128,9 @@ export type Screen =
   | "discovery-calls"
   | "follow-up-calls"
   | "sales-followup"
-  | "ops-followup";
+  | "ops-followup"
+  | "journal"
+  | "food-journal";
 const MAX_DETAIL_EVENTS = 2000;
 const CONVERSATION_SELECTION_KEY = "conversation-selection-by-provider";
 

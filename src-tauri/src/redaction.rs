@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 
 static SECRET_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
-        Regex::new(r#"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*["']?([A-Za-z0-9_\-\.]{6,})["']?"#)
-            .expect("valid regex"),
+        Regex::new(
+            r#"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*["']?([A-Za-z0-9_\-\.]{6,})["']?"#,
+        )
+        .expect("valid regex"),
         Regex::new(r"\b(sk-[A-Za-z0-9]{20,})\b").expect("valid regex"),
         Regex::new(r"\b(AKIA[0-9A-Z]{16})\b").expect("valid regex"),
         Regex::new(r"\b([A-Fa-f0-9]{32,})\b").expect("valid regex"),
@@ -44,7 +46,11 @@ impl Redactor {
             let normalized = result
                 .split_whitespace()
                 .map(|token| {
-                    if token.len() > 48 && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                    if token.len() > 48
+                        && token
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
                         redaction_count += 1;
                         "[REDACTED_LONG_TOKEN]".to_string()
                     } else {
@@ -97,7 +103,8 @@ mod tests {
     #[test]
     fn redacts_long_token() {
         let redactor = Redactor::new(true);
-        let result = redactor.redact("prefix AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA suffix");
+        let result =
+            redactor.redact("prefix AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA suffix");
         assert!(result.content.contains("[REDACTED_LONG_TOKEN]"));
     }
 }

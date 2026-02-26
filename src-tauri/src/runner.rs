@@ -1,11 +1,8 @@
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
-use base64::Engine;
 use crate::adapters::claude::ClaudeAdapter;
 use crate::adapters::codex::CodexAdapter;
-use crate::adapters::ValidatedCommand;
 use crate::adapters::compatibility::CompatibilityRegistry;
 use crate::adapters::Adapter;
+use crate::adapters::ValidatedCommand;
 use crate::db::Database;
 use crate::errors::{AppError, AppResult};
 use crate::harness::capability_adjuster::apply_harness_capabilities;
@@ -15,35 +12,44 @@ use crate::harness::line_buffer::LineBuffer;
 use crate::harness::shell_prelude::prepare_shell_prelude;
 use crate::harness::structured_output::{resolve_structured_output, validate_structured_output};
 use crate::models::{
-    AcceptedResponse, AppSettings, ArchiveConversationPayload, BindMetricToScreenPayload, BooleanResponse,
-    ArchiveAtomRequest, AtomRecord, AttentionUpdateRequest, AttentionUpdateResponse, BlockRecord,
-    DeleteAtomRequest,
-    ClassificationResult, ClassificationSource, CreateAtomRequest, CreateBlockInNotepadRequest,
-    CapabilitySnapshot, ConversationDetail, ConversationRecord, ConversationSummary, CreateConversationPayload,
-    DecisionGenerateRequest, DecisionGenerateResponse, ExportResponse, ListAtomsRequest, ListBlocksRequest,
-    ListConversationsFilters, ListEventsRequest, ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics, MetricRefreshResponse,
-    MetricSnapshot, MetricSnapshotStatus, NotepadViewDefinition, PageResponse, PlacementRecord, PlacementReorderRequest, Profile, Provider, ProjectDefinition, ProjectOpenResponse,
-    RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RenameConversationPayload, RerunResponse, RunDetail,
-    RunMode, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
-    SaveNotepadViewRequest, SaveProjectDefinitionRequest, SetTaskStatusRequest, TaskReopenRequest,
-    ScreenMetricLayoutItem, ScreenMetricView, SendConversationMessagePayload, StartInteractiveSessionResponse,
-    UnbindMetricResponse,
-    StartRunPayload, StartRunResponse, StreamEnvelope, UpdateAtomRequest, WorkspaceCapabilities, WorkspaceEventRecord,
-    WorkspaceGrant, WorkspaceHealth, GovernanceMeta, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult,
-    RuleMutationPayload, JobDefinition, JobMutationPayload, JobRunRecord, DecisionMutationPayload, DecisionPrompt,
-    NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload, ProjectionCheckpoint,
-    ProjectionDefinition, ProjectionMutationPayload, ProjectionRebuildResponse, RegistryEntry, RegistryMutationPayload,
-    RegistrySuggestionsResponse, SemanticChunk, SemanticReindexResponse, SemanticSearchRequest, SemanticSearchResponse,
-    GovernancePoliciesResponse, FeatureFlag, WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest,
-    WorkSessionRecord, WorkSessionStartRequest, WorkspaceCapabilitySnapshot, MigrationPlan, MigrationRun,
-    ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest, ConditionSetDateRequest,
-    ConditionSetPersonRequest, ConditionSetTaskRequest, ListConditionsRequest, ObsidianTaskSyncResult,
+    AcceptedResponse, AppSettings, ArchiveAtomRequest, ArchiveConversationPayload, AtomRecord,
+    AttentionUpdateRequest, AttentionUpdateResponse, BindMetricToScreenPayload, BlockRecord,
+    BooleanResponse, CapabilitySnapshot, ClassificationResult, ClassificationSource,
+    ConditionCancelRequest, ConditionFollowupRequest, ConditionRecord, ConditionResolveRequest,
+    ConditionSetDateRequest, ConditionSetPersonRequest, ConditionSetTaskRequest,
+    ConversationDetail, ConversationRecord, ConversationSummary, CreateAtomRequest,
+    CreateBlockInNotepadRequest, CreateConversationPayload, DecisionGenerateRequest,
+    DecisionGenerateResponse, DecisionMutationPayload, DecisionPrompt, DeleteAtomRequest,
+    ExportResponse, FeatureFlag, GovernanceMeta, GovernancePoliciesResponse, JobDefinition,
+    JobMutationPayload, JobRunRecord, JournalEntry, JournalEntryMeta, ListAtomsRequest,
+    ListBlocksRequest, ListConditionsRequest, ListConversationsFilters, ListEventsRequest,
+    ListPlacementsRequest, ListRunsFilters, MetricDefinition, MetricDiagnostics,
+    MetricRefreshResponse, MetricSnapshot, MetricSnapshotStatus, MigrationPlan, MigrationRun,
+    NotepadViewDefinition, NotificationDeliveryRecord, NotificationMessage,
+    NotificationMutationPayload, ObsidianTaskSyncResult, PageResponse, PlacementRecord,
+    PlacementReorderRequest, Profile, ProjectDefinition, ProjectOpenResponse, ProjectionCheckpoint,
+    ProjectionDefinition, ProjectionMutationPayload, ProjectionRebuildResponse, Provider,
+    RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate,
+    RegistryEntry, RegistryMutationPayload, RegistrySuggestionsResponse, RenameConversationPayload,
+    RerunResponse, RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload,
+    RunDetail, RunMode, RunStatus, SaveMetricDefinitionPayload, SaveNotepadViewRequest,
+    SaveProfilePayload, SaveProjectDefinitionRequest, SchedulerJob, ScreenMetricBinding,
+    ScreenMetricLayoutItem, ScreenMetricView, SemanticChunk, SemanticReindexResponse,
+    SemanticSearchRequest, SemanticSearchResponse, SendConversationMessagePayload,
+    SetTaskStatusRequest, StartInteractiveSessionResponse, StartRunPayload, StartRunResponse,
+    StreamEnvelope, TaskReopenRequest, UnbindMetricResponse, UpdateAtomRequest,
+    WorkSessionCancelRequest, WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord,
+    WorkSessionStartRequest, WorkspaceCapabilities, WorkspaceCapabilitySnapshot,
+    WorkspaceEventRecord, WorkspaceGrant, WorkspaceHealth,
 };
 use crate::policy::PolicyEngine;
 use crate::redaction::Redactor;
 use crate::scheduler::{ScheduledRun, Scheduler};
 use crate::session::SessionManager;
 use crate::workspace;
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::Engine;
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -64,9 +70,8 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
-static ANSI_ESCAPE_RE: Lazy<regex::Regex> = Lazy::new(|| {
-    regex::Regex::new(r"\x1B\[[0-?]*[ -/]*[@-~]").expect("valid ansi escape regex")
-});
+static ANSI_ESCAPE_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"\x1B\[[0-?]*[ -/]*[@-~]").expect("valid ansi escape regex"));
 
 const MAX_BUFFERED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_BUFFERED_OUTPUT_LINES: usize = 4_000;
@@ -208,13 +213,19 @@ impl RunnerCore {
 
         if let Ok(interrupted) = this.db.mark_orphan_runs_interrupted() {
             if interrupted > 0 {
-                tracing::warn!(count = interrupted, "marked orphaned runs as interrupted on startup");
+                tracing::warn!(
+                    count = interrupted,
+                    "marked orphaned runs as interrupted on startup"
+                );
             }
         }
 
         if let Ok(cleaned) = this.db.mark_orphan_snapshots_failed() {
             if cleaned > 0 {
-                tracing::warn!(count = cleaned, "marked orphaned metric snapshots as failed on startup");
+                tracing::warn!(
+                    count = cleaned,
+                    "marked orphaned metric snapshots as failed on startup"
+                );
             }
         }
 
@@ -253,7 +264,8 @@ impl RunnerCore {
     ) -> AppResult<StartInteractiveSessionResponse> {
         payload.mode = RunMode::Interactive;
         let (run_id, session_id) = self.queue_run(payload, true).await?;
-        let session_id = session_id.ok_or_else(|| AppError::Internal("Session id missing".to_string()))?;
+        let session_id =
+            session_id.ok_or_else(|| AppError::Internal("Session id missing".to_string()))?;
         Ok(StartInteractiveSessionResponse { run_id, session_id })
     }
 
@@ -295,7 +307,8 @@ impl RunnerCore {
         let grants = self.list_workspace_grants()?;
         self.policy
             .validate(&effective_payload, &settings, &grants, &capability)?;
-        self.adapter_for(effective_payload.provider).validate(&effective_payload)?;
+        self.adapter_for(effective_payload.provider)
+            .validate(&effective_payload)?;
 
         if !self.scheduler.has_capacity().await {
             return Err(AppError::Policy(
@@ -339,11 +352,11 @@ impl RunnerCore {
 
         let (session_id, session_input) =
             if create_session || effective_payload.mode == RunMode::Interactive {
-            let (session_id, receiver) = self.sessions.open_session(&run_id).await;
-            (Some(session_id), Some(receiver))
-        } else {
-            (None, None)
-        };
+                let (session_id, receiver) = self.sessions.open_session(&run_id).await;
+                (Some(session_id), Some(receiver))
+            } else {
+                (None, None)
+            };
 
         let pending = PendingRun {
             payload: effective_payload.clone(),
@@ -353,7 +366,10 @@ impl RunnerCore {
             session_input,
             harness_warnings: warnings,
         };
-        self.pending_runs.lock().await.insert(run_id.clone(), pending);
+        self.pending_runs
+            .lock()
+            .await
+            .insert(run_id.clone(), pending);
 
         if let Err(error) = self
             .scheduler
@@ -391,15 +407,26 @@ impl RunnerCore {
             tracing::error!(run_id = %run_id, error = %error, "failed to mark job running");
         }
 
-        if let Err(error) = self.db.update_run_status(&run_id, RunStatus::Running, None, None) {
+        if let Err(error) = self
+            .db
+            .update_run_status(&run_id, RunStatus::Running, None, None)
+        {
             tracing::error!(run_id = %run_id, error = %error, "failed to set run status");
         }
 
         let _ = self
-            .emit_event(&run_id, "run.started", json!({ "provider": pending.payload.provider }))
+            .emit_event(
+                &run_id,
+                "run.started",
+                json!({ "provider": pending.payload.provider }),
+            )
             .await;
         let _ = self
-            .emit_event(&run_id, "run.progress", json!({ "stage": "spawn_preparing" }))
+            .emit_event(
+                &run_id,
+                "run.progress",
+                json!({ "stage": "spawn_preparing" }),
+            )
             .await;
 
         for warning in &pending.harness_warnings {
@@ -425,7 +452,12 @@ impl RunnerCore {
                     return false;
                 }
                 let _ = self
-                    .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                    .fail_run(
+                        &run_id,
+                        None,
+                        &message,
+                        pending.payload.mode == RunMode::Interactive,
+                    )
                     .await;
                 return true;
             }
@@ -448,7 +480,12 @@ impl RunnerCore {
                     return false;
                 }
                 let _ = self
-                    .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                    .fail_run(
+                        &run_id,
+                        None,
+                        &message,
+                        pending.payload.mode == RunMode::Interactive,
+                    )
                     .await;
                 return true;
             }
@@ -493,7 +530,12 @@ impl RunnerCore {
                     Err(error) => {
                         let message = format!("Failed to prepare CLI allowlist: {}", error);
                         let _ = self
-                            .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                            .fail_run(
+                                &run_id,
+                                None,
+                                &message,
+                                pending.payload.mode == RunMode::Interactive,
+                            )
                             .await;
                         return true;
                     }
@@ -525,7 +567,12 @@ impl RunnerCore {
                     Err(error) => {
                         let message = format!("Failed to prepare shell prelude: {}", error);
                         let _ = self
-                            .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                            .fail_run(
+                                &run_id,
+                                None,
+                                &message,
+                                pending.payload.mode == RunMode::Interactive,
+                            )
                             .await;
                         return true;
                     }
@@ -552,7 +599,12 @@ impl RunnerCore {
             Err(error) => {
                 let message = error.to_string();
                 let _ = self
-                    .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                    .fail_run(
+                        &run_id,
+                        None,
+                        &message,
+                        pending.payload.mode == RunMode::Interactive,
+                    )
                     .await;
                 return true;
             }
@@ -606,7 +658,12 @@ impl RunnerCore {
                     return false;
                 }
                 let _ = self
-                    .fail_run(&run_id, None, &message, pending.payload.mode == RunMode::Interactive)
+                    .fail_run(
+                        &run_id,
+                        None,
+                        &message,
+                        pending.payload.mode == RunMode::Interactive,
+                    )
                     .await;
                 true
             }
@@ -639,7 +696,12 @@ impl RunnerCore {
             Ok(pair) => pair,
             Err(error) => {
                 let _ = self
-                    .fail_run(&run_id, None, &format!("Failed to open PTY: {}", error), true)
+                    .fail_run(
+                        &run_id,
+                        None,
+                        &format!("Failed to open PTY: {}", error),
+                        true,
+                    )
                     .await;
                 return true;
             }
@@ -717,7 +779,8 @@ impl RunnerCore {
             },
         );
 
-        let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
+        let (output_tx, mut output_rx) =
+            tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
         std::thread::spawn(move || {
             let mut reader = reader;
             let mut buffer = [0u8; 4096];
@@ -806,7 +869,9 @@ impl RunnerCore {
                 writer
                     .write_all(b"\n")
                     .map_err(|error| AppError::Io(error.to_string()))?;
-                writer.flush().map_err(|error| AppError::Io(error.to_string()))?;
+                writer
+                    .flush()
+                    .map_err(|error| AppError::Io(error.to_string()))?;
                 Ok(())
             })
             .await;
@@ -829,16 +894,18 @@ impl RunnerCore {
                         let bytes = input.len();
                         let writer = writer.clone();
                         let write_result = tokio::task::spawn_blocking(move || -> AppResult<()> {
-                            let mut writer = writer
-                                .lock()
-                                .map_err(|_| AppError::Internal("PTY writer lock poisoned".to_string()))?;
+                            let mut writer = writer.lock().map_err(|_| {
+                                AppError::Internal("PTY writer lock poisoned".to_string())
+                            })?;
                             writer
                                 .write_all(input.as_bytes())
                                 .map_err(|error| AppError::Io(error.to_string()))?;
                             writer
                                 .write_all(b"\n")
                                 .map_err(|error| AppError::Io(error.to_string()))?;
-                            writer.flush().map_err(|error| AppError::Io(error.to_string()))?;
+                            writer
+                                .flush()
+                                .map_err(|error| AppError::Io(error.to_string()))?;
                             Ok(())
                         })
                         .await;
@@ -886,9 +953,7 @@ impl RunnerCore {
                     .terminate_active_process(ActiveProcess::Pty(killer.clone()))
                     .await;
                 self.active_children.lock().await.remove(&run_id);
-                let _ = self
-                    .fail_run(&run_id, None, "Run timed out", true)
-                    .await;
+                let _ = self.fail_run(&run_id, None, "Run timed out", true).await;
                 return true;
             }
         };
@@ -914,9 +979,12 @@ impl RunnerCore {
         }
 
         if was_canceled {
-            let _ = self
-                .db
-                .update_run_status(&run_id, RunStatus::Canceled, exit_code, Some("Canceled by user"));
+            let _ = self.db.update_run_status(
+                &run_id,
+                RunStatus::Canceled,
+                exit_code,
+                Some("Canceled by user"),
+            );
             let _ = self.db.mark_job_finished(&run_id, false);
             let _ = self
                 .emit_event(&run_id, "run.canceled", json!({ "exit_code": exit_code }))
@@ -1121,9 +1189,12 @@ impl RunnerCore {
         }
 
         if was_canceled {
-            let _ = self
-                .db
-                .update_run_status(&run_id, RunStatus::Canceled, exit_code, Some("Canceled by user"));
+            let _ = self.db.update_run_status(
+                &run_id,
+                RunStatus::Canceled,
+                exit_code,
+                Some("Canceled by user"),
+            );
             let _ = self.db.mark_job_finished(&run_id, false);
             let _ = self
                 .emit_event(&run_id, "run.canceled", json!({ "exit_code": exit_code }))
@@ -1210,10 +1281,13 @@ impl RunnerCore {
             match command.spawn() {
                 Ok(child) => break child,
                 Err(error) => {
-                    let retryable = matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied)
-                        && spawn_attempt < 3;
+                    let retryable = matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                    ) && spawn_attempt < 3;
                     if retryable {
-                        let delay_ms = 200_u64.saturating_mul(2_u64.saturating_pow(spawn_attempt.saturating_sub(1)));
+                        let delay_ms = 200_u64
+                            .saturating_mul(2_u64.saturating_pow(spawn_attempt.saturating_sub(1)));
                         let _ = self
                             .emit_event(
                                 &run_id,
@@ -1514,9 +1588,9 @@ impl RunnerCore {
 
             let status = {
                 let mut child = child_handle.lock().await;
-                child
-                    .try_wait()
-                    .map_err(|error| AppError::Io(format!("failed to poll process status: {}", error)))?
+                child.try_wait().map_err(|error| {
+                    AppError::Io(format!("failed to poll process status: {}", error))
+                })?
             };
             if let Some(status) = status {
                 break status.code();
@@ -1559,11 +1633,7 @@ impl RunnerCore {
             match (validation.error, validation.value) {
                 (None, Some(value)) => {
                     let _ = self
-                        .emit_event(
-                            &run_id,
-                            "run.structured_output",
-                            json!({ "result": value }),
-                        )
+                        .emit_event(&run_id, "run.structured_output", json!({ "result": value }))
                         .await;
                 }
                 (Some(error), value) => {
@@ -1633,9 +1703,12 @@ impl RunnerCore {
         let _ = self.persist_session_transcript_artifact(&run_id, &buffered_text);
 
         if was_canceled {
-            let _ = self
-                .db
-                .update_run_status(&run_id, RunStatus::Canceled, exit_code, Some("Canceled by user"));
+            let _ = self.db.update_run_status(
+                &run_id,
+                RunStatus::Canceled,
+                exit_code,
+                Some("Canceled by user"),
+            );
             let _ = self.db.mark_job_finished(&run_id, false);
             let _ = self
                 .emit_event(&run_id, "run.canceled", json!({ "exit_code": exit_code }))
@@ -1682,8 +1755,12 @@ impl RunnerCore {
 
     pub async fn cancel_run(&self, run_id: &str) -> AppResult<BooleanResponse> {
         if self.pending_runs.lock().await.remove(run_id).is_some() {
-            self.db
-                .update_run_status(run_id, RunStatus::Canceled, None, Some("Canceled before execution"))?;
+            self.db.update_run_status(
+                run_id,
+                RunStatus::Canceled,
+                None,
+                Some("Canceled before execution"),
+            )?;
             self.db.mark_job_finished(run_id, false)?;
             self.emit_event(run_id, "run.canceled", json!({ "queued": true }))
                 .await?;
@@ -1696,8 +1773,12 @@ impl RunnerCore {
             active.canceled.store(true, Ordering::SeqCst);
             let _ = self.terminate_active_process(active.process).await;
 
-            self.db
-                .update_run_status(run_id, RunStatus::Canceled, None, Some("Canceled by user"))?;
+            self.db.update_run_status(
+                run_id,
+                RunStatus::Canceled,
+                None,
+                Some("Canceled by user"),
+            )?;
             self.db.mark_job_finished(run_id, false)?;
             self.emit_event(run_id, "run.canceled", json!({ "queued": false }))
                 .await?;
@@ -1765,7 +1846,11 @@ impl RunnerCore {
         }
     }
 
-    pub async fn rerun(&self, run_id: &str, overrides: serde_json::Value) -> AppResult<RerunResponse> {
+    pub async fn rerun(
+        &self,
+        run_id: &str,
+        overrides: serde_json::Value,
+    ) -> AppResult<RerunResponse> {
         let base = if let Some(payload) = self.run_payload_cache.lock().await.get(run_id).cloned() {
             payload
         } else {
@@ -1787,7 +1872,7 @@ impl RunnerCore {
                 scheduled_at: None,
                 max_retries: Some(0),
                 retry_backoff_ms: Some(1_000),
-            harness: None,
+                harness: None,
             }
         };
 
@@ -1801,7 +1886,11 @@ impl RunnerCore {
         })
     }
 
-    pub async fn send_session_input(&self, run_id: &str, data: String) -> AppResult<AcceptedResponse> {
+    pub async fn send_session_input(
+        &self,
+        run_id: &str,
+        data: String,
+    ) -> AppResult<AcceptedResponse> {
         match self.sessions.send_input(run_id, data).await {
             Ok(()) => Ok(AcceptedResponse { accepted: true }),
             Err(error) => {
@@ -1836,7 +1925,11 @@ impl RunnerCore {
         }
         if let Some(snapshot_id) = run.capability_snapshot_id.as_deref() {
             if let Some(snapshot) = self.db.get_capability_snapshot_by_id(snapshot_id)? {
-                if !snapshot.profile.supported_modes.contains(&RunMode::Interactive) {
+                if !snapshot
+                    .profile
+                    .supported_modes
+                    .contains(&RunMode::Interactive)
+                {
                     return Err(AppError::Policy(format!(
                         "Interactive resume is disabled for CLI capability version {}",
                         snapshot.cli_version
@@ -1859,7 +1952,10 @@ impl RunnerCore {
                     .into_iter()
                     .rev()
                     .filter_map(|event| {
-                        if !matches!(event.event_type.as_str(), "run.chunk.stdout" | "run.chunk.stderr") {
+                        if !matches!(
+                            event.event_type.as_str(),
+                            "run.chunk.stdout" | "run.chunk.stderr"
+                        ) {
                             return None;
                         }
                         event
@@ -1894,8 +1990,12 @@ impl RunnerCore {
                 )
                 .await?;
             }
-            self.emit_event(run_id, "run.progress", json!({ "stage": "session_replay_ready" }))
-                .await?;
+            self.emit_event(
+                run_id,
+                "run.progress",
+                json!({ "stage": "session_replay_ready" }),
+            )
+            .await?;
         }
         Ok(StartInteractiveSessionResponse {
             run_id: run_id.to_string(),
@@ -1911,10 +2011,15 @@ impl RunnerCore {
         self.db.list_runs(&filters)
     }
 
-    pub fn create_conversation(&self, payload: CreateConversationPayload) -> AppResult<ConversationRecord> {
-        let created = self
-            .db
-            .create_conversation(payload.provider, payload.title.as_deref(), payload.metadata.as_ref())?;
+    pub fn create_conversation(
+        &self,
+        payload: CreateConversationPayload,
+    ) -> AppResult<ConversationRecord> {
+        let created = self.db.create_conversation(
+            payload.provider,
+            payload.title.as_deref(),
+            payload.metadata.as_ref(),
+        )?;
         let _ = self.emit_app_event(
             "conversation.created",
             json!({
@@ -1927,7 +2032,10 @@ impl RunnerCore {
         Ok(created)
     }
 
-    pub fn list_conversations(&self, filters: ListConversationsFilters) -> AppResult<Vec<ConversationSummary>> {
+    pub fn list_conversations(
+        &self,
+        filters: ListConversationsFilters,
+    ) -> AppResult<Vec<ConversationSummary>> {
         self.db.list_conversations(&filters)
     }
 
@@ -1935,7 +2043,10 @@ impl RunnerCore {
         self.db.get_conversation_detail(conversation_id)
     }
 
-    pub fn rename_conversation(&self, payload: RenameConversationPayload) -> AppResult<Option<ConversationRecord>> {
+    pub fn rename_conversation(
+        &self,
+        payload: RenameConversationPayload,
+    ) -> AppResult<Option<ConversationRecord>> {
         let renamed = self
             .db
             .rename_conversation(&payload.conversation_id, &payload.title)?;
@@ -1953,7 +2064,10 @@ impl RunnerCore {
         Ok(renamed)
     }
 
-    pub fn archive_conversation(&self, payload: ArchiveConversationPayload) -> AppResult<BooleanResponse> {
+    pub fn archive_conversation(
+        &self,
+        payload: ArchiveConversationPayload,
+    ) -> AppResult<BooleanResponse> {
         let archived = payload.archived.unwrap_or(true);
         let success = self
             .db
@@ -1981,9 +2095,16 @@ impl RunnerCore {
         let conversation = self
             .db
             .get_conversation(&payload.conversation_id)?
-            .ok_or_else(|| AppError::NotFound(format!("Conversation {} not found", payload.conversation_id)))?;
+            .ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "Conversation {} not found",
+                    payload.conversation_id
+                ))
+            })?;
         if conversation.archived_at.is_some() {
-            return Err(AppError::Policy("Cannot send message to archived conversation".to_string()));
+            return Err(AppError::Policy(
+                "Cannot send message to archived conversation".to_string(),
+            ));
         }
 
         let cwd = self.resolve_conversation_cwd(payload.cwd)?;
@@ -2110,13 +2231,20 @@ impl RunnerCore {
 
         let format = match format {
             "md" | "json" | "txt" => format,
-            _ => return Err(AppError::Io(format!("Unsupported export format {}", format))),
+            _ => {
+                return Err(AppError::Io(format!(
+                    "Unsupported export format {}",
+                    format
+                )))
+            }
         };
 
         let safe_run_id = sanitize_filename_component(run_id);
         let output_path = export_dir.join(format!("{}.{}", safe_run_id, format));
         if !output_path.starts_with(&export_dir) {
-            return Err(AppError::Io("Resolved export path escaped export directory".to_string()));
+            return Err(AppError::Io(
+                "Resolved export path escaped export directory".to_string(),
+            ));
         }
         let contents = match format {
             "json" => serde_json::to_string_pretty(&detail)?,
@@ -2168,7 +2296,11 @@ impl RunnerCore {
         workspace::atom_update(&root, atom_id, request)
     }
 
-    pub fn task_status_set(&self, atom_id: &str, request: SetTaskStatusRequest) -> AppResult<AtomRecord> {
+    pub fn task_status_set(
+        &self,
+        atom_id: &str,
+        request: SetTaskStatusRequest,
+    ) -> AppResult<AtomRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::task_status_set(&root, atom_id, request)
     }
@@ -2188,12 +2320,20 @@ impl RunnerCore {
         workspace::task_reopen(&root, atom_id, request)
     }
 
-    pub fn atom_archive(&self, atom_id: &str, request: ArchiveAtomRequest) -> AppResult<AtomRecord> {
+    pub fn atom_archive(
+        &self,
+        atom_id: &str,
+        request: ArchiveAtomRequest,
+    ) -> AppResult<AtomRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::atom_archive(&root, atom_id, request)
     }
 
-    pub fn atom_delete(&self, atom_id: &str, request: DeleteAtomRequest) -> AppResult<BooleanResponse> {
+    pub fn atom_delete(
+        &self,
+        atom_id: &str,
+        request: DeleteAtomRequest,
+    ) -> AppResult<BooleanResponse> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::atom_delete(&root, atom_id, request)
     }
@@ -2218,7 +2358,10 @@ impl RunnerCore {
         workspace::notepad_get(&root, notepad_id)
     }
 
-    pub fn notepad_save(&self, request: SaveNotepadViewRequest) -> AppResult<NotepadViewDefinition> {
+    pub fn notepad_save(
+        &self,
+        request: SaveNotepadViewRequest,
+    ) -> AppResult<NotepadViewDefinition> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::notepad_save(&root, request)
     }
@@ -2232,6 +2375,30 @@ impl RunnerCore {
         workspace::notepad_delete(&root, notepad_id, idempotency_key)
     }
 
+    pub fn journal_list_entries(&self, journal_type: &str) -> AppResult<Vec<JournalEntryMeta>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::journal_list_entries(&root, journal_type)
+    }
+
+    pub fn journal_get_entry(
+        &self,
+        journal_type: &str,
+        date: &str,
+    ) -> AppResult<Option<JournalEntry>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::journal_get_entry(&root, journal_type, date)
+    }
+
+    pub fn journal_save_entry(
+        &self,
+        journal_type: &str,
+        date: &str,
+        content: &str,
+    ) -> AppResult<Option<JournalEntry>> {
+        let root = self.resolve_workspace_command_center_root()?;
+        workspace::journal_save_entry(&root, journal_type, date, content)
+    }
+
     pub fn projects_list(&self) -> AppResult<Vec<ProjectDefinition>> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::projects_list(&root)
@@ -2242,7 +2409,10 @@ impl RunnerCore {
         workspace::project_get(&root, project_id)
     }
 
-    pub fn project_save(&self, request: SaveProjectDefinitionRequest) -> AppResult<ProjectDefinition> {
+    pub fn project_save(
+        &self,
+        request: SaveProjectDefinitionRequest,
+    ) -> AppResult<ProjectDefinition> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::project_save(&root, request)
     }
@@ -2276,7 +2446,10 @@ impl RunnerCore {
         workspace::notepad_atoms_list(&root, notepad_id, limit, cursor)
     }
 
-    pub fn notepad_block_create(&self, request: CreateBlockInNotepadRequest) -> AppResult<BlockRecord> {
+    pub fn notepad_block_create(
+        &self,
+        request: CreateBlockInNotepadRequest,
+    ) -> AppResult<BlockRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::notepad_block_create(&root, request)
     }
@@ -2338,17 +2511,26 @@ impl RunnerCore {
         workspace::condition_get(&root, condition_id)
     }
 
-    pub fn condition_set_date(&self, request: ConditionSetDateRequest) -> AppResult<ConditionRecord> {
+    pub fn condition_set_date(
+        &self,
+        request: ConditionSetDateRequest,
+    ) -> AppResult<ConditionRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::condition_set_date(&root, request)
     }
 
-    pub fn condition_set_person(&self, request: ConditionSetPersonRequest) -> AppResult<ConditionRecord> {
+    pub fn condition_set_person(
+        &self,
+        request: ConditionSetPersonRequest,
+    ) -> AppResult<ConditionRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::condition_set_person(&root, request)
     }
 
-    pub fn condition_set_task(&self, request: ConditionSetTaskRequest) -> AppResult<ConditionRecord> {
+    pub fn condition_set_task(
+        &self,
+        request: ConditionSetTaskRequest,
+    ) -> AppResult<ConditionRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::condition_set_task(&root, request)
     }
@@ -2380,7 +2562,10 @@ impl RunnerCore {
         workspace::condition_cancel(&root, condition_id, request)
     }
 
-    pub fn events_list(&self, request: ListEventsRequest) -> AppResult<PageResponse<WorkspaceEventRecord>> {
+    pub fn events_list(
+        &self,
+        request: ListEventsRequest,
+    ) -> AppResult<PageResponse<WorkspaceEventRecord>> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::events_list(&root, request)
     }
@@ -2468,11 +2653,7 @@ impl RunnerCore {
         workspace::job_save(&root, job)
     }
 
-    pub fn job_update(
-        &self,
-        job_id: &str,
-        patch: JobMutationPayload,
-    ) -> AppResult<JobDefinition> {
+    pub fn job_update(&self, job_id: &str, patch: JobMutationPayload) -> AppResult<JobDefinition> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::job_update(&root, job_id, patch)
     }
@@ -2569,7 +2750,10 @@ impl RunnerCore {
         workspace::work_session_get(&root, session_id)
     }
 
-    pub fn work_session_start(&self, request: WorkSessionStartRequest) -> AppResult<WorkSessionRecord> {
+    pub fn work_session_start(
+        &self,
+        request: WorkSessionStartRequest,
+    ) -> AppResult<WorkSessionRecord> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::work_session_start(&root, request)
     }
@@ -2611,7 +2795,10 @@ impl RunnerCore {
         workspace::recurrence_templates_list(&root, status, limit, cursor)
     }
 
-    pub fn recurrence_template_get(&self, template_id: &str) -> AppResult<Option<RecurrenceTemplate>> {
+    pub fn recurrence_template_get(
+        &self,
+        template_id: &str,
+    ) -> AppResult<Option<RecurrenceTemplate>> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::recurrence_template_get(&root, template_id)
     }
@@ -2644,7 +2831,10 @@ impl RunnerCore {
         workspace::recurrence_instances_list(&root, template_id, status, limit, cursor)
     }
 
-    pub fn recurrence_spawn(&self, request: RecurrenceSpawnRequest) -> AppResult<RecurrenceSpawnResponse> {
+    pub fn recurrence_spawn(
+        &self,
+        request: RecurrenceSpawnRequest,
+    ) -> AppResult<RecurrenceSpawnResponse> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::recurrence_spawn(&root, request)
     }
@@ -2711,7 +2901,10 @@ impl RunnerCore {
         workspace::projection_save(&root, projection)
     }
 
-    pub fn projection_checkpoint_get(&self, projection_id: &str) -> AppResult<ProjectionCheckpoint> {
+    pub fn projection_checkpoint_get(
+        &self,
+        projection_id: &str,
+    ) -> AppResult<ProjectionCheckpoint> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::projection_checkpoint_get(&root, projection_id)
     }
@@ -2752,10 +2945,7 @@ impl RunnerCore {
         workspace::registry_entry_get(&root, entry_id)
     }
 
-    pub fn registry_entry_save(
-        &self,
-        entry: RegistryMutationPayload,
-    ) -> AppResult<RegistryEntry> {
+    pub fn registry_entry_save(&self, entry: RegistryMutationPayload) -> AppResult<RegistryEntry> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::registry_entry_save(&root, entry)
     }
@@ -2787,7 +2977,10 @@ impl RunnerCore {
         workspace::registry_suggestions_list(&root, text, kind)
     }
 
-    pub fn semantic_search(&self, request: SemanticSearchRequest) -> AppResult<SemanticSearchResponse> {
+    pub fn semantic_search(
+        &self,
+        request: SemanticSearchRequest,
+    ) -> AppResult<SemanticSearchResponse> {
         let root = self.resolve_workspace_command_center_root()?;
         workspace::semantic_search(&root, request)
     }
@@ -2819,7 +3012,13 @@ impl RunnerCore {
         idempotency_key: Option<String>,
     ) -> AppResult<AtomRecord> {
         let root = self.resolve_workspace_command_center_root()?;
-        workspace::atom_governance_update(&root, atom_id, expected_revision, governance, idempotency_key)
+        workspace::atom_governance_update(
+            &root,
+            atom_id,
+            expected_revision,
+            governance,
+            idempotency_key,
+        )
     }
 
     pub fn feature_flags_list(&self) -> AppResult<Vec<FeatureFlag>> {
@@ -2893,7 +3092,10 @@ impl RunnerCore {
 
     // ─── Metric Library ─────────────────────────────────────────────────────
 
-    pub fn save_metric_definition(&self, payload: SaveMetricDefinitionPayload) -> AppResult<MetricDefinition> {
+    pub fn save_metric_definition(
+        &self,
+        payload: SaveMetricDefinitionPayload,
+    ) -> AppResult<MetricDefinition> {
         self.db.save_metric_definition(payload)
     }
 
@@ -2901,7 +3103,14 @@ impl RunnerCore {
         self.db.get_metric_definition(id)
     }
 
-    pub fn list_metric_definitions(&self, include_archived: bool) -> AppResult<Vec<MetricDefinition>> {
+    pub fn get_metric_definition_by_slug(&self, slug: &str) -> AppResult<Option<MetricDefinition>> {
+        self.db.get_metric_definition_by_slug(slug)
+    }
+
+    pub fn list_metric_definitions(
+        &self,
+        include_archived: bool,
+    ) -> AppResult<Vec<MetricDefinition>> {
         self.db.list_metric_definitions(include_archived)
     }
 
@@ -2919,7 +3128,11 @@ impl RunnerCore {
         self.db.get_latest_snapshot(metric_id)
     }
 
-    pub fn list_metric_snapshots(&self, metric_id: &str, limit: Option<u32>) -> AppResult<Vec<MetricSnapshot>> {
+    pub fn list_metric_snapshots(
+        &self,
+        metric_id: &str,
+        limit: Option<u32>,
+    ) -> AppResult<Vec<MetricSnapshot>> {
         self.db.list_snapshots(metric_id, limit.unwrap_or(50))
     }
 
@@ -2927,7 +3140,10 @@ impl RunnerCore {
         self.db.get_metric_diagnostics(metric_id)
     }
 
-    pub fn bind_metric_to_screen(&self, payload: BindMetricToScreenPayload) -> AppResult<ScreenMetricBinding> {
+    pub fn bind_metric_to_screen(
+        &self,
+        payload: BindMetricToScreenPayload,
+    ) -> AppResult<ScreenMetricBinding> {
         self.db.bind_metric_to_screen(&payload)
     }
 
@@ -2939,7 +3155,11 @@ impl RunnerCore {
         })
     }
 
-    pub fn reorder_screen_metrics(&self, screen_id: &str, metric_ids: &[String]) -> AppResult<BooleanResponse> {
+    pub fn reorder_screen_metrics(
+        &self,
+        screen_id: &str,
+        metric_ids: &[String],
+    ) -> AppResult<BooleanResponse> {
         self.db.reorder_screen_metrics(screen_id, metric_ids)?;
         Ok(BooleanResponse { success: true })
     }
@@ -2948,7 +3168,11 @@ impl RunnerCore {
         self.db.list_screen_metrics(screen_id)
     }
 
-    pub fn update_screen_metric_layout(&self, screen_id: &str, layouts: &[ScreenMetricLayoutItem]) -> AppResult<BooleanResponse> {
+    pub fn update_screen_metric_layout(
+        &self,
+        screen_id: &str,
+        layouts: &[ScreenMetricLayoutItem],
+    ) -> AppResult<BooleanResponse> {
         self.db.update_screen_metric_layouts(screen_id, layouts)?;
         Ok(BooleanResponse { success: true })
     }
@@ -2967,10 +3191,12 @@ impl RunnerCore {
         }
 
         let plan = self.build_metric_refresh_plan(metric_id)?;
-        let target_metric = plan
-            .last()
-            .cloned()
-            .ok_or_else(|| AppError::Internal(format!("Unable to build refresh plan for metric {}", metric_id)))?;
+        let target_metric = plan.last().cloned().ok_or_else(|| {
+            AppError::Internal(format!(
+                "Unable to build refresh plan for metric {}",
+                metric_id
+            ))
+        })?;
         if !target_metric.enabled || target_metric.archived_at.is_some() {
             tracing::warn!(metric_id = %target_metric.id, "metric refresh blocked: disabled or archived");
             return Err(AppError::Policy(format!(
@@ -2989,9 +3215,14 @@ impl RunnerCore {
         // Manual refresh should only execute the selected metric.
         // Dependency metrics are read-only inputs sourced from their latest completed snapshots.
         let completed_snapshots: HashMap<String, MetricSnapshot> = HashMap::new();
-        let dependency_inputs = self.build_dependency_inputs_for_metric(&target_metric, &completed_snapshots)?;
+        let dependency_inputs =
+            self.build_dependency_inputs_for_metric(&target_metric, &completed_snapshots)?;
         let result = self
-            .start_metric_refresh_run(&target_metric, &dependency_inputs, Some(&target_snapshot.id))
+            .start_metric_refresh_run(
+                &target_metric,
+                &dependency_inputs,
+                Some(&target_snapshot.id),
+            )
             .await;
 
         if let Err(error) = &result {
@@ -3000,12 +3231,16 @@ impl RunnerCore {
                     snapshot.status,
                     MetricSnapshotStatus::Pending | MetricSnapshotStatus::Running
                 ) {
-                    self.db.fail_metric_snapshot(&target_snapshot.id, &error.to_string())?;
-                    let _ = self.emit_app_event("metric.snapshot_failed", json!({
-                        "metricId": target_metric_id,
-                        "snapshotId": target_snapshot.id,
-                        "error": error.to_string(),
-                    }));
+                    self.db
+                        .fail_metric_snapshot(&target_snapshot.id, &error.to_string())?;
+                    let _ = self.emit_app_event(
+                        "metric.snapshot_failed",
+                        json!({
+                            "metricId": target_metric_id,
+                            "snapshotId": target_snapshot.id,
+                            "error": error.to_string(),
+                        }),
+                    );
                 }
             }
         }
@@ -3013,15 +3248,17 @@ impl RunnerCore {
         result
     }
 
-    fn get_existing_inflight_metric_refresh(&self, metric_id: &str) -> AppResult<Option<MetricRefreshResponse>> {
+    fn get_existing_inflight_metric_refresh(
+        &self,
+        metric_id: &str,
+    ) -> AppResult<Option<MetricRefreshResponse>> {
         let Some(snapshot_id) = self.db.get_latest_inflight_snapshot_id(metric_id)? else {
             return Ok(None);
         };
 
-        let snapshot = self
-            .db
-            .get_snapshot(&snapshot_id)?
-            .ok_or_else(|| AppError::NotFound(format!("metric snapshot not found: {}", snapshot_id)))?;
+        let snapshot = self.db.get_snapshot(&snapshot_id)?.ok_or_else(|| {
+            AppError::NotFound(format!("metric snapshot not found: {}", snapshot_id))
+        })?;
 
         Ok(Some(MetricRefreshResponse {
             metric_id: metric_id.to_string(),
@@ -3031,10 +3268,9 @@ impl RunnerCore {
     }
 
     fn build_metric_refresh_plan(&self, metric_id: &str) -> AppResult<Vec<MetricDefinition>> {
-        let root = self
-            .db
-            .get_metric_definition(metric_id)?
-            .ok_or_else(|| AppError::NotFound(format!("Metric definition not found: {}", metric_id)))?;
+        let root = self.db.get_metric_definition(metric_id)?.ok_or_else(|| {
+            AppError::NotFound(format!("Metric definition not found: {}", metric_id))
+        })?;
         let mut stack = Vec::new();
         let mut visited = HashSet::new();
         let mut ordered = Vec::new();
@@ -3072,7 +3308,10 @@ impl RunnerCore {
         Ok(())
     }
 
-    fn resolve_metric_dependencies(&self, metric: &MetricDefinition) -> AppResult<Vec<MetricDefinition>> {
+    fn resolve_metric_dependencies(
+        &self,
+        metric: &MetricDefinition,
+    ) -> AppResult<Vec<MetricDefinition>> {
         let mut resolved = Vec::new();
         let mut seen = HashSet::new();
         for reference in dependency_refs_from_metadata(metric) {
@@ -3091,12 +3330,15 @@ impl RunnerCore {
     ) -> AppResult<MetricDefinition> {
         let dependency = match self.db.get_metric_definition(reference)? {
             Some(definition) => definition,
-            None => self.db.get_metric_definition_by_slug(reference)?.ok_or_else(|| {
-                AppError::NotFound(format!(
-                    "Metric '{}' depends on unknown metric reference '{}'",
-                    metric.slug, reference
-                ))
-            })?,
+            None => self
+                .db
+                .get_metric_definition_by_slug(reference)?
+                .ok_or_else(|| {
+                    AppError::NotFound(format!(
+                        "Metric '{}' depends on unknown metric reference '{}'",
+                        metric.slug, reference
+                    ))
+                })?,
         };
 
         if dependency.id == metric.id {
@@ -3131,12 +3373,14 @@ impl RunnerCore {
             let snapshot = if let Some(snapshot) = completed_snapshots.get(&dependency.id) {
                 snapshot.clone()
             } else {
-                self.db.get_latest_snapshot(&dependency.id)?.ok_or_else(|| {
-                    AppError::Policy(format!(
-                        "Dependency metric '{}' has no completed snapshot",
-                        dependency.slug
-                    ))
-                })?
+                self.db
+                    .get_latest_snapshot(&dependency.id)?
+                    .ok_or_else(|| {
+                        AppError::Policy(format!(
+                            "Dependency metric '{}' has no completed snapshot",
+                            dependency.slug
+                        ))
+                    })?
             };
 
             inputs.push(json!({
@@ -3151,7 +3395,10 @@ impl RunnerCore {
         Ok(inputs)
     }
 
-    fn invalidate_dependent_metrics_after_refresh(&self, source_metric_id: &str) -> AppResult<Vec<String>> {
+    fn invalidate_dependent_metrics_after_refresh(
+        &self,
+        source_metric_id: &str,
+    ) -> AppResult<Vec<String>> {
         let metrics = self.db.list_metric_definitions(false)?;
         let dependent_ids = dependent_metric_ids(&metrics, source_metric_id);
         if dependent_ids.is_empty() {
@@ -3185,7 +3432,10 @@ impl RunnerCore {
 
         Ok(dynamic_seconds
             .max(METRIC_RUN_TIMEOUT_SECONDS_DEFAULT)
-            .clamp(METRIC_RUN_TIMEOUT_SECONDS_MIN, METRIC_RUN_TIMEOUT_SECONDS_MAX))
+            .clamp(
+                METRIC_RUN_TIMEOUT_SECONDS_MIN,
+                METRIC_RUN_TIMEOUT_SECONDS_MAX,
+            ))
     }
 
     async fn start_metric_refresh_run(
@@ -3195,10 +3445,12 @@ impl RunnerCore {
         snapshot_id: Option<&str>,
     ) -> AppResult<MetricRefreshResponse> {
         let snapshot = if let Some(existing_snapshot_id) = snapshot_id {
-            let existing = self
-                .db
-                .get_snapshot(existing_snapshot_id)?
-                .ok_or_else(|| AppError::NotFound(format!("metric snapshot not found: {}", existing_snapshot_id)))?;
+            let existing = self.db.get_snapshot(existing_snapshot_id)?.ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "metric snapshot not found: {}",
+                    existing_snapshot_id
+                ))
+            })?;
             if existing.metric_id != definition.id {
                 return Err(AppError::Internal(format!(
                     "Snapshot {} belongs to metric {}, expected {}",
@@ -3241,7 +3493,12 @@ impl RunnerCore {
         let active_cwd = definition
             .cwd
             .clone()
-            .or_else(|| grants.iter().find(|g| g.revoked_at.is_none()).map(|g| g.path.clone()))
+            .or_else(|| {
+                grants
+                    .iter()
+                    .find(|g| g.revoked_at.is_none())
+                    .map(|g| g.path.clone())
+            })
             .unwrap_or_else(|| ".".to_string());
 
         let payload = StartRunPayload {
@@ -3278,7 +3535,8 @@ impl RunnerCore {
         match self.start_run(payload).await {
             Ok(response) => {
                 tracing::info!(metric_id = %definition.id, run_id = %response.run_id, snapshot_id = %snapshot.id, "metric run started successfully");
-                self.db.update_metric_snapshot_run_id(&snapshot.id, &response.run_id)?;
+                self.db
+                    .update_metric_snapshot_run_id(&snapshot.id, &response.run_id)?;
                 Ok(MetricRefreshResponse {
                     metric_id: definition.id.clone(),
                     snapshot_id: snapshot.id,
@@ -3287,13 +3545,17 @@ impl RunnerCore {
             }
             Err(err) => {
                 tracing::error!(metric_id = %definition.id, snapshot_id = %snapshot.id, error = %err, "metric run failed to start");
-                self.db.fail_metric_snapshot(&snapshot.id, &err.to_string())?;
+                self.db
+                    .fail_metric_snapshot(&snapshot.id, &err.to_string())?;
                 Err(err)
             }
         }
     }
 
-    pub async fn refresh_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<MetricRefreshResponse>> {
+    pub async fn refresh_screen_metrics(
+        &self,
+        screen_id: &str,
+    ) -> AppResult<Vec<MetricRefreshResponse>> {
         let stale = self.db.find_stale_metrics_for_screen(screen_id)?;
         let mut results = Vec::new();
         for metric in stale {
@@ -3317,12 +3579,7 @@ impl RunnerCore {
         Ok(())
     }
 
-    pub fn process_metric_run_if_applicable(
-        &self,
-        run_id: &str,
-        success: bool,
-        output_text: &str,
-    ) {
+    pub fn process_metric_run_if_applicable(&self, run_id: &str, success: bool, output_text: &str) {
         let snapshot = match self.db.find_snapshot_by_run_id(run_id) {
             Ok(Some(snap)) => snap,
             _ => return, // Not a metric run
@@ -3341,11 +3598,14 @@ impl RunnerCore {
         if !success {
             tracing::error!(metric_id = %metric_id, run_id = %run_id, "metric run failed");
             let _ = self.db.fail_metric_snapshot(&snapshot.id, "Run failed");
-            let _ = self.emit_app_event("metric.snapshot_failed", json!({
-                "metricId": metric_id,
-                "snapshotId": snapshot.id,
-                "error": "Run failed"
-            }));
+            let _ = self.emit_app_event(
+                "metric.snapshot_failed",
+                json!({
+                    "metricId": metric_id,
+                    "snapshotId": snapshot.id,
+                    "error": "Run failed"
+                }),
+            );
             return;
         }
 
@@ -3362,15 +3622,20 @@ impl RunnerCore {
                     html_len = html.len(),
                     "metric output parsed successfully"
                 );
-                let _ = self.db.complete_metric_snapshot(&snapshot.id, &values, &html);
+                let _ = self
+                    .db
+                    .complete_metric_snapshot(&snapshot.id, &values, &html);
                 let _ = self.db.clear_metric_dependency_invalidation(&metric_id);
                 match self.invalidate_dependent_metrics_after_refresh(&metric_id) {
                     Ok(dependent_ids) => {
                         if !dependent_ids.is_empty() {
-                            let _ = self.emit_app_event("metric.dependents_invalidated", json!({
-                                "sourceMetricId": metric_id,
-                                "dependentMetricIds": dependent_ids,
-                            }));
+                            let _ = self.emit_app_event(
+                                "metric.dependents_invalidated",
+                                json!({
+                                    "sourceMetricId": metric_id,
+                                    "dependentMetricIds": dependent_ids,
+                                }),
+                            );
                         }
                     }
                     Err(error) => {
@@ -3381,10 +3646,13 @@ impl RunnerCore {
                         );
                     }
                 }
-                let _ = self.emit_app_event("metric.snapshot_completed", json!({
-                    "metricId": metric_id,
-                    "snapshotId": snapshot.id
-                }));
+                let _ = self.emit_app_event(
+                    "metric.snapshot_completed",
+                    json!({
+                        "metricId": metric_id,
+                        "snapshotId": snapshot.id
+                    }),
+                );
             }
             Err(err) => {
                 tracing::error!(
@@ -3396,16 +3664,23 @@ impl RunnerCore {
                 );
                 let msg = format!("Output parse error: {}", err);
                 let _ = self.db.fail_metric_snapshot(&snapshot.id, &msg);
-                let _ = self.emit_app_event("metric.snapshot_failed", json!({
-                    "metricId": metric_id,
-                    "snapshotId": snapshot.id,
-                    "error": msg
-                }));
+                let _ = self.emit_app_event(
+                    "metric.snapshot_failed",
+                    json!({
+                        "metricId": metric_id,
+                        "snapshotId": snapshot.id,
+                        "error": msg
+                    }),
+                );
             }
         }
     }
 
-    pub async fn save_provider_token(&self, provider: Provider, token: String) -> AppResult<BooleanResponse> {
+    pub async fn save_provider_token(
+        &self,
+        provider: Provider,
+        token: String,
+    ) -> AppResult<BooleanResponse> {
         let _guard = self.keyring_lock.lock().await;
         let entry = keyring::Entry::new("local-cli-command-center", provider.as_str())
             .map_err(|error| AppError::Io(error.to_string()))?;
@@ -3475,16 +3750,17 @@ impl RunnerCore {
         }
 
         self.db.clear_conversation_session_id(&conversation_id)?;
-        let _ = self.emit_event(
-            run_id,
-            "run.warning",
-            json!({
-                "code": "session_resume_invalid",
-                "message": "Stored session id was invalid. Retrying once without resume.",
-                "conversationId": conversation_id
-            }),
-        )
-        .await;
+        let _ = self
+            .emit_event(
+                run_id,
+                "run.warning",
+                json!({
+                    "code": "session_resume_invalid",
+                    "message": "Stored session id was invalid. Retrying once without resume.",
+                    "conversationId": conversation_id
+                }),
+            )
+            .await;
         let _ = self.emit_app_event(
             "conversation.session_updated",
             json!({
@@ -3682,7 +3958,8 @@ impl RunnerCore {
         let semantic_events = adapter.parse_semantic_events(run_id, stream, &redacted_text);
         for semantic in semantic_events {
             let normalized = trim_semantic_tool_result(semantic, max_tool_result_lines);
-            self.handle_conversation_semantic(run_id, &normalized).await?;
+            self.handle_conversation_semantic(run_id, &normalized)
+                .await?;
             if let Some(stats) = &semantic_stats {
                 stats.event_count.fetch_add(1, Ordering::Relaxed);
                 if is_tool_semantic_event(&normalized) {
@@ -3708,7 +3985,12 @@ impl RunnerCore {
         Ok(redacted_text)
     }
 
-    async fn emit_event(&self, run_id: &str, event_type: &str, payload: serde_json::Value) -> AppResult<()> {
+    async fn emit_event(
+        &self,
+        run_id: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) -> AppResult<()> {
         let event = self.db.insert_event(run_id, event_type, &payload)?;
 
         let envelope = StreamEnvelope {
@@ -3746,8 +4028,15 @@ impl RunnerCore {
         Ok(())
     }
 
-    async fn handle_conversation_semantic(&self, run_id: &str, semantic: &serde_json::Value) -> AppResult<()> {
-        let event_type = semantic.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+    async fn handle_conversation_semantic(
+        &self,
+        run_id: &str,
+        semantic: &serde_json::Value,
+    ) -> AppResult<()> {
+        let event_type = semantic
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
         if event_type != "session_complete" {
             return Ok(());
         }
@@ -3797,7 +4086,10 @@ impl RunnerCore {
     }
 
     fn resolve_conversation_cwd(&self, requested: Option<String>) -> AppResult<String> {
-        if let Some(cwd) = requested.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+        if let Some(cwd) = requested
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
             return Ok(cwd);
         }
         if let Some(obsidian_root) = workspace::detect_obsidian_command_center_root() {
@@ -3808,7 +4100,9 @@ impl RunnerCore {
             .into_iter()
             .find(|grant| grant.revoked_at.is_none())
             .map(|grant| grant.path);
-        active.ok_or_else(|| AppError::Policy("No workspace grant found. Configure one in Settings.".to_string()))
+        active.ok_or_else(|| {
+            AppError::Policy("No workspace grant found. Configure one in Settings.".to_string())
+        })
     }
 
     fn resolve_workspace_command_center_root(&self) -> AppResult<PathBuf> {
@@ -3884,7 +4178,8 @@ impl RunnerCore {
 
         let artifact_dir = self.app_data_dir.join("artifacts");
         std::fs::create_dir_all(&artifact_dir).map_err(|error| AppError::Io(error.to_string()))?;
-        let file_path = artifact_dir.join(format!("{}.enc.json", sanitize_filename_component(run_id)));
+        let file_path =
+            artifact_dir.join(format!("{}.enc.json", sanitize_filename_component(run_id)));
         let payload = serde_json::json!({
             "alg": "aes-256-gcm",
             "nonce": base64::engine::general_purpose::STANDARD.encode(nonce_bytes),
@@ -3972,12 +4267,10 @@ impl RunnerCore {
     }
 
     fn normalize_payload_defaults(&self, mut payload: StartRunPayload) -> StartRunPayload {
-        payload.model = payload
-            .model
-            .and_then(|model| {
-                let trimmed = model.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            });
+        payload.model = payload.model.and_then(|model| {
+            let trimmed = model.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
 
         match payload.provider {
             Provider::Codex => match payload.model.as_deref() {
@@ -4060,8 +4353,9 @@ impl RunnerCore {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let metadata = std::fs::metadata(&canonical)
-                .map_err(|error| AppError::Policy(format!("Cannot read binary metadata: {}", error)))?;
+            let metadata = std::fs::metadata(&canonical).map_err(|error| {
+                AppError::Policy(format!("Cannot read binary metadata: {}", error))
+            })?;
             if metadata.permissions().mode() & 0o111 == 0 {
                 return Err(AppError::Policy(format!(
                     "Binary path '{}' is not executable",
@@ -4096,7 +4390,10 @@ fn merge_json(target: &mut serde_json::Value, update: serde_json::Value) {
     match (target, update) {
         (serde_json::Value::Object(target_map), serde_json::Value::Object(update_map)) => {
             for (key, value) in update_map {
-                merge_json(target_map.entry(key).or_insert(serde_json::Value::Null), value);
+                merge_json(
+                    target_map.entry(key).or_insert(serde_json::Value::Null),
+                    value,
+                );
             }
         }
         (target, update) => {
@@ -4129,9 +4426,9 @@ fn canonicalize_absolute(path: &str) -> AppResult<String> {
             "Workspace grants require absolute paths".to_string(),
         ));
     }
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|error| AppError::Policy(format!("Unable to resolve workspace path: {}", error)))?;
+    let canonical = candidate.canonicalize().map_err(|error| {
+        AppError::Policy(format!("Unable to resolve workspace path: {}", error))
+    })?;
     Ok(canonical.to_string_lossy().to_string())
 }
 
@@ -4265,7 +4562,9 @@ fn is_resume_invalid_failure(text_lowercase: &str) -> bool {
         "session not found",
         "no active session for run",
     ];
-    MATCHERS.iter().any(|matcher| text_lowercase.contains(matcher))
+    MATCHERS
+        .iter()
+        .any(|matcher| text_lowercase.contains(matcher))
 }
 
 fn render_markdown_export(detail: &RunDetail) -> String {
@@ -4278,9 +4577,7 @@ fn render_markdown_export(detail: &RunDetail) -> String {
     for event in &detail.events {
         out.push_str(&format!(
             "- `{}` `{}` `{}`\n",
-            event.created_at,
-            event.event_type,
-            event.payload
+            event.created_at, event.event_type, event.payload
         ));
     }
     out
@@ -4293,7 +4590,10 @@ fn render_text_export(detail: &RunDetail) -> String {
     out.push_str(&format!("Prompt: {}\n", detail.run.prompt));
     out.push_str("\nEvents:\n");
     for event in &detail.events {
-        out.push_str(&format!("{} | {} | {}\n", event.created_at, event.event_type, event.payload));
+        out.push_str(&format!(
+            "{} | {} | {}\n",
+            event.created_at, event.event_type, event.payload
+        ));
     }
     out
 }
@@ -4438,20 +4738,15 @@ fn parse_metric_output(raw: &str) -> Result<(serde_json::Value, String), String>
     // The raw text may be NDJSON from the CLI. Collect all candidate texts to try parsing.
     let mut candidates: Vec<String> = Vec::new();
 
-    // Strategy 0: Extract the `result` field from CLI result envelope lines.
-    // The CLI outputs NDJSON where the last line is {"type":"result","result":"..."}
-    // The `result` field contains the LLM's text response with the metric JSON.
+    // Strategy 0: Extract likely text-bearing fields from envelope lines.
+    // Different CLIs expose final agent text in different places (`result`, `item.text`, etc).
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
         if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(line) {
-            if envelope.get("type").and_then(|t| t.as_str()) == Some("result") {
-                if let Some(result_text) = envelope.get("result").and_then(|r| r.as_str()) {
-                    candidates.push(result_text.to_string());
-                }
-            }
+            collect_metric_candidates_from_envelope(&envelope, &mut candidates);
         }
     }
 
@@ -4464,14 +4759,40 @@ fn parse_metric_output(raw: &str) -> Result<(serde_json::Value, String), String>
         }
     }
 
-    Err("Could not parse metric output: no valid JSON with 'values' and 'html' keys found".to_string())
+    Err(
+        "Could not parse metric output: no valid JSON with 'values' and 'html' keys found"
+            .to_string(),
+    )
+}
+
+fn collect_metric_candidates_from_envelope(
+    envelope: &serde_json::Value,
+    candidates: &mut Vec<String>,
+) {
+    if let Some(result_text) = envelope.get("result").and_then(|value| value.as_str()) {
+        candidates.push(result_text.to_string());
+    }
+    if let Some(text) = envelope.get("text").and_then(|value| value.as_str()) {
+        candidates.push(text.to_string());
+    }
+    if let Some(item) = envelope.get("item").and_then(|value| value.as_object()) {
+        if let Some(text) = item.get("text").and_then(|value| value.as_str()) {
+            candidates.push(text.to_string());
+        }
+        if let Some(content) = item.get("content").and_then(|value| value.as_str()) {
+            candidates.push(content.to_string());
+        }
+    }
 }
 
 fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
     // Strategy 1: Parse entire text as JSON with values+html keys
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
         if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
-            return Some((values.clone(), html.as_str().unwrap_or_default().to_string()));
+            return Some((
+                values.clone(),
+                html.as_str().unwrap_or_default().to_string(),
+            ));
         }
     }
 
@@ -4482,7 +4803,10 @@ fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
             let block = after[..end].trim();
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(block) {
                 if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
-                    return Some((values.clone(), html.as_str().unwrap_or_default().to_string()));
+                    return Some((
+                        values.clone(),
+                        html.as_str().unwrap_or_default().to_string(),
+                    ));
                 }
             }
         }
@@ -4529,7 +4853,10 @@ fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
             let candidate = &text[start..=end];
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(candidate) {
                 if let (Some(values), Some(html)) = (parsed.get("values"), parsed.get("html")) {
-                    return Some((values.clone(), html.as_str().unwrap_or_default().to_string()));
+                    return Some((
+                        values.clone(),
+                        html.as_str().unwrap_or_default().to_string(),
+                    ));
                 }
             }
             search_from = end + 1;
@@ -4544,14 +4871,14 @@ fn try_extract_metric_json(text: &str) -> Option<(serde_json::Value, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        dependency_refs_from_metadata, dependent_metric_ids, detect_diagnostic_line, is_known_bad_codex_model,
-        is_resume_invalid_failure, payload_has_resume_request,
-        RunExecutionPath, RunnerCore,
-        DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL,
+        dependency_refs_from_metadata, dependent_metric_ids, detect_diagnostic_line,
+        is_known_bad_codex_model, is_resume_invalid_failure, parse_metric_output,
+        payload_has_resume_request, RunExecutionPath, RunnerCore, DEFAULT_CLAUDE_MODEL,
+        DEFAULT_CODEX_MODEL,
     };
     use crate::models::{
-        AppSettings, CreateConversationPayload, HarnessRequestOptions, MetricDefinition, Provider, RunMode, SaveProfilePayload,
-        SendConversationMessagePayload, StartRunPayload,
+        AppSettings, CreateConversationPayload, HarnessRequestOptions, MetricDefinition, Provider,
+        RunMode, SaveProfilePayload, SendConversationMessagePayload, StartRunPayload,
     };
     use chrono::Utc;
     use std::collections::BTreeMap;
@@ -4663,7 +4990,10 @@ mod tests {
 
         let mut dependent_ids = dependent_metric_ids(&metrics, "metric-a");
         dependent_ids.sort();
-        assert_eq!(dependent_ids, vec!["metric-b".to_string(), "metric-c".to_string()]);
+        assert_eq!(
+            dependent_ids,
+            vec!["metric-b".to_string(), "metric-c".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -4698,7 +5028,10 @@ mod tests {
         assert_eq!(merged.model.as_deref(), Some("gpt-5"));
         assert_eq!(merged.timeout_seconds, Some(42));
         assert_eq!(merged.queue_priority, Some(3));
-        assert_eq!(merged.optional_flags.get("json"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            merged.optional_flags.get("json"),
+            Some(&serde_json::json!(true))
+        );
     }
 
     #[tokio::test]
@@ -4796,6 +5129,29 @@ mod tests {
 
         let none = detect_diagnostic_line("regular informational output");
         assert!(none.is_none());
+    }
+
+    #[test]
+    fn parses_metric_json_from_codex_item_completed_agent_message() {
+        let raw = r#"{"type":"item.completed","item":{"id":"item_42","type":"agent_message","text":"{\"values\":{\"date\":\"2026-02-20\",\"events\":[]},\"html\":\"<div />\"}"}}"#;
+        let (values, html) = parse_metric_output(raw).expect("parse metric output");
+        assert_eq!(
+            values.get("date").and_then(|value| value.as_str()),
+            Some("2026-02-20")
+        );
+        assert_eq!(html, "<div />");
+    }
+
+    #[test]
+    fn parses_metric_json_from_result_envelope() {
+        let raw =
+            r#"{"type":"result","result":"{\"values\":{\"count\":3},\"html\":\"<div>ok</div>\"}"}"#;
+        let (values, html) = parse_metric_output(raw).expect("parse metric output");
+        assert_eq!(
+            values.get("count").and_then(|value| value.as_i64()),
+            Some(3)
+        );
+        assert_eq!(html, "<div>ok</div>");
     }
 
     #[tokio::test]
@@ -4936,7 +5292,9 @@ mod tests {
 
     #[test]
     fn detects_resume_invalid_failure_messages() {
-        assert!(is_resume_invalid_failure("not_found: no active session for run abc"));
+        assert!(is_resume_invalid_failure(
+            "not_found: no active session for run abc"
+        ));
         assert!(is_resume_invalid_failure("invalid session id supplied"));
         assert!(is_resume_invalid_failure("thread not found"));
         assert!(!is_resume_invalid_failure("rate limit exceeded"));

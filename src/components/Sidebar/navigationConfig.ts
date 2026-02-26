@@ -123,6 +123,7 @@ export const NAVIGATION: NavGroup[] = [
     items: [
       { id: "projects", label: "Projects", icon: "\u25C8" },
       { id: "notepad", label: "Notepads", icon: "\u270E" },
+      { id: "labels", label: "Labels", icon: "\u25A6" },
       { id: "tasks", label: "Tasks", icon: "\u2611" }
     ]
   },
@@ -137,6 +138,15 @@ export const NAVIGATION: NavGroup[] = [
       { id: "live", label: "Live Run", icon: "\u25B6" },
       { id: "history", label: "History", icon: "\u29D6" },
       { id: "queue", label: "Queue", icon: "\u2630" }
+    ]
+  },
+  {
+    id: "journaling",
+    label: "Journaling",
+    icon: "\u2710",
+    items: [
+      { id: "journal", label: "Journal", icon: "\u270E" },
+      { id: "food-journal", label: "Food Journal", icon: "\u2615" }
     ]
   },
   {
@@ -210,6 +220,7 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
 
   projects: { title: "Projects", description: "Project contexts mapped to default notepad views", group: "workspace" },
   notepad: { title: "Notepads", description: "Dynalist-style notepad views over shared workspace blocks", group: "workspace" },
+  labels: { title: "Labels", description: "Registry and taxonomy management for categories, threads, and north stars", group: "workspace" },
   tasks: { title: "Tasks", description: "Task projection across the workspace", group: "workspace" },
 
   chat: { title: "Chat", description: "AI coding assistant chat", group: "ai-agent" },
@@ -217,6 +228,9 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
   live: { title: "Live Run", description: "Monitor running sessions", group: "ai-agent" },
   history: { title: "History", description: "Past runs and results", group: "ai-agent" },
   queue: { title: "Queue", description: "Scheduled and queued jobs", group: "ai-agent" },
+
+  journal: { title: "Journal", description: "Daily journal entries and reflections", group: "journaling" },
+  "food-journal": { title: "Food Journal", description: "Track meals, nutrition, and dietary habits", group: "journaling" },
 
   "ceo-training": { title: "CEO Training Ground", description: "CEO-focused training scenarios and simulations", group: "ceo-training" },
   "ceo-principles": { title: "CEO Principles", description: "Core operating principles and decision frameworks", group: "ceo-training" },

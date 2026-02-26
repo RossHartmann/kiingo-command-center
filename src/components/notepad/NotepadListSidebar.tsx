@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FormEvent } from "react";
+import { useState, useRef, useEffect, useMemo, type FormEvent } from "react";
 import type { FeatureFlag, NotepadViewDefinition, WorkspaceCapabilities, WorkspaceHealth } from "../../lib/types";
 
 const NOTEPAD_SIDEBAR_INFO_KEY = "notepad.sidebar.infoPanel";
@@ -23,6 +23,9 @@ interface NotepadListSidebarProps {
   onChangeEditCategories: (value: string) => void;
   onChangeEditDescription: (value: string) => void;
   onSaveNotepadEdits: (event: FormEvent) => void;
+  onDeleteOrArchive: (notepadId: string) => void;
+  onRestoreNotepad: (notepadId: string) => void;
+  onPermanentDelete: (notepadId: string) => void;
   capabilities?: WorkspaceCapabilities;
   health?: WorkspaceHealth;
   featureFlags: FeatureFlag[];
@@ -74,6 +77,9 @@ export function NotepadListSidebar({
   onChangeEditCategories,
   onChangeEditDescription,
   onSaveNotepadEdits,
+  onDeleteOrArchive,
+  onRestoreNotepad,
+  onPermanentDelete,
   capabilities,
   health,
   featureFlags,
@@ -84,7 +90,9 @@ export function NotepadListSidebar({
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [actionMenuNotepadId, setActionMenuNotepadId] = useState<string | undefined>();
   const [showInfo, setShowInfo] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [infoPanel, setInfoPanel] = useState<"help" | "diagnostics">(() => loadInfoPreference());
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -94,8 +102,21 @@ export function NotepadListSidebar({
     return a.name.localeCompare(b.name);
   });
 
+  const { active, archived } = useMemo(() => {
+    const activeList: NotepadViewDefinition[] = [];
+    const archivedList: NotepadViewDefinition[] = [];
+    for (const n of sorted) {
+      if (n.archivedAt) {
+        archivedList.push(n);
+      } else {
+        activeList.push(n);
+      }
+    }
+    return { active: activeList, archived: archivedList };
+  }, [sorted]);
+
   const filtered = search.trim()
-    ? sorted.filter((n) => {
+    ? active.filter((n) => {
         const q = search.toLowerCase();
         return (
           n.name.toLowerCase().includes(q) ||
@@ -103,7 +124,18 @@ export function NotepadListSidebar({
           (n.filters?.categories ?? []).some((c) => c.toLowerCase().includes(q))
         );
       })
-    : sorted;
+    : active;
+
+  const filteredArchived = search.trim()
+    ? archived.filter((n) => {
+        const q = search.toLowerCase();
+        return (
+          n.name.toLowerCase().includes(q) ||
+          (n.description ?? "").toLowerCase().includes(q) ||
+          (n.filters?.categories ?? []).some((c) => c.toLowerCase().includes(q))
+        );
+      })
+    : archived;
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -126,6 +158,34 @@ export function NotepadListSidebar({
     setShowEdit(false);
   }
 
+  function toggleActionMenu(notepadId: string): void {
+    setActionMenuNotepadId((current) => (current === notepadId ? undefined : notepadId));
+  }
+
+  function openEditForNotepad(notepadId: string): void {
+    if (activeNotepadId !== notepadId) {
+      onSelectNotepad(notepadId);
+    }
+    setShowEdit(true);
+    setActionMenuNotepadId(undefined);
+  }
+
+  function archiveNotepad(notepadId: string): void {
+    setShowEdit(false);
+    setActionMenuNotepadId(undefined);
+    onDeleteOrArchive(notepadId);
+  }
+
+  function restoreNotepad(notepadId: string): void {
+    setActionMenuNotepadId(undefined);
+    onRestoreNotepad(notepadId);
+  }
+
+  function deleteNotepadPermanently(notepadId: string): void {
+    setActionMenuNotepadId(undefined);
+    onPermanentDelete(notepadId);
+  }
+
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.localStorage?.setItem !== "function") {
       return;
@@ -136,6 +196,30 @@ export function NotepadListSidebar({
       // Ignore persistence failures.
     }
   }, [infoPanel]);
+
+  useEffect(() => {
+    if (!actionMenuNotepadId) {
+      return;
+    }
+    function onPointerDown(event: PointerEvent): void {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(".notepad-list-item-actions")) {
+        return;
+      }
+      setActionMenuNotepadId(undefined);
+    }
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setActionMenuNotepadId(undefined);
+      }
+    }
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [actionMenuNotepadId]);
 
   return (
     <nav className="notepad-list-sidebar" aria-label="Notepads">
@@ -270,7 +354,11 @@ export function NotepadListSidebar({
                 <button
                   type="button"
                   className="notepad-list-item-btn"
-                  onClick={() => onSelectNotepad(notepad.id)}
+                  onClick={() => {
+                    onSelectNotepad(notepad.id);
+                    setShowEdit(false);
+                    setActionMenuNotepadId(undefined);
+                  }}
                   disabled={loading || saving}
                   title={notepad.description || notepad.name}
                 >
@@ -290,17 +378,56 @@ export function NotepadListSidebar({
                     </span>
                   )}
                 </button>
-                {isActive && notepad.id !== "now" && (
-                  <button
-                    type="button"
-                    className="notepad-list-edit-btn"
-                    onClick={() => setShowEdit((c) => !c)}
-                    aria-label="Edit notepad"
-                    title="Edit notepad"
-                    disabled={!isFeatureGateOpen}
-                  >
-                    ...
-                  </button>
+                {notepad.id !== "now" && (
+                  <div className="notepad-list-item-actions">
+                    <button
+                      type="button"
+                      className="notepad-list-edit-btn"
+                      onClick={() => toggleActionMenu(notepad.id)}
+                      aria-label={`Notepad actions for ${notepad.name}`}
+                      title="Notepad actions"
+                      aria-haspopup="menu"
+                      aria-expanded={actionMenuNotepadId === notepad.id}
+                      aria-controls={`notepad-actions-${notepad.id}`}
+                      disabled={loading || saving || !isFeatureGateOpen}
+                    >
+                      ...
+                    </button>
+                    {actionMenuNotepadId === notepad.id && (
+                      <div
+                        className="notepad-list-actions-menu"
+                        id={`notepad-actions-${notepad.id}`}
+                        role="menu"
+                        aria-label={`Notepad actions for ${notepad.name}`}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => openEditForNotepad(notepad.id)}
+                          disabled={loading || saving || !isFeatureGateOpen}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => openEditForNotepad(notepad.id)}
+                          disabled={loading || saving || !isFeatureGateOpen}
+                        >
+                          Edit details
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => archiveNotepad(notepad.id)}
+                          disabled={loading || saving || !isFeatureGateOpen || notepad.isSystem}
+                          title={notepad.isSystem ? "System notepads cannot be archived" : "Archive this notepad"}
+                        >
+                          {notepad.isSystem ? "Archive notepad (system notepad)" : "Archive notepad"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
               {isActive && showEdit && notepad.id !== "now" && (
@@ -347,6 +474,73 @@ export function NotepadListSidebar({
           </li>
         )}
       </ul>
+
+      {(filteredArchived.length > 0 || (archived.length > 0 && !search.trim())) && (
+        <div className="notepad-list-archived-section">
+          <button
+            type="button"
+            className="notepad-list-archived-toggle"
+            onClick={() => setShowArchived((c) => !c)}
+            aria-expanded={showArchived}
+          >
+            {showArchived ? "\u25BE" : "\u25B8"} Archived ({archived.length})
+          </button>
+          {showArchived && (
+            <ul className="notepad-list-items notepad-list-archived-items" role="listbox" aria-label="Archived notepads">
+              {filteredArchived.map((notepad) => (
+                <li key={notepad.id} role="option" aria-selected={false}>
+                  <div className="notepad-list-item notepad-list-item-archived">
+                    <span className="notepad-list-item-name notepad-list-archived-name">
+                      {notepad.name}
+                    </span>
+                    <div className="notepad-list-item-actions">
+                      <button
+                        type="button"
+                        className="notepad-list-edit-btn"
+                        onClick={() => toggleActionMenu(notepad.id)}
+                        aria-label={`Archived notepad actions for ${notepad.name}`}
+                        title="Archived notepad actions"
+                        aria-haspopup="menu"
+                        aria-expanded={actionMenuNotepadId === notepad.id}
+                        aria-controls={`notepad-actions-${notepad.id}`}
+                        disabled={loading || saving || !isFeatureGateOpen}
+                      >
+                        ...
+                      </button>
+                      {actionMenuNotepadId === notepad.id && (
+                        <div
+                          className="notepad-list-actions-menu"
+                          id={`notepad-actions-${notepad.id}`}
+                          role="menu"
+                          aria-label={`Archived notepad actions for ${notepad.name}`}
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => restoreNotepad(notepad.id)}
+                            disabled={loading || saving || !isFeatureGateOpen}
+                          >
+                            Restore
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="danger"
+                            onClick={() => deleteNotepadPermanently(notepad.id)}
+                            disabled={loading || saving || !isFeatureGateOpen}
+                          >
+                            Delete permanently
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </nav>
   );
 }

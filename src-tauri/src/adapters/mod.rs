@@ -27,7 +27,9 @@ pub struct ValidatedCommand {
 pub trait Adapter: Send + Sync {
     fn validate(&self, payload: &StartRunPayload) -> AppResult<()> {
         if payload.prompt.trim().is_empty() {
-            return Err(crate::errors::AppError::Cli("Prompt cannot be empty".to_string()));
+            return Err(crate::errors::AppError::Cli(
+                "Prompt cannot be empty".to_string(),
+            ));
         }
         Ok(())
     }

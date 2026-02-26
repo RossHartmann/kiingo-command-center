@@ -718,6 +718,25 @@ pub struct MetricDiagnostics {
     pub next_refresh_at: Option<String>,
 }
 
+// ─── Journal ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalEntry {
+    pub date: String,
+    pub journal_type: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalEntryMeta {
+    pub date: String,
+    pub journal_type: String,
+}
+
 // ─── Workspace (Tasks + Notepad Platform) ───────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1072,6 +1091,7 @@ pub struct NotepadViewDefinition {
     pub layout_mode: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
     pub revision: i64,
 }
 
@@ -1253,6 +1273,7 @@ pub struct NotepadViewDefinitionInput {
     pub sorts: Vec<NotepadSort>,
     pub capture_defaults: Option<NotepadCaptureDefaults>,
     pub layout_mode: String,
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1341,6 +1362,7 @@ pub struct ListPlacementsRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CreateBlockInNotepadRequest {
     pub notepad_id: String,
+    pub project_id: Option<String>,
     pub raw_text: String,
     pub body: Option<String>,
     pub capture_source: Option<CaptureSource>,

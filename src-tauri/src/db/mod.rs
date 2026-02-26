@@ -1,9 +1,10 @@
 use crate::errors::{AppError, AppResult};
 use crate::models::{
-    AppSettings, BindMetricToScreenPayload, CapabilitySnapshot, ConversationDetail, ConversationRecord,
-    ConversationSummary, ListConversationsFilters, ListRunsFilters, MetricDefinition, MetricDiagnostics,
-    MetricSnapshot, MetricSnapshotStatus, Profile, Provider, RunArtifact, RunDetail, RunEventRecord, RunMode,
-    RunRecord, RunStatus, SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
+    AppSettings, BindMetricToScreenPayload, CapabilitySnapshot, ConversationDetail,
+    ConversationRecord, ConversationSummary, ListConversationsFilters, ListRunsFilters,
+    MetricDefinition, MetricDiagnostics, MetricSnapshot, MetricSnapshotStatus, Profile, Provider,
+    RunArtifact, RunDetail, RunEventRecord, RunMode, RunRecord, RunStatus,
+    SaveMetricDefinitionPayload, SaveProfilePayload, SchedulerJob, ScreenMetricBinding,
     ScreenMetricLayoutItem, ScreenMetricView, WorkspaceGrant,
 };
 use chrono::{DateTime, Utc};
@@ -37,6 +38,8 @@ impl Database {
         db.ensure_schema_extensions()?;
         db.seed_default_metrics()?;
         db.seed_revenue_metrics()?;
+        db.seed_calendar_metric()?;
+        db.ensure_calendar_metric_defaults()?;
         db.ensure_default_settings()?;
         db.ensure_default_retention()?;
 
@@ -60,7 +63,10 @@ impl Database {
         let now = Utc::now();
         let warnings_json = serde_json::to_string(compatibility_warnings)?;
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO runs (
                id, provider, status, prompt, model, mode, output_format, cwd,
@@ -117,7 +123,10 @@ impl Database {
             RunStatus::Completed | RunStatus::Failed | RunStatus::Canceled | RunStatus::Interrupted
         );
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         if ended {
             conn.execute(
                 "UPDATE runs SET status = ?1, ended_at = ?2, exit_code = ?3, error_summary = ?4 WHERE id = ?5",
@@ -133,7 +142,10 @@ impl Database {
     }
 
     pub fn add_compatibility_warning(&self, run_id: &str, warning: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let existing: String = conn.query_row(
             "SELECT compatibility_warnings_json FROM runs WHERE id = ?1",
             [run_id],
@@ -153,11 +165,19 @@ impl Database {
         Ok(())
     }
 
-    pub fn insert_event(&self, run_id: &str, event_type: &str, payload: &serde_json::Value) -> AppResult<RunEventRecord> {
+    pub fn insert_event(
+        &self,
+        run_id: &str,
+        event_type: &str,
+        payload: &serde_json::Value,
+    ) -> AppResult<RunEventRecord> {
         let created_at = Utc::now();
         let id = Uuid::new_v4().to_string();
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let seq: i64 = conn.query_row(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = ?1",
             [run_id],
@@ -187,9 +207,18 @@ impl Database {
         })
     }
 
-    pub fn insert_artifact(&self, run_id: &str, kind: &str, path: &str, metadata: &serde_json::Value) -> AppResult<RunArtifact> {
+    pub fn insert_artifact(
+        &self,
+        run_id: &str,
+        kind: &str,
+        path: &str,
+        metadata: &serde_json::Value,
+    ) -> AppResult<RunArtifact> {
         let id = Uuid::new_v4().to_string();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO run_artifacts (id, run_id, kind, path, metadata_json) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, run_id, kind, path, serde_json::to_string(metadata)?],
@@ -205,7 +234,10 @@ impl Database {
     }
 
     pub fn list_runs(&self, filters: &ListRunsFilters) -> AppResult<Vec<RunRecord>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut query = String::from(
             "SELECT id, provider, status, prompt, model, mode, output_format, cwd, started_at, ended_at, exit_code, error_summary, queue_priority, profile_id, capability_snapshot_id, compatibility_warnings_json, conversation_id
              FROM runs WHERE 1 = 1",
@@ -261,7 +293,10 @@ impl Database {
     }
 
     pub fn get_run(&self, run_id: &str) -> AppResult<Option<RunRecord>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, provider, status, prompt, model, mode, output_format, cwd, started_at, ended_at, exit_code, error_summary, queue_priority, profile_id, capability_snapshot_id, compatibility_warnings_json, conversation_id
              FROM runs WHERE id = ?1",
@@ -278,7 +313,10 @@ impl Database {
             None => return Ok(None),
         };
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
 
         let mut event_stmt = conn.prepare(
             "SELECT id, run_id, seq, event_type, payload_json, created_at
@@ -332,7 +370,10 @@ impl Database {
         let now = Utc::now();
         let title = normalize_conversation_title(title.unwrap_or_default());
         let metadata = metadata.cloned().unwrap_or_else(|| serde_json::json!({}));
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO conversations (id, provider, title, provider_session_id, metadata_json, created_at, updated_at, archived_at)
              VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?5, NULL)",
@@ -356,8 +397,14 @@ impl Database {
         })
     }
 
-    pub fn list_conversations(&self, filters: &ListConversationsFilters) -> AppResult<Vec<ConversationSummary>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn list_conversations(
+        &self,
+        filters: &ListConversationsFilters,
+    ) -> AppResult<Vec<ConversationSummary>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut query = String::from(
             "SELECT id, provider, title, provider_session_id, updated_at, archived_at
              FROM conversations WHERE 1 = 1",
@@ -431,7 +478,10 @@ impl Database {
     }
 
     pub fn get_conversation(&self, conversation_id: &str) -> AppResult<Option<ConversationRecord>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, provider, title, provider_session_id, metadata_json, created_at, updated_at, archived_at
              FROM conversations WHERE id = ?1",
@@ -442,11 +492,17 @@ impl Database {
         .map_err(AppError::from)
     }
 
-    pub fn get_conversation_detail(&self, conversation_id: &str) -> AppResult<Option<ConversationDetail>> {
+    pub fn get_conversation_detail(
+        &self,
+        conversation_id: &str,
+    ) -> AppResult<Option<ConversationDetail>> {
         let Some(conversation) = self.get_conversation(conversation_id)? else {
             return Ok(None);
         };
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT r.id, r.provider, r.status, r.prompt, r.model, r.mode, r.output_format, r.cwd,
                     r.started_at, r.ended_at, r.exit_code, r.error_summary, r.queue_priority,
@@ -462,10 +518,17 @@ impl Database {
         Ok(Some(ConversationDetail { conversation, runs }))
     }
 
-    pub fn rename_conversation(&self, conversation_id: &str, title: &str) -> AppResult<Option<ConversationRecord>> {
+    pub fn rename_conversation(
+        &self,
+        conversation_id: &str,
+        title: &str,
+    ) -> AppResult<Option<ConversationRecord>> {
         let normalized = normalize_conversation_title(title);
         let now = Utc::now().to_rfc3339();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let changed = conn.execute(
             "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
             params![normalized, now, conversation_id],
@@ -480,7 +543,10 @@ impl Database {
     pub fn archive_conversation(&self, conversation_id: &str, archived: bool) -> AppResult<bool> {
         let now = Utc::now().to_rfc3339();
         let archived_at = if archived { Some(now.clone()) } else { None };
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let changed = conn.execute(
             "UPDATE conversations SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
             params![archived_at, now, conversation_id],
@@ -489,7 +555,10 @@ impl Database {
     }
 
     pub fn set_run_conversation_id(&self, run_id: &str, conversation_id: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE runs SET conversation_id = ?1 WHERE id = ?2",
             params![conversation_id, run_id],
@@ -498,7 +567,10 @@ impl Database {
     }
 
     pub fn next_conversation_seq(&self, conversation_id: &str) -> AppResult<i64> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let seq: i64 = conn.query_row(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversation_runs WHERE conversation_id = ?1",
             [conversation_id],
@@ -509,7 +581,10 @@ impl Database {
 
     pub fn attach_run_to_conversation(&self, conversation_id: &str, run_id: &str) -> AppResult<()> {
         let seq = self.next_conversation_seq(conversation_id)?;
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT OR IGNORE INTO conversation_runs (id, conversation_id, run_id, seq, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -523,7 +598,10 @@ impl Database {
         )?;
         drop(conn);
         self.set_run_conversation_id(run_id, conversation_id)?;
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), conversation_id],
@@ -531,8 +609,15 @@ impl Database {
         Ok(())
     }
 
-    pub fn set_conversation_session_id(&self, conversation_id: &str, session_id: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn set_conversation_session_id(
+        &self,
+        conversation_id: &str,
+        session_id: &str,
+    ) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE conversations SET provider_session_id = ?1, updated_at = ?2 WHERE id = ?3",
             params![session_id, Utc::now().to_rfc3339(), conversation_id],
@@ -541,7 +626,10 @@ impl Database {
     }
 
     pub fn clear_conversation_session_id(&self, conversation_id: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE conversations SET provider_session_id = NULL, updated_at = ?1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), conversation_id],
@@ -550,7 +638,10 @@ impl Database {
     }
 
     pub fn touch_conversation_updated_at(&self, conversation_id: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), conversation_id],
@@ -559,19 +650,25 @@ impl Database {
     }
 
     pub fn find_conversation_id_by_run(&self, run_id: &str) -> AppResult<Option<String>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let result: Option<Option<String>> = conn
             .query_row(
-            "SELECT conversation_id FROM runs WHERE id = ?1",
-            [run_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
+                "SELECT conversation_id FROM runs WHERE id = ?1",
+                [run_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
             .optional()?;
         Ok(result.flatten())
     }
 
     pub fn list_profiles(&self) -> AppResult<Vec<Profile>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut statement = conn.prepare(
             "SELECT id, name, provider, config_json, created_at, updated_at FROM profiles ORDER BY updated_at DESC",
         )?;
@@ -621,7 +718,10 @@ impl Database {
         let now = Utc::now();
         let id = payload.id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let exists = conn
             .query_row(
                 "SELECT COUNT(1) FROM profiles WHERE id = ?1",
@@ -668,7 +768,10 @@ impl Database {
     }
 
     pub fn get_settings(&self) -> AppResult<AppSettings> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let raw = conn
             .query_row(
                 "SELECT value_json FROM settings WHERE key = 'app'",
@@ -689,7 +792,10 @@ impl Database {
         merge_json(&mut merged, update);
         let settings: AppSettings = serde_json::from_value(merged)?;
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO settings (key, value_json, updated_at)
              VALUES ('app', ?1, ?2)
@@ -701,7 +807,10 @@ impl Database {
     }
 
     pub fn insert_capability_snapshot(&self, snapshot: &CapabilitySnapshot) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO capability_snapshots (id, provider, cli_version, profile_json, detected_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -717,7 +826,10 @@ impl Database {
     }
 
     pub fn list_capability_snapshots(&self) -> AppResult<Vec<CapabilitySnapshot>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, provider, cli_version, profile_json, detected_at
              FROM capability_snapshots ORDER BY detected_at DESC LIMIT 32",
@@ -730,15 +842,17 @@ impl Database {
                     id: row.get(0)?,
                     provider: parse_provider(&row.get::<_, String>(1)?)?,
                     cli_version: row.get(2)?,
-                    profile: serde_json::from_str(&profile_raw).unwrap_or_else(|_| crate::models::CapabilityProfile {
-                        provider: Provider::Codex,
-                        cli_version: "unknown".to_string(),
-                        supported: false,
-                        degraded: true,
-                        blocked: true,
-                        supported_flags: vec![],
-                        supported_modes: vec![RunMode::NonInteractive],
-                        disabled_reasons: vec!["Corrupt profile data".to_string()],
+                    profile: serde_json::from_str(&profile_raw).unwrap_or_else(|_| {
+                        crate::models::CapabilityProfile {
+                            provider: Provider::Codex,
+                            cli_version: "unknown".to_string(),
+                            supported: false,
+                            degraded: true,
+                            blocked: true,
+                            supported_flags: vec![],
+                            supported_modes: vec![RunMode::NonInteractive],
+                            disabled_reasons: vec!["Corrupt profile data".to_string()],
+                        }
                     }),
                     detected_at: parse_time(&row.get::<_, String>(4)?)?,
                 })
@@ -748,7 +862,10 @@ impl Database {
         Ok(items)
     }
 
-    pub fn get_capability_snapshot_by_id(&self, snapshot_id: &str) -> AppResult<Option<CapabilitySnapshot>> {
+    pub fn get_capability_snapshot_by_id(
+        &self,
+        snapshot_id: &str,
+    ) -> AppResult<Option<CapabilitySnapshot>> {
         let conn = self
             .conn
             .lock()
@@ -763,15 +880,17 @@ impl Database {
                     id: row.get(0)?,
                     provider: parse_provider(&row.get::<_, String>(1)?)?,
                     cli_version: row.get(2)?,
-                    profile: serde_json::from_str(&profile_raw).unwrap_or_else(|_| crate::models::CapabilityProfile {
-                        provider: Provider::Codex,
-                        cli_version: "unknown".to_string(),
-                        supported: false,
-                        degraded: true,
-                        blocked: true,
-                        supported_flags: vec![],
-                        supported_modes: vec![RunMode::NonInteractive],
-                        disabled_reasons: vec!["Corrupt profile data".to_string()],
+                    profile: serde_json::from_str(&profile_raw).unwrap_or_else(|_| {
+                        crate::models::CapabilityProfile {
+                            provider: Provider::Codex,
+                            cli_version: "unknown".to_string(),
+                            supported: false,
+                            degraded: true,
+                            blocked: true,
+                            supported_flags: vec![],
+                            supported_modes: vec![RunMode::NonInteractive],
+                            disabled_reasons: vec!["Corrupt profile data".to_string()],
+                        }
                     }),
                     detected_at: parse_time(&row.get::<_, String>(4)?)?,
                 })
@@ -782,7 +901,10 @@ impl Database {
     }
 
     pub fn list_workspace_grants(&self) -> AppResult<Vec<WorkspaceGrant>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, path, granted_by, granted_at, revoked_at
              FROM workspace_grants ORDER BY granted_at DESC",
@@ -807,7 +929,10 @@ impl Database {
     pub fn grant_workspace(&self, path: &str, granted_by: &str) -> AppResult<WorkspaceGrant> {
         let now = Utc::now();
         let id = Uuid::new_v4().to_string();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO workspace_grants (id, path, granted_by, granted_at, revoked_at)
              VALUES (?1, ?2, ?3, ?4, NULL)",
@@ -832,7 +957,10 @@ impl Database {
     ) -> AppResult<SchedulerJob> {
         let now = Utc::now();
         let id = Uuid::new_v4().to_string();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO scheduler_jobs (id, run_id, priority, state, queued_at, next_run_at, attempts, max_retries, retry_backoff_ms, last_error)
              VALUES (?1, ?2, ?3, 'queued', ?4, ?5, 0, ?6, ?7, NULL)",
@@ -863,7 +991,10 @@ impl Database {
     }
 
     pub fn mark_job_running(&self, run_id: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE scheduler_jobs
              SET state = 'running', started_at = ?1, attempts = attempts + 1, last_error = NULL
@@ -873,8 +1004,16 @@ impl Database {
         Ok(())
     }
 
-    pub fn mark_job_retry(&self, run_id: &str, next_run_at: DateTime<Utc>, last_error: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn mark_job_retry(
+        &self,
+        run_id: &str,
+        next_run_at: DateTime<Utc>,
+        last_error: &str,
+    ) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE scheduler_jobs
              SET state = 'queued', next_run_at = ?1, started_at = NULL, finished_at = NULL, last_error = ?2
@@ -886,7 +1025,10 @@ impl Database {
 
     pub fn mark_job_finished(&self, run_id: &str, failed: bool) -> AppResult<()> {
         let state = if failed { "failed" } else { "completed" };
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE scheduler_jobs
              SET state = ?1, finished_at = ?2
@@ -897,7 +1039,10 @@ impl Database {
     }
 
     pub fn list_queue_jobs(&self) -> AppResult<Vec<SchedulerJob>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, run_id, priority, state, queued_at, started_at, finished_at
              , next_run_at, attempts, max_retries, retry_backoff_ms, last_error
@@ -1011,7 +1156,10 @@ impl Database {
     }
 
     pub fn run_retention_prune(&self, settings: &AppSettings) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "DELETE FROM runs WHERE started_at < datetime('now', ?1)",
             [format!("-{} days", settings.retention_days)],
@@ -1072,11 +1220,17 @@ impl Database {
 
     // ─── Metric Definitions CRUD ──────────────────────────────────────────────
 
-    pub fn save_metric_definition(&self, payload: SaveMetricDefinitionPayload) -> AppResult<MetricDefinition> {
+    pub fn save_metric_definition(
+        &self,
+        payload: SaveMetricDefinitionPayload,
+    ) -> AppResult<MetricDefinition> {
         let now = Utc::now();
         let id = payload.id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let exists = conn
             .query_row(
                 "SELECT COUNT(1) FROM metric_definitions WHERE id = ?1",
@@ -1091,7 +1245,9 @@ impl Database {
         let ttl_seconds = payload.ttl_seconds.unwrap_or(259200);
         let enabled = payload.enabled.unwrap_or(true);
         let proactive = payload.proactive.unwrap_or(false);
-        let metadata = payload.metadata_json.unwrap_or_else(|| serde_json::json!({}));
+        let metadata = payload
+            .metadata_json
+            .unwrap_or_else(|| serde_json::json!({}));
 
         if exists {
             conn.execute(
@@ -1161,7 +1317,10 @@ impl Database {
     }
 
     pub fn get_metric_definition(&self, id: &str) -> AppResult<Option<MetricDefinition>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
              profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
@@ -1174,7 +1333,10 @@ impl Database {
     }
 
     pub fn get_metric_definition_by_slug(&self, slug: &str) -> AppResult<Option<MetricDefinition>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
              profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
@@ -1186,8 +1348,14 @@ impl Database {
         .map_err(AppError::from)
     }
 
-    pub fn list_metric_definitions(&self, include_archived: bool) -> AppResult<Vec<MetricDefinition>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn list_metric_definitions(
+        &self,
+        include_archived: bool,
+    ) -> AppResult<Vec<MetricDefinition>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let query = if include_archived {
             "SELECT id, name, slug, instructions, template_html, ttl_seconds, provider, model,
              profile_id, cwd, enabled, proactive, metadata_json, created_at, updated_at, archived_at
@@ -1208,7 +1376,10 @@ impl Database {
 
     pub fn archive_metric_definition(&self, id: &str) -> AppResult<bool> {
         let now = Utc::now().to_rfc3339();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let changed = conn.execute(
             "UPDATE metric_definitions SET archived_at = ?1, updated_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
             params![now, id],
@@ -1217,7 +1388,10 @@ impl Database {
     }
 
     pub fn delete_metric_definition(&self, id: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let changed = conn.execute("DELETE FROM metric_definitions WHERE id = ?1", [id])?;
         Ok(changed > 0)
     }
@@ -1227,7 +1401,10 @@ impl Database {
     pub fn insert_metric_snapshot(&self, metric_id: &str) -> AppResult<MetricSnapshot> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO metric_snapshots (id, metric_id, status, created_at) VALUES (?1, ?2, 'pending', ?3)",
             params![id, metric_id, now.to_rfc3339()],
@@ -1245,8 +1422,15 @@ impl Database {
         })
     }
 
-    pub fn update_metric_snapshot_status(&self, id: &str, status: MetricSnapshotStatus) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn update_metric_snapshot_status(
+        &self,
+        id: &str,
+        status: MetricSnapshotStatus,
+    ) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE metric_snapshots SET status = ?1 WHERE id = ?2",
             params![status.as_str(), id],
@@ -1255,7 +1439,10 @@ impl Database {
     }
 
     pub fn update_metric_snapshot_run_id(&self, id: &str, run_id: &str) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE metric_snapshots SET run_id = ?1, status = 'running' WHERE id = ?2",
             params![run_id, id],
@@ -1270,7 +1457,10 @@ impl Database {
         rendered_html: &str,
     ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE metric_snapshots SET status='completed', values_json=?1, rendered_html=?2, completed_at=?3 WHERE id=?4",
             params![serde_json::to_string(values_json)?, rendered_html, now, id],
@@ -1287,7 +1477,10 @@ impl Database {
             return Ok(0);
         }
         let now = Utc::now().to_rfc3339();
-        let mut conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let tx = conn.transaction()?;
         let mut affected = 0usize;
         for metric_id in metric_ids {
@@ -1305,7 +1498,10 @@ impl Database {
     }
 
     pub fn clear_metric_dependency_invalidation(&self, metric_id: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let changed = conn.execute(
             "DELETE FROM metric_dependency_invalidations WHERE metric_id = ?1",
             [metric_id],
@@ -1315,7 +1511,10 @@ impl Database {
 
     pub fn fail_metric_snapshot(&self, id: &str, error_message: &str) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "UPDATE metric_snapshots SET status='failed', error_message=?1, completed_at=?2 WHERE id=?3",
             params![error_message, now, id],
@@ -1324,7 +1523,10 @@ impl Database {
     }
 
     pub fn get_latest_snapshot(&self, metric_id: &str) -> AppResult<Option<MetricSnapshot>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
              FROM metric_snapshots WHERE metric_id = ?1 AND status = 'completed' ORDER BY created_at DESC LIMIT 1",
@@ -1336,7 +1538,10 @@ impl Database {
     }
 
     pub fn get_snapshot(&self, id: &str) -> AppResult<Option<MetricSnapshot>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
              FROM metric_snapshots WHERE id = ?1",
@@ -1348,7 +1553,10 @@ impl Database {
     }
 
     pub fn list_snapshots(&self, metric_id: &str, limit: u32) -> AppResult<Vec<MetricSnapshot>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
              FROM metric_snapshots WHERE metric_id = ?1 ORDER BY created_at DESC LIMIT ?2",
@@ -1362,7 +1570,10 @@ impl Database {
     }
 
     pub fn get_latest_inflight_snapshot_id(&self, metric_id: &str) -> AppResult<Option<String>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id FROM metric_snapshots
              WHERE metric_id = ?1 AND status IN ('pending', 'running')
@@ -1376,11 +1587,21 @@ impl Database {
     }
 
     pub fn get_metric_diagnostics(&self, metric_id: &str) -> AppResult<MetricDiagnostics> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
 
         // Aggregation stats from executed refresh runs only.
         // Seeded snapshots use run_id = NULL and should not be treated as timing baselines.
-        let (total_runs, completed_runs, failed_runs, avg_dur, min_dur, max_dur): (i64, i64, i64, Option<f64>, Option<f64>, Option<f64>) = conn.query_row(
+        let (total_runs, completed_runs, failed_runs, avg_dur, min_dur, max_dur): (
+            i64,
+            i64,
+            i64,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+        ) = conn.query_row(
             "SELECT
                 COUNT(1),
                 COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
@@ -1393,7 +1614,16 @@ impl Database {
                     THEN (julianday(completed_at) - julianday(created_at)) * 86400.0 END)
              FROM metric_snapshots WHERE metric_id = ?1 AND run_id IS NOT NULL",
             [metric_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )?;
 
         // Last completed snapshot duration + timestamp
@@ -1414,20 +1644,24 @@ impl Database {
         ).optional()?;
 
         // Last error message
-        let last_error: Option<String> = conn.query_row(
-            "SELECT error_message FROM metric_snapshots
+        let last_error: Option<String> = conn
+            .query_row(
+                "SELECT error_message FROM metric_snapshots
              WHERE metric_id = ?1 AND status = 'failed' AND error_message IS NOT NULL
              ORDER BY created_at DESC LIMIT 1",
-            [metric_id],
-            |row| row.get(0),
-        ).optional()?;
+                [metric_id],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         // Metric definition for TTL, provider, model
-        let (ttl_seconds, provider, model): (i64, String, Option<String>) = conn.query_row(
-            "SELECT ttl_seconds, provider, model FROM metric_definitions WHERE id = ?1",
-            [metric_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).map_err(|_| AppError::NotFound(format!("metric definition {metric_id}")))?;
+        let (ttl_seconds, provider, model): (i64, String, Option<String>) = conn
+            .query_row(
+                "SELECT ttl_seconds, provider, model FROM metric_definitions WHERE id = ?1",
+                [metric_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|_| AppError::NotFound(format!("metric definition {metric_id}")))?;
 
         let success_rate = if total_runs > 0 {
             (completed_runs as f64) / (total_runs as f64) * 100.0
@@ -1468,7 +1702,10 @@ impl Database {
     }
 
     pub fn find_snapshot_by_run_id(&self, run_id: &str) -> AppResult<Option<MetricSnapshot>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.query_row(
             "SELECT id, metric_id, run_id, values_json, rendered_html, status, error_message, created_at, completed_at
              FROM metric_snapshots WHERE run_id = ?1",
@@ -1481,7 +1718,10 @@ impl Database {
 
     // ─── Screen Bindings CRUD ───────────────────────────────────────────────
 
-    pub fn bind_metric_to_screen(&self, payload: &BindMetricToScreenPayload) -> AppResult<ScreenMetricBinding> {
+    pub fn bind_metric_to_screen(
+        &self,
+        payload: &BindMetricToScreenPayload,
+    ) -> AppResult<ScreenMetricBinding> {
         let id = Uuid::new_v4().to_string();
         let position = payload.position.unwrap_or(0);
         let layout_hint = payload.layout_hint.as_deref().unwrap_or("card");
@@ -1489,7 +1729,10 @@ impl Database {
         let grid_y = payload.grid_y.unwrap_or(-1);
         let grid_w = payload.grid_w.unwrap_or(4);
         let grid_h = payload.grid_h.unwrap_or(6);
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         conn.execute(
             "INSERT INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -1509,7 +1752,10 @@ impl Database {
     }
 
     pub fn unbind_metric_from_screen(&self, binding_id: &str) -> AppResult<Option<String>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let screen_id: Option<String> = conn
             .query_row(
                 "SELECT screen_id FROM screen_metrics WHERE id = ?1",
@@ -1517,15 +1763,15 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()?;
-        conn.execute(
-            "DELETE FROM screen_metrics WHERE id = ?1",
-            [binding_id],
-        )?;
+        conn.execute("DELETE FROM screen_metrics WHERE id = ?1", [binding_id])?;
         Ok(screen_id)
     }
 
     pub fn list_screen_metrics(&self, screen_id: &str) -> AppResult<Vec<ScreenMetricView>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT sm.id, sm.screen_id, sm.metric_id, sm.position, sm.layout_hint,
                     sm.grid_x, sm.grid_y, sm.grid_w, sm.grid_h,
@@ -1566,8 +1812,10 @@ impl Database {
                 cwd: row.get(18)?,
                 enabled: row.get::<_, i32>(19)? != 0,
                 proactive: row.get::<_, i32>(20)? != 0,
-                metadata_json: serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(21)?)
-                    .unwrap_or(serde_json::json!({})),
+                metadata_json: serde_json::from_str::<serde_json::Value>(
+                    &row.get::<_, String>(21)?,
+                )
+                .unwrap_or(serde_json::json!({})),
                 created_at: parse_time(&row.get::<_, String>(22)?)?,
                 updated_at: parse_time(&row.get::<_, String>(23)?)?,
                 archived_at: row
@@ -1631,7 +1879,10 @@ impl Database {
     }
 
     pub fn reorder_screen_metrics(&self, screen_id: &str, binding_ids: &[String]) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         for (i, binding_id) in binding_ids.iter().enumerate() {
             conn.execute(
                 "UPDATE screen_metrics SET position = ?1 WHERE id = ?2 AND screen_id = ?3",
@@ -1641,8 +1892,15 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_screen_metric_layouts(&self, screen_id: &str, layouts: &[ScreenMetricLayoutItem]) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn update_screen_metric_layouts(
+        &self,
+        screen_id: &str,
+        layouts: &[ScreenMetricLayoutItem],
+    ) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         for item in layouts {
             conn.execute(
                 "UPDATE screen_metrics SET grid_x = ?1, grid_y = ?2, grid_w = ?3, grid_h = ?4 WHERE id = ?5 AND screen_id = ?6",
@@ -1654,8 +1912,14 @@ impl Database {
 
     // ─── Staleness queries ──────────────────────────────────────────────────
 
-    pub fn find_stale_metrics_for_screen(&self, screen_id: &str) -> AppResult<Vec<MetricDefinition>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+    pub fn find_stale_metrics_for_screen(
+        &self,
+        screen_id: &str,
+    ) -> AppResult<Vec<MetricDefinition>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT md.id, md.name, md.slug, md.instructions, md.template_html, md.ttl_seconds,
                     md.provider, md.model, md.profile_id, md.cwd, md.enabled, md.proactive,
@@ -1701,7 +1965,10 @@ impl Database {
     }
 
     pub fn find_proactive_stale_metrics(&self) -> AppResult<Vec<MetricDefinition>> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT md.id, md.name, md.slug, md.instructions, md.template_html, md.ttl_seconds,
                     md.provider, md.model, md.profile_id, md.cwd, md.enabled, md.proactive,
@@ -1746,8 +2013,15 @@ impl Database {
     }
 
     fn ensure_default_settings(&self) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
-        let count: i64 = conn.query_row("SELECT COUNT(1) FROM settings WHERE key = 'app'", [], |row| row.get(0))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM settings WHERE key = 'app'",
+            [],
+            |row| row.get(0),
+        )?;
         if count == 0 {
             conn.execute(
                 "INSERT INTO settings (key, value_json, updated_at) VALUES ('app', ?1, ?2)",
@@ -1901,8 +2175,8 @@ HubSpot Leads object via Kiingo MCP `hubspot.listLeads()`.
                 template_jsx,
                 3600, // 1 hour TTL
                 "claude",
-                1,    // enabled
-                0,    // not proactive by default
+                1, // enabled
+                0, // not proactive by default
                 "{}",
                 now,
             ],
@@ -2064,7 +2338,6 @@ QuickBooks Online Invoices via Kiingo MCP `quickbooks.query()`.
                 grid_h: 8,
                 grid_y: 0,
             },
-
             // ═══════════════════════════════════════════════════════════════
             // 2. Monthly Net Income
             // ═══════════════════════════════════════════════════════════════
@@ -2165,7 +2438,6 @@ QuickBooks Online P&L via Kiingo MCP `quickbooks.profitAndLoss()`.
                 grid_h: 8,
                 grid_y: 9,
             },
-
             // ═══════════════════════════════════════════════════════════════
             // 3. Sales Pipeline Value
             // ═══════════════════════════════════════════════════════════════
@@ -2252,7 +2524,6 @@ HubSpot Deals via Kiingo MCP `hubspot.listDeals()`.
                 grid_h: 8,
                 grid_y: 18,
             },
-
             // ═══════════════════════════════════════════════════════════════
             // 4. Closed Won Revenue by Month
             // ═══════════════════════════════════════════════════════════════
@@ -2341,7 +2612,6 @@ HubSpot Deals via Kiingo MCP `hubspot.listDeals()`.
                 grid_h: 8,
                 grid_y: 18,
             },
-
             // ═══════════════════════════════════════════════════════════════
             // 5. Cash Position & AR
             // ═══════════════════════════════════════════════════════════════
@@ -2457,8 +2727,8 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
                     seed.template_jsx,
                     seed.ttl,
                     "claude",
-                    1,    // enabled
-                    0,    // not proactive
+                    1, // enabled
+                    0, // not proactive
                     "{}",
                     now,
                 ],
@@ -2608,10 +2878,22 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
 
         // Grid layout columns for react-grid-layout
         if !column_exists(&conn, "screen_metrics", "grid_x")? {
-            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_x INTEGER DEFAULT -1", [])?;
-            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_y INTEGER DEFAULT -1", [])?;
-            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_w INTEGER DEFAULT 4", [])?;
-            conn.execute("ALTER TABLE screen_metrics ADD COLUMN grid_h INTEGER DEFAULT 6", [])?;
+            conn.execute(
+                "ALTER TABLE screen_metrics ADD COLUMN grid_x INTEGER DEFAULT -1",
+                [],
+            )?;
+            conn.execute(
+                "ALTER TABLE screen_metrics ADD COLUMN grid_y INTEGER DEFAULT -1",
+                [],
+            )?;
+            conn.execute(
+                "ALTER TABLE screen_metrics ADD COLUMN grid_w INTEGER DEFAULT 4",
+                [],
+            )?;
+            conn.execute(
+                "ALTER TABLE screen_metrics ADD COLUMN grid_h INTEGER DEFAULT 6",
+                [],
+            )?;
 
             // Migrate existing layout_hint values to grid sizes
             conn.execute(
@@ -2626,11 +2908,13 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
 
         // One-time migration: double grid_h values for rowHeight change (80→40)
         {
-            let migrated: i64 = conn.query_row(
-                "SELECT COUNT(1) FROM settings WHERE key = 'migration:grid_rowheight_v2'",
-                [],
-                |row| row.get(0),
-            ).unwrap_or(0);
+            let migrated: i64 = conn
+                .query_row(
+                    "SELECT COUNT(1) FROM settings WHERE key = 'migration:grid_rowheight_v2'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
             if migrated == 0 {
                 conn.execute(
                     "UPDATE screen_metrics SET grid_h = grid_h * 2 WHERE grid_h <= 4",
@@ -2728,7 +3012,12 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
             tx.execute(
                 "INSERT INTO conversation_runs (id, conversation_id, run_id, seq, created_at)
                  VALUES (?1, ?2, ?3, 1, ?4)",
-                params![Uuid::new_v4().to_string(), conversation_id, run_id, started_at],
+                params![
+                    Uuid::new_v4().to_string(),
+                    conversation_id,
+                    run_id,
+                    started_at
+                ],
             )?;
         }
 
@@ -2843,9 +3132,166 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
         Ok(())
     }
 
+    fn seed_calendar_metric(&self) -> AppResult<()> {
+        if self
+            .get_metric_definition_by_slug("daily-calendar-events")?
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let metric_id = Uuid::new_v4().to_string();
+        let instructions = Self::daily_calendar_metric_instructions();
+        let template = Self::daily_calendar_metric_template();
+        let metadata = serde_json::json!({
+            "aliases": ["today calendar", "calendar today", "ross calendar"],
+            "mailboxEmailAddress": "ross@kiingo.com",
+            "source": "kiingo-mcp.calendar.listEvents",
+            "managedBy": "system",
+        });
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        conn.execute(
+            "INSERT INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, enabled, proactive, metadata_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                metric_id,
+                "Daily Calendar Events",
+                "daily-calendar-events",
+                instructions,
+                template,
+                43200, // 12 hours
+                Provider::Claude.as_str(),
+                true,
+                false,
+                serde_json::to_string(&metadata)?,
+                now,
+                now,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_calendar_metric_defaults(&self) -> AppResult<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let existing: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT id, provider, instructions
+                 FROM metric_definitions
+                 WHERE slug = 'daily-calendar-events'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+
+        let Some((metric_id, provider, instructions)) = existing else {
+            return Ok(());
+        };
+
+        let looks_legacy = provider == Provider::Codex.as_str()
+            || instructions.contains("Retrieve all of my calendar events for today.")
+            || instructions
+                .contains("Use your calendar/MCP tools to fetch all events for today's date.");
+
+        if !looks_legacy {
+            return Ok(());
+        }
+
+        let metadata = serde_json::json!({
+            "aliases": ["today calendar", "calendar today", "ross calendar"],
+            "mailboxEmailAddress": "ross@kiingo.com",
+            "source": "kiingo-mcp.calendar.listEvents",
+            "managedBy": "system",
+            "migratedAt": Utc::now().to_rfc3339(),
+        });
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE metric_definitions
+             SET instructions = ?1,
+                 template_html = ?2,
+                 provider = ?3,
+                 model = NULL,
+                 metadata_json = ?4,
+                 updated_at = ?5
+             WHERE id = ?6",
+            params![
+                Self::daily_calendar_metric_instructions(),
+                Self::daily_calendar_metric_template(),
+                Provider::Claude.as_str(),
+                serde_json::to_string(&metadata)?,
+                now,
+                metric_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn daily_calendar_metric_instructions() -> &'static str {
+        r#"Retrieve all calendar events for TODAY from Ross's mailbox calendar (`ross@kiingo.com`) using Kiingo MCP only.
+
+## Data Source
+Microsoft Calendar via Kiingo MCP `calendar.listEvents()`.
+
+IMPORTANT - Response Shape: `calendar.listEvents()` returns `{ events: CalendarEventSummary[], totalCount: number }`.
+Use `result.events` as the list (default to `[]` when missing).
+
+IMPORTANT - Use this exact API shape and parameter names:
+```js
+await calendar.listEvents({
+  mailboxEmailAddress: 'ross@kiingo.com',
+  startDateTime: '<ISO datetime>',
+  endDateTime: '<ISO datetime>',
+  useCalendarView: true,
+  maxResults: 1000,
+  timeZone: '<IANA timezone>'
+});
+```
+
+## Date Window (required)
+1. Determine today's local calendar date (YYYY-MM-DD) for the current runtime.
+2. Build `startDateTime` at local midnight (`00:00:00`) and `endDateTime` at next local midnight.
+3. Query exactly this single day window only.
+
+## Tooling Guardrails
+- Use MCP calendar tools only. Do not use shell commands, filesystem scraping, or web search.
+- Do not call MCP help/introspection tools for this metric. Call `calendar.listEvents` directly.
+- Do not fetch any mailbox except `ross@kiingo.com`.
+
+## Values to Return
+Return a JSON object with:
+- `date`: local date as YYYY-MM-DD
+- `calendarEmail`: always `ross@kiingo.com`
+- `rangeStart`: ISO datetime used for query start
+- `rangeEnd`: ISO datetime used for query end
+- `timeZone`: timezone passed to the API
+- `events`: array sorted chronologically (all-day first), each item:
+  - `title`: string
+  - `startTime`: ISO datetime string or null
+  - `endTime`: ISO datetime string or null
+  - `allDay`: boolean
+  - `location`: string or null"#
+    }
+
+    fn daily_calendar_metric_template() -> &'static str {
+        "Render a compact Today view with: (1) header row showing date and event count, (2) a simple chronological list of events with time range, title, and optional location, and (3) a concise empty state when no events are returned. Keep JSX concise and avoid large chart scaffolding."
+    }
+
     fn ensure_default_retention(&self) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
-        let count: i64 = conn.query_row("SELECT COUNT(1) FROM retention_policies", [], |row| row.get(0))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Internal("database mutex poisoned".to_string()))?;
+        let count: i64 = conn.query_row("SELECT COUNT(1) FROM retention_policies", [], |row| {
+            row.get(0)
+        })?;
         if count == 0 {
             let now = Utc::now().to_rfc3339();
             conn.execute(
@@ -2891,12 +3337,13 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
                         if should_promote_parent {
                             if let Some(parent) = existing_path.parent() {
                                 if parent.join("package.json").is_file() {
-                                    let canonical_parent = parent.canonicalize().map_err(|error| {
-                                        AppError::Policy(format!(
+                                    let canonical_parent =
+                                        parent.canonicalize().map_err(|error| {
+                                            AppError::Policy(format!(
                                             "Unable to canonicalize promoted workspace path: {}",
                                             error
                                         ))
-                                    })?;
+                                        })?;
                                     conn.execute(
                                         "UPDATE workspace_grants SET path = ?1 WHERE id = ?2",
                                         params![canonical_parent.to_string_lossy(), id],
@@ -2917,9 +3364,12 @@ QuickBooks Online via Kiingo MCP `quickbooks.balanceSheet()` and `quickbooks.cas
                 default_path.to_string_lossy()
             )));
         }
-        let canonical = default_path
-            .canonicalize()
-            .map_err(|error| AppError::Policy(format!("Unable to resolve bootstrap workspace path: {}", error)))?;
+        let canonical = default_path.canonicalize().map_err(|error| {
+            AppError::Policy(format!(
+                "Unable to resolve bootstrap workspace path: {}",
+                error
+            ))
+        })?;
 
         conn.execute(
             "INSERT INTO workspace_grants (id, path, granted_by, granted_at, revoked_at)
@@ -2955,7 +3405,8 @@ fn parse_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         queue_priority: row.get(12)?,
         profile_id: row.get(13)?,
         capability_snapshot_id: row.get(14)?,
-        compatibility_warnings: serde_json::from_str::<Vec<String>>(&warnings_raw).unwrap_or_default(),
+        compatibility_warnings: serde_json::from_str::<Vec<String>>(&warnings_raw)
+            .unwrap_or_default(),
         conversation_id: row.get(16)?,
     })
 }
@@ -2967,7 +3418,8 @@ fn parse_conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conversat
         provider: parse_provider(&row.get::<_, String>(1)?)?,
         title: row.get(2)?,
         provider_session_id: row.get(3)?,
-        metadata: serde_json::from_str::<serde_json::Value>(&metadata_raw).unwrap_or_else(|_| serde_json::json!({})),
+        metadata: serde_json::from_str::<serde_json::Value>(&metadata_raw)
+            .unwrap_or_else(|_| serde_json::json!({})),
         created_at: parse_time(&row.get::<_, String>(5)?)?,
         updated_at: parse_time(&row.get::<_, String>(6)?)?,
         archived_at: row
@@ -3106,7 +3558,10 @@ fn parse_time(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
             rusqlite::Error::FromSqlConversionFailure(
                 0,
                 rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())),
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error.to_string(),
+                )),
             )
         })
 }
@@ -3115,7 +3570,10 @@ fn merge_json(target: &mut serde_json::Value, update: serde_json::Value) {
     match (target, update) {
         (serde_json::Value::Object(target_map), serde_json::Value::Object(update_map)) => {
             for (key, value) in update_map {
-                merge_json(target_map.entry(key).or_insert(serde_json::Value::Null), value);
+                merge_json(
+                    target_map.entry(key).or_insert(serde_json::Value::Null),
+                    value,
+                );
             }
         }
         (target, update) => {
@@ -3189,7 +3647,9 @@ mod tests {
         )
         .expect("insert run");
 
-        let runs = db.list_runs(&ListRunsFilters::default()).expect("list runs");
+        let runs = db
+            .list_runs(&ListRunsFilters::default())
+            .expect("list runs");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, "run-1");
         assert!(runs[0].profile_id.is_none());
@@ -3269,7 +3729,10 @@ mod tests {
             .expect("exists");
         assert_eq!(detail.runs.len(), 1);
         assert_eq!(detail.runs[0].id, "run-1");
-        assert_eq!(detail.runs[0].conversation_id.as_deref(), Some(conversation.id.as_str()));
+        assert_eq!(
+            detail.runs[0].conversation_id.as_deref(),
+            Some(conversation.id.as_str())
+        );
 
         let filtered = db
             .list_runs(&ListRunsFilters {
@@ -3350,8 +3813,11 @@ mod tests {
 
         {
             let conn = db.conn.lock().expect("db lock");
-            conn.execute("DELETE FROM conversation_runs WHERE run_id = 'run-repair'", [])
-                .expect("delete conversation_runs row");
+            conn.execute(
+                "DELETE FROM conversation_runs WHERE run_id = 'run-repair'",
+                [],
+            )
+            .expect("delete conversation_runs row");
         }
 
         {
@@ -3443,7 +3909,9 @@ mod tests {
         let stale_after_invalidate = db
             .find_stale_metrics_for_screen("dashboard")
             .expect("stale after invalidate");
-        assert!(stale_after_invalidate.iter().any(|metric| metric.id == dependent.id));
+        assert!(stale_after_invalidate
+            .iter()
+            .any(|metric| metric.id == dependent.id));
 
         let second_snapshot = db
             .insert_metric_snapshot(&dependent.id)

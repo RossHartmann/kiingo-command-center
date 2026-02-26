@@ -9,9 +9,12 @@ import {
   decisionsList,
   featureFlagsList,
   obsidianTasksSync,
+  projectOpen,
+  projectsList,
   projectionCheckpointGet,
   projectionRefresh,
   projectionsList,
+  registryEntriesList,
   systemApplyAttentionUpdate,
   systemGenerateDecisionCards,
   workSessionCancel,
@@ -20,9 +23,20 @@ import {
   workSessionStart,
   workSessionsList
 } from "../lib/tauriClient";
-import type { AtomRecord, ConditionRecord, DecisionPrompt, FeatureFlag, TaskStatus, WorkSessionRecord } from "../lib/types";
+import type {
+  AtomRecord,
+  ConditionRecord,
+  DecisionPrompt,
+  FeatureFlag,
+  ProjectDefinition,
+  RegistryEntry,
+  TaskStatus,
+  WorkSessionRecord
+} from "../lib/types";
 import { taskDisplayTitle } from "../lib/taskTitle";
 import { useAppActions, useAppState } from "../state/appState";
+import { resolveProjectContexts } from "../lib/projectContextResolver";
+import { OMNI_OPEN_NOTEPAD, type OmniOpenNotepadDetail } from "../components/OmniSearch";
 
 const STATUS_OPTIONS: TaskStatus[] = ["todo", "doing", "blocked", "done"];
 const TASKS_SHOW_PROJECTION_INFO_KEY = "tasks.disclosure.showProjectionInfo";
@@ -228,6 +242,8 @@ export function TasksScreen(): JSX.Element {
   const [activeConditionsByAtomId, setActiveConditionsByAtomId] = useState<Record<string, ConditionRecord[]>>({});
   const [pendingDecisions, setPendingDecisions] = useState<DecisionPrompt[]>([]);
   const [runningSession, setRunningSession] = useState<WorkSessionRecord | null>(null);
+  const [projects, setProjects] = useState<ProjectDefinition[]>([]);
+  const [registryEntries, setRegistryEntries] = useState<RegistryEntry[]>([]);
   const [featureFlags, setFeatureFlags] = useState<FeatureFlag[]>([]);
   const [waitingProjectionItems, setWaitingProjectionItems] = useState<WaitingProjectionItem[]>([]);
   const [focusProjectionItems, setFocusProjectionItems] = useState<FocusProjectionItem[]>([]);
@@ -254,6 +270,7 @@ export function TasksScreen(): JSX.Element {
   const decayEngineEnabled = isFeatureEnabled(featureFlags, "workspace.decay_engine", true);
   const focusSessionsEnabled = isFeatureEnabled(featureFlags, "workspace.focus_sessions_v2", true);
   const projectionsEnabled = isFeatureEnabled(featureFlags, "workspace.projections", true);
+  const projectContextChipsEnabled = isFeatureEnabled(featureFlags, "workspace.project_context_chips_v1", true);
 
   const loadFeatureFlags = async (): Promise<FeatureFlag[]> => {
     const flags = await featureFlagsList();
@@ -297,6 +314,15 @@ export function TasksScreen(): JSX.Element {
   const loadRunningSession = async (): Promise<WorkSessionRecord | null> => {
     const page = await workSessionsList({ status: "running", limit: 1 });
     return page.items[0] ?? null;
+  };
+
+  const loadProjectContext = async (): Promise<void> => {
+    const [nextProjects, registryPage] = await Promise.all([
+      projectsList(),
+      registryEntriesList({ status: "active", limit: 1000 })
+    ]);
+    setProjects(nextProjects.filter((project) => project.status === "active"));
+    setRegistryEntries(registryPage.items);
   };
 
   const loadProjectionData = async (refresh = false, flagsOverride?: FeatureFlag[]): Promise<void> => {
@@ -347,6 +373,7 @@ export function TasksScreen(): JSX.Element {
         loadDecisionQueue(),
         loadRunningSession()
       ]);
+      await loadProjectContext();
       setActiveConditionsByAtomId(conditions);
       setPendingDecisions(isFeatureEnabled(flags, "workspace.decision_queue", true) ? decisions : []);
       setRunningSession(session);
@@ -419,6 +446,7 @@ export function TasksScreen(): JSX.Element {
           loadDecisionQueue(),
           loadRunningSession()
         ]);
+        await loadProjectContext();
         if (cancelled) {
           return;
         }
@@ -698,6 +726,20 @@ export function TasksScreen(): JSX.Element {
     setCollapsedSections((current) => ({ ...current, [section]: !current[section] }));
   }
 
+  async function openProjectContext(projectId: string): Promise<void> {
+    try {
+      const opened = await projectOpen(projectId);
+      actions.selectScreen("notepad");
+      window.dispatchEvent(
+        new CustomEvent<OmniOpenNotepadDetail>(OMNI_OPEN_NOTEPAD, {
+          detail: { notepadId: opened.defaultViewId, projectId: opened.projectId }
+        })
+      );
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to open project context");
+    }
+  }
+
   function renderTaskCard(atom: AtomRecord, section: "primary" | "secondary" | "tertiary" | "done" | "waiting"): JSX.Element {
     const expanded = expandedTaskId === atom.id;
     const context = contextLabel(atom);
@@ -707,6 +749,7 @@ export function TasksScreen(): JSX.Element {
     const due = dueDescriptor(atom);
     const layer = attentionLayerLabel(atom);
     const heat = atom.facetData.attention?.heatScore;
+    const projectMatches = projectContextChipsEnabled ? resolveProjectContexts(atom, projects, registryEntries, 3) : [];
 
     return (
       <article key={atom.id} className={`tasks-card${section === "done" ? " done" : ""}${section === "waiting" ? " waiting" : ""}`}>
@@ -717,6 +760,17 @@ export function TasksScreen(): JSX.Element {
             <small className="tasks-status-pill">{layer}</small>
             {typeof heat === "number" && <small className="tasks-status-pill">Heat {heat.toFixed(1)}</small>}
             {atom.facetData.task?.commitmentLevel === "hard" && <small className="tasks-status-pill">Hard</small>}
+            {projectMatches.map((match) => (
+              <button
+                key={`${atom.id}-${match.project.id}`}
+                type="button"
+                className="tasks-status-pill"
+                onClick={() => void openProjectContext(match.project.id)}
+                title={`Open project context: ${match.project.name}`}
+              >
+                {match.project.name}
+              </button>
+            ))}
           </div>
           {atom.facetData.attention?.explanation && <small>{atom.facetData.attention.explanation}</small>}
         </div>
@@ -744,6 +798,7 @@ export function TasksScreen(): JSX.Element {
               {context && <small>Context: {context}</small>}
               {labels.length > 0 && <small>Labels: {labels.join(", ")}</small>}
               {threadIds.length > 0 && <small>Threads: {threadIds.length}</small>}
+              {projectMatches.length > 0 && <small>Projects: {projectMatches.map((match) => match.project.name).join(", ")}</small>}
             </div>
             <div className="tasks-card-actions">
               {section === "done" ? (
@@ -829,7 +884,8 @@ export function TasksScreen(): JSX.Element {
             </small>
             <small className="settings-hint">
               Flags: projections {projectionsEnabled ? "on" : "off"} · decay {decayEngineEnabled ? "on" : "off"} · decisions{" "}
-              {decisionQueueEnabled ? "on" : "off"} · focus {focusSessionsEnabled ? "on" : "off"}
+              {decisionQueueEnabled ? "on" : "off"} · focus {focusSessionsEnabled ? "on" : "off"} · project chips{" "}
+              {projectContextChipsEnabled ? "on" : "off"}
             </small>
             <button type="button" onClick={() => void refreshProjection()} disabled={syncing}>
               {syncing ? "Refreshing..." : "Refresh Projection"}

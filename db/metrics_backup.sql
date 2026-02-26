@@ -763,6 +763,49 @@ Flag any months with rate below 80% as needing attention (exclude current and pr
     </MetricSection>
   );
 })()', 259200, 'claude', NULL, NULL, 1, 0, '{"aliases":["collection rate","AR efficiency"]}', '2026-02-15T06:29:29+00:00', '2026-02-18T22:58:55+00:00');
+INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('cb574f79-1e09-41c4-8f65-9e7f0e32f827', 'Daily Calendar Events', 'daily-calendar-events', 'Retrieve all calendar events for TODAY from Ross''s mailbox calendar (`ross@kiingo.com`) using Kiingo MCP only.
+
+## Data Source
+Microsoft Calendar via Kiingo MCP `calendar.listEvents()`.
+
+IMPORTANT - Response Shape: `calendar.listEvents()` returns `{ events: CalendarEventSummary[], totalCount: number }`.
+Use `result.events` as the list (default to `[]` when missing).
+
+IMPORTANT - Use this exact API shape and parameter names:
+```js
+await calendar.listEvents({
+  mailboxEmailAddress: ''ross@kiingo.com'',
+  startDateTime: ''<ISO datetime>'',
+  endDateTime: ''<ISO datetime>'',
+  useCalendarView: true,
+  maxResults: 1000,
+  timeZone: ''<IANA timezone>''
+});
+```
+
+## Date Window (required)
+1. Determine today''s local calendar date (YYYY-MM-DD) for the current runtime.
+2. Build `startDateTime` at local midnight (`00:00:00`) and `endDateTime` at next local midnight.
+3. Query exactly this single day window only.
+
+## Tooling Guardrails
+- Use MCP calendar tools only. Do not use shell commands, filesystem scraping, or web search.
+- Do not call MCP help/introspection tools for this metric. Call `calendar.listEvents` directly.
+- Do not fetch any mailbox except `ross@kiingo.com`.
+
+## Values to Return
+Return a JSON object with:
+- `date`: local date as YYYY-MM-DD
+- `calendarEmail`: always `ross@kiingo.com`
+- `rangeStart`: ISO datetime used for query start
+- `rangeEnd`: ISO datetime used for query end
+- `timeZone`: timezone passed to the API
+- `events`: array sorted chronologically (all-day first), each item:
+  - `title`: string
+  - `startTime`: ISO datetime string or null
+  - `endTime`: ISO datetime string or null
+  - `allDay`: boolean
+  - `location`: string or null', 'Render a compact Today view with: (1) header row showing date and event count, (2) a simple chronological list of events with time range, title, and optional location, and (3) a concise empty state when no events are returned. Keep JSX concise and avoid large chart scaffolding.', 43200, 'claude', NULL, NULL, 1, 0, '{"aliases":["today calendar","calendar today","ross calendar"],"mailboxEmailAddress":"ross@kiingo.com","managedBy":"system","migratedAt":"2026-02-20T01:06:37.687095+00:00","source":"kiingo-mcp.calendar.listEvents"}', '2026-02-20T00:38:31.346730+00:00', '2026-02-20T01:06:37.687202+00:00');
 INSERT OR REPLACE INTO metric_definitions (id, name, slug, instructions, template_html, ttl_seconds, provider, model, profile_id, enabled, proactive, metadata_json, created_at, updated_at) VALUES ('50e1135e-e4f0-4860-91a0-44a257c8e930', 'Deal Creation Velocity', 'deal-creation-velocity', 'Track monthly new deal creation and closed-won deals from HubSpot.
 
 ## Data Source
@@ -3900,11 +3943,11 @@ INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layou
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('38a97661-9548-4aec-b6f1-f7e0d49d9049', 'efficiency', '53ac482e-61fd-4faf-9cd2-829ea591372d', 3, 'full', 0, 32, 10, 10);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('599cedd2-878f-4cac-af48-9fe4543e3e4a', 'follow-up-calls', '65e79c58-154a-5e6d-6a25-ba4610bb1829', 0, 'wide', 0, 0, 8, 15);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('b17ba97a-d2cf-46d7-86a4-e1a16d55109c', 'follow-up-calls', '32c77dad-2b50-44f9-b9e0-5b4d668d2bca', 1, 'wide', 0, 15, 8, 11);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('82ba19fc-efc9-485f-9fa8-f9007d4a86f5', 'growth', '7fca257d-0bd2-4d86-af90-a1a8df626d5c', 0, 'full', 0, 0, 5, 11);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('fd9e53e7-609c-40fe-a694-225002ba4c74', 'growth', '50e1135e-e4f0-4860-91a0-44a257c8e930', 1, 'full', 5, 0, 6, 12);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('c8baf1e9-a6ca-4854-bf4e-0cc29cf65d5a', 'growth', '3431baff-245e-4b47-84e1-2fef42405310', 2, 'full', 0, 12, 10, 10);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('5674c401-16af-42ad-a243-f454b161364f', 'growth', '35231c42-b088-4da4-b2f2-f25ebce87e36', 3, 'full', 0, 33, 10, 11);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8f8be691-dd64-49bd-a085-332da16c99b8', 'growth', '93ba384c-b172-4072-9e74-c4705f38c349', 4, 'full', 0, 22, 10, 11);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('82ba19fc-efc9-485f-9fa8-f9007d4a86f5', 'growth', '7fca257d-0bd2-4d86-af90-a1a8df626d5c', 0, 'full', 5, 0, 5, 11);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('fd9e53e7-609c-40fe-a694-225002ba4c74', 'growth', '50e1135e-e4f0-4860-91a0-44a257c8e930', 1, 'full', 0, 11, 6, 12);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('c8baf1e9-a6ca-4854-bf4e-0cc29cf65d5a', 'growth', '3431baff-245e-4b47-84e1-2fef42405310', 2, 'full', 0, 23, 10, 10);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('5674c401-16af-42ad-a243-f454b161364f', 'growth', '35231c42-b088-4da4-b2f2-f25ebce87e36', 3, 'full', 0, 44, 10, 11);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8f8be691-dd64-49bd-a085-332da16c99b8', 'growth', '93ba384c-b172-4072-9e74-c4705f38c349', 4, 'full', 0, 33, 10, 11);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8ae654ba-0c71-4727-af46-733884d533d2', 'leads-gtm', '77eea407-0b3b-4c26-b833-b6544381e98b', 0, 'full', 0, 0, 12, 10);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8fed9e3c-45f2-4426-b92d-52c3148297bf', 'leads-gtm', '7c765544-15a4-4c66-a458-1f5db331f2f8', 1, 'card', 0, 9, 4, 14);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('e44ebffc-ca59-4df8-8fa1-205db1af7e8c', 'ops-followup', '8123728e-8c27-4272-9123-ca9b8cda9ddb', 0, 'wide', 0, 0, 8, 17);
@@ -3920,14 +3963,14 @@ INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layou
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('15950cea-3433-4105-8601-8fb60cf1bad6', 'pipeline', '6978d569-0b74-452b-b3e7-5de51c90d239', 2, 'wide', 0, 16, 8, 11);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('a6a6de5c-aa50-432f-a522-1c71742f0737', 'pipeline', '5da7296a-4782-45a8-8309-b0b4f9827ce9', 3, 'wide', 0, 27, 8, 11);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('fe6236d3-2e1e-4bf4-b0c7-3a5f252f3a0a', 'pipeline', '5e4a0131-1e16-4ca6-b715-cddf54af01e4', 4, 'wide', 0, 38, 8, 4);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8e2e27b9-1ad9-4f35-b076-f9f8f96fefdd', 'revenue', '35231c42-b088-4da4-b2f2-f25ebce87e36', 0, 'full', 0, 41, 10, 11);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('e586793e-35ae-49d7-a682-6a76604f493f', 'revenue', 'd377f67d-eef4-4820-8041-d230232856e0', 0, 'full', 0, 18, 10, 23);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8e2e27b9-1ad9-4f35-b076-f9f8f96fefdd', 'revenue', '35231c42-b088-4da4-b2f2-f25ebce87e36', 0, 'full', 0, 42, 10, 11);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('e586793e-35ae-49d7-a682-6a76604f493f', 'revenue', 'd377f67d-eef4-4820-8041-d230232856e0', 0, 'full', 0, 18, 10, 24);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('01731142-5585-4488-9fd2-3417d28e453c', 'revenue', '44aed376-61f4-4b67-820c-7697f1a5179d', 0, 'full', 0, 0, 10, 18);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('43328154-c4e9-4f95-b706-69ed92b4c9a6', 'revenue', '6353801b-e51e-491d-ab5e-a780ed36b62a', 1, 'full', 0, 52, 10, 11);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('b7130bf3-6da3-4abb-b4ef-6a4c29846dab', 'revenue', '6978d569-0b74-452b-b3e7-5de51c90d239', 2, 'wide', 5, 78, 5, 12);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('a555aebe-502d-4236-81d9-fcf766ba5193', 'revenue', '93ba384c-b172-4072-9e74-c4705f38c349', 3, 'wide', 5, 63, 5, 15);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('d96b2f8c-b9a6-415c-9569-80f1d12292bf', 'revenue', '53ac482e-61fd-4faf-9cd2-829ea591372d', 4, 'full', 0, 90, 10, 10);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('9a6627f8-67c2-4317-9b7a-720b95418354', 'sales-followup', '3b4f2305-5220-4824-8f77-e78afe3906ad', 0, 'wide', 0, 0, 8, 17);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('43328154-c4e9-4f95-b706-69ed92b4c9a6', 'revenue', '6353801b-e51e-491d-ab5e-a780ed36b62a', 1, 'full', 0, 53, 10, 15);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('b7130bf3-6da3-4abb-b4ef-6a4c29846dab', 'revenue', '6978d569-0b74-452b-b3e7-5de51c90d239', 2, 'wide', 5, 83, 5, 15);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('a555aebe-502d-4236-81d9-fcf766ba5193', 'revenue', '93ba384c-b172-4072-9e74-c4705f38c349', 3, 'wide', 5, 68, 5, 15);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('d96b2f8c-b9a6-415c-9569-80f1d12292bf', 'revenue', '53ac482e-61fd-4faf-9cd2-829ea591372d', 4, 'full', 0, 98, 10, 15);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('9a6627f8-67c2-4317-9b7a-720b95418354', 'sales-followup', '3b4f2305-5220-4824-8f77-e78afe3906ad', 0, 'wide', 0, 0, 8, 18);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('aff8ed28-01a0-4f49-ba6c-30af786bfe46', 'sales-followup', '341d182e-10e8-41a1-97cd-58696adb5add', 1, 'wide', 0, 34, 8, 16);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('204f752d-2c06-4c95-bbf8-424d997672de', 'sales-followup', '62983536-af15-44e8-8425-48f84dbff512', 2, 'wide', 0, 17, 8, 17);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('1c2743e8-d955-40f4-82f7-74b279621e90', 'team-rocks', '3ec99942-c4b5-4702-bce5-9e712cc978a8', 0, 'full', 0, 0, 12, 13);
@@ -4194,78 +4237,53 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-18T23:43:35+00:00', '2026-02-18T23:43:35+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('79ea186f-ecd3-4afc-8f2d-d6bccc59fc74', '3431baff-245e-4b47-84e1-2fef42405310', '{"adjWinRate":66.5,"last3moAvg":65.1,"ltmTotal":989,"ltmWinRate":41.9,"ltmWon":414,"monthlyRates":[{"month":"Mar ''25","rate":null,"total":0,"won":0},{"month":"Apr ''25","rate":null,"total":0,"won":0},{"month":"May ''25","rate":null,"total":0,"won":0},{"month":"Jun ''25","rate":66.7,"total":9,"won":6},{"month":"Jul ''25","rate":55.6,"total":18,"won":10},{"month":"Aug ''25","rate":66.7,"total":51,"won":34},{"month":"Sep ''25","rate":9.2,"total":425,"won":39},{"month":"Oct ''25","rate":65.4,"total":179,"won":117},{"month":"Nov ''25","rate":76.8,"total":82,"won":63},{"month":"Dec ''25","rate":64.9,"total":94,"won":61},{"month":"Jan ''26","rate":61.6,"total":86,"won":53},{"month":"Feb ''26","rate":68.9,"total":45,"won":31}],"prior3moAvg":50.5,"trend":"up"}', '(() => {
- const data = [{"month":"Mar ''25","rate":null,"won":0,"total":0},{"month":"Apr ''25","rate":null,"won":0,"total":0},{"month":"May ''25","rate":null,"won":0,"total":0},{"month":"Jun ''25","rate":66.7,"won":6,"total":9},{"month":"Jul ''25","rate":55.6,"won":10,"total":18},{"month":"Aug ''25","rate":66.7,"won":34,"total":51},{"month":"Sep ''25","rate":9.2,"won":39,"total":425},{"month":"Oct ''25","rate":65.4,"won":117,"total":179},{"month":"Nov ''25","rate":76.8,"won":63,"total":82},{"month":"Dec ''25","rate":64.9,"won":61,"total":94},{"month":"Jan ''26","rate":61.6,"won":53,"total":86},{"month":"Feb ''26","rate":68.9,"won":31,"total":45}];
- const ltm = 41.9;
- const adjRate = 66.5;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('5e3bf0e4-4262-4e89-99ed-267b8ec7c80e', '3431baff-245e-4b47-84e1-2fef42405310', '{"ltmWinRate":42.2,"monthlyRates":[{"month":"Jun ''25","rate":66.7,"total":9,"won":6},{"month":"Jul ''25","rate":55.6,"total":18,"won":10},{"month":"Aug ''25","rate":66.7,"total":51,"won":34},{"month":"Sep ''25","rate":9.2,"total":425,"won":39},{"month":"Oct ''25","rate":65.4,"total":179,"won":117},{"month":"Nov ''25","rate":76.8,"total":82,"won":63},{"month":"Dec ''25","rate":64.9,"total":94,"won":61},{"month":"Jan ''26","rate":61.6,"total":86,"won":53},{"month":"Feb ''26","rate":70.4,"total":54,"won":38}],"trend":"up"}', '(() => {
+ const data = [{"month":"Jun ''25","rate":66.7,"won":6,"total":9},{"month":"Jul ''25","rate":55.6,"won":10,"total":18},{"month":"Aug ''25","rate":66.7,"won":34,"total":51},{"month":"Sep ''25","rate":9.2,"won":39,"total":425},{"month":"Oct ''25","rate":65.4,"won":117,"total":179},{"month":"Nov ''25","rate":76.8,"won":63,"total":82},{"month":"Dec ''25","rate":64.9,"won":61,"total":94},{"month":"Jan ''26","rate":61.6,"won":53,"total":86},{"month":"Feb ''26","rate":70.4,"won":38,"total":54}];
+ const ltm = 42.2;
+ const recent3Avg = 65.6;
  return (
  <MetricSection title="Win Rate Trend">
  <MetricRow>
- <StatCard
- label="LTM Win Rate"
- value="41.9%"
- subtitle="414 won / 989 closed"
- trend="↑ 3-mo avg 65.1%"
- trendDirection="up"
- />
- <StatCard
- label="Adj. Win Rate"
- value="66.5%"
- subtitle="Ex-Sep ''25 anomaly"
- trendDirection="up"
- />
+ <StatCard label="LTM Win Rate" value="42.2%" subtitle="998 closed deals" trend="-24.5pp vs ex-Sep" trendDirection="down" />
+ <StatCard label="3-Month Avg" value="65.6%" subtitle="Dec ''25 – Feb ''26" trend="+15.1pp vs prior 3mo" trendDirection="up" />
  </MetricRow>
- <div style={{ height: 230, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}>
+ <div style={{ height: 220, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}>
  <ResponsiveContainer width="100%" height="100%">
- <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+ <LineChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+ <defs>
+ <linearGradient id="winRateGrad" x1="0" y1="0" x2="0" y2="1">
+ <stop offset="5%" stopColor={theme.gradientFrom} stopOpacity={0.3} />
+ <stop offset="95%" stopColor={theme.gradientFrom} stopOpacity={0} />
+ </linearGradient>
+ </defs>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} />
- <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} tickFormatter={v => v + ''%''} domain={[0, 100]} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v, n, item) => [Number(v).toFixed(1) + ''% ('' + item.payload.won + ''/'' + item.payload.total + '')'', ''Win Rate'']} />
- <ReferenceLine y={adjRate} stroke={theme.accent} strokeDasharray="5 3" label={{ value: ''Adj avg'', position: ''insideTopRight'', fill: theme.inkMuted, fontSize: 10 }} />
- <ReferenceLine y={ltm} stroke={theme.danger} strokeDasharray="5 3" label={{ value: ''LTM avg'', position: ''insideBottomRight'', fill: theme.inkMuted, fontSize: 10 }} />
- <Line type="monotone" dataKey="rate" name="Win Rate" stroke={theme.accent} strokeWidth={2.5} dot={{ fill: theme.accent, r: 3 }} connectNulls={false} />
+ <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} tickFormatter={function(v) { return v + ''%''; }} domain={[0, 90]} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={function(v, name, props) { return [Number(v).toFixed(1) + ''% ('' + props.payload.won + ''/'' + props.payload.total + '')'', ''Win Rate'']; }} />
+ <ReferenceLine x="Sep ''25" stroke={theme.danger} strokeDasharray="4 3" label={{ value: ''⚠ Outlier'', fill: theme.danger, fontSize: 10, position: ''insideTopRight'' }} />
+ <Line type="monotone" dataKey="rate" name="Win Rate" stroke={theme.accent} strokeWidth={2.5} dot={{ fill: theme.accent, r: 3 }} activeDot={{ r: 5, fill: theme.accentStrong }} />
  </LineChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Sep ''25 shows 425 closed deals at 9.2% win rate — likely a bulk import with a default close date — which suppresses the LTM average to 41.9%. Excluding Sep, the adjusted LTM win rate is 66.5%, with a clear upward trend (+14.6 pp last 3-mo vs prior 3-mo).</MetricNote>
+ <MetricNote>Sep ''25 shows 425 closed deals vs. 9–179 in other months — a likely batch close event that depresses the LTM rate. Excluding Sep, the LTM win rate is 66.7% (382/573). Source: HubSpot Deals, hs_is_closed=true, Feb 2025 – Feb 2026.</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-18T22:45:35.267593+00:00', '2026-02-18T22:56:01.763123+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('86ed480c-c60e-43ea-b0d2-fdb5744f9ff5', '35231c42-b088-4da4-b2f2-f25ebce87e36', '{"currentMonth":152193,"ltmCollected":1828222,"ltmTotal":2003362,"monthlyData":[{"collected":84150,"count":35,"invoiced":87650,"month":"Feb ''25"},{"collected":151123,"count":66,"invoiced":190174,"month":"Mar ''25"},{"collected":117289,"count":62,"invoiced":106283,"month":"Apr ''25"},{"collected":107693,"count":34,"invoiced":125354,"month":"May ''25"},{"collected":126010,"count":61,"invoiced":139671,"month":"Jun ''25"},{"collected":159150,"count":48,"invoiced":98864,"month":"Jul ''25"},{"collected":89494,"count":51,"invoiced":114698,"month":"Aug ''25"},{"collected":146281,"count":56,"invoiced":263725,"month":"Sep ''25"},{"collected":191140,"count":48,"invoiced":197685,"month":"Oct ''25"},{"collected":204403,"count":48,"invoiced":206919,"month":"Nov ''25"},{"collected":207654,"count":60,"invoiced":120579,"month":"Dec ''25"},{"collected":135066,"count":56,"invoiced":199568,"month":"Jan ''26"},{"collected":108770,"count":25,"invoiced":152193,"month":"Feb ''26"}],"priorMonth":199568}', '(() => {
- const data = [{"month":"Feb ''25","invoiced":87650,"collected":84150,"count":35},{"month":"Mar ''25","invoiced":190174,"collected":151123,"count":66},{"month":"Apr ''25","invoiced":106283,"collected":117289,"count":62},{"month":"May ''25","invoiced":125354,"collected":107693,"count":34},{"month":"Jun ''25","invoiced":139671,"collected":126010,"count":61},{"month":"Jul ''25","invoiced":98864,"collected":159150,"count":48},{"month":"Aug ''25","invoiced":114698,"collected":89494,"count":51},{"month":"Sep ''25","invoiced":263725,"collected":146281,"count":56},{"month":"Oct ''25","invoiced":197685,"collected":191140,"count":48},{"month":"Nov ''25","invoiced":206919,"collected":204403,"count":48},{"month":"Dec ''25","invoiced":120579,"collected":207654,"count":60},{"month":"Jan ''26","invoiced":199568,"collected":135066,"count":56},{"month":"Feb ''26","invoiced":152193,"collected":108770,"count":25}];
- const currentMonth = 152193;
- const priorMonth = 199568;
- const ltmTotal = 2003362;
- const ltmCollected = 1828222;
- const collectionRate = Math.round((ltmCollected / ltmTotal) * 100);
- const mom = priorMonth > 0 ? Math.round(((currentMonth - priorMonth) / priorMonth) * 100) : 0;
-
+})()', 'completed', '2026-02-26T00:28:51.307795+00:00', '2026-02-26T00:43:09.969849+00:00');
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('85251ffd-ec5c-410b-b8ab-d3856ec98870', '35231c42-b088-4da4-b2f2-f25ebce87e36', '{"currentMonth":207894.47,"ltmCollected":1719451.71,"ltmTotal":1850168.5,"monthlyData":[{"collected":84150,"count":35,"invoiced":87650,"month":"Feb 25"},{"collected":151122.5,"count":66,"invoiced":190174,"month":"Mar 25"},{"collected":117288.5,"count":62,"invoiced":106283,"month":"Apr 25"},{"collected":107692.5,"count":34,"invoiced":125353.5,"month":"May 25"},{"collected":126010.16,"count":61,"invoiced":139671.16,"month":"Jun 25"},{"collected":159150.19,"count":48,"invoiced":98864.19,"month":"Jul 25"},{"collected":89494,"count":51,"invoiced":114698,"month":"Aug 25"},{"collected":146281,"count":56,"invoiced":263724.5,"month":"Sep 25"},{"collected":191139.8,"count":48,"invoiced":197685.27,"month":"Oct 25"},{"collected":204402.97,"count":48,"invoiced":206918.5,"month":"Nov 25"},{"collected":207654.38,"count":60,"invoiced":120578.88,"month":"Dec 25"},{"collected":135065.71,"count":56,"invoiced":198567.5,"month":"Jan 26"},{"collected":162991.38,"count":36,"invoiced":207894.47,"month":"Feb 26"}],"priorMonth":198567.5}', '(() => {
+ const data = [{"month":"Feb 25","invoiced":87650,"collected":84150,"count":35},{"month":"Mar 25","invoiced":190174,"collected":151122.5,"count":66},{"month":"Apr 25","invoiced":106283,"collected":117288.5,"count":62},{"month":"May 25","invoiced":125353.5,"collected":107692.5,"count":34},{"month":"Jun 25","invoiced":139671.16,"collected":126010.16,"count":61},{"month":"Jul 25","invoiced":98864.19,"collected":159150.19,"count":48},{"month":"Aug 25","invoiced":114698,"collected":89494,"count":51},{"month":"Sep 25","invoiced":263724.5,"collected":146281,"count":56},{"month":"Oct 25","invoiced":197685.27,"collected":191139.8,"count":48},{"month":"Nov 25","invoiced":206918.5,"collected":204402.97,"count":48},{"month":"Dec 25","invoiced":120578.88,"collected":207654.38,"count":60},{"month":"Jan 26","invoiced":198567.5,"collected":135065.71,"count":56},{"month":"Feb 26","invoiced":207894.47,"collected":162991.38,"count":36}];
+ const currentMonth = 207894.47;
+ const priorMonth = 198567.5;
+ const ltmTotal = 1850168.5;
+ const ltmCollected = 1719451.71;
+ const fmt = v => v >= 1000000 ? ''$'' + (v / 1000000).toFixed(2) + ''M'' : ''$'' + (v / 1000).toFixed(0) + ''K'';
+ const mom = ((currentMonth - priorMonth) / priorMonth * 100).toFixed(1);
  return (
  <MetricSection>
  <MetricRow>
- <StatCard
- label="This Month"
- value={''$'' + (currentMonth / 1000).toFixed(0) + ''K''}
- subtitle="Invoiced (Feb, partial)"
- trend={mom + ''%''}
- trendDirection={mom >= 0 ? ''up'' : ''down''}
- />
- <StatCard
- label="Last Month"
- value={''$'' + (priorMonth / 1000).toFixed(0) + ''K''}
- subtitle="Invoiced (Jan ''26)"
- />
- <StatCard
- label="LTM Invoiced"
- value={''$'' + (ltmTotal / 1000).toFixed(0) + ''K''}
- subtitle="Last 12 months"
- />
- <StatCard
- label="LTM Collected"
- value={''$'' + (ltmCollected / 1000).toFixed(0) + ''K''}
- subtitle={collectionRate + ''% collection rate''}
- />
+ <StatCard label="This Month" value={fmt(currentMonth)} subtitle="Invoiced (partial Feb)" trend={''+'' + mom + ''% vs last month''} trendDirection="up" />
+ <StatCard label="Last Month" value={fmt(priorMonth)} subtitle="Invoiced (Jan 26)" />
+ <StatCard label="LTM Invoiced" value={fmt(ltmTotal)} subtitle="Feb 25 – Jan 26" />
+ <StatCard label="LTM Collected" value={fmt(ltmCollected)} subtitle="Feb 25 – Jan 26" />
  </MetricRow>
  <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
  <ResponsiveContainer width="100%" height="100%">
@@ -4273,17 +4291,17 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000).toFixed(0) + ''K''} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => [''$'' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })]} />
  <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
  <Line type="monotone" dataKey="invoiced" name="Invoiced" stroke={theme.accent} strokeWidth={2.5} dot={{ r: 3, fill: theme.accent }} />
  <Line type="monotone" dataKey="collected" name="Collected" stroke={theme.accentStrong} strokeWidth={2.5} dot={{ r: 3, fill: theme.accentStrong }} strokeDasharray="6 3" />
  </LineChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Source: QuickBooks — 650 invoices + 599 payments, Feb 2025–Feb 2026. Collected reflects Payment.TxnDate (cash received), not invoice balance.</MetricNote>
+ <MetricNote>Source: QuickBooks — 661 invoices + 610 payments via Kiingo MCP</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-17T18:59:08.736963+00:00', '2026-02-17T19:01:11.878042+00:00');
+})()', 'completed', '2026-02-26T00:28:51.307803+00:00', '2026-02-26T00:45:47.682624+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('6a8d803c-194b-4a8f-8d16-f8803a5bb437', '381bed73-c1db-4f66-bf31-30a470890988', '{"totalLearners": 2167, "totalCourses": 148, "activeCourses": 4, "completedCourses": 46, "totalGroups": 134, "activeCourseNames": ["AI Bootcamp 02.06.26 Cohort", "Vistage Chair AI Bootcamp February 2025", "Kiingo Asynchronous Content", "AI Bootcamp 04.17.25 Cohort"], "loginsToday": 35, "loginsWeek": 124, "dailyLogins": [{"day": "Wed", "logins": 18}, {"day": "Thu", "logins": 22}, {"day": "Fri", "logins": 15}, {"day": "Sat", "logins": 4}, {"day": "Sun", "logins": 2}, {"day": "Mon", "logins": 28}, {"day": "Tue", "logins": 35}]}', '(() => {
   const totalLearners = 2167;
   const activeCourses = 4;
@@ -4331,59 +4349,78 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-19T01:15:02+00:00', '2026-02-19T01:15:02+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('f3685c89-bbd1-485a-a511-ee45bc6ed144', '3b4f2305-5220-4824-8f77-e78afe3906ad', '{"generatedAt": "2/18/2026", "totalOpenDeals": 189, "withDiscovery": 132, "withoutDiscovery": 57, "likelyCold": 43, "overdueFollowUps": 21, "followUpNeeded": 0, "avgDaysSinceContact": 9.4, "followUpRanges": [{"range": "0-3d", "healthy": 44, "warning": 0, "danger": 0}, {"range": "3-7d", "healthy": 82, "warning": 0, "danger": 0}, {"range": "7-14d", "healthy": 0, "warning": 8, "danger": 0}, {"range": "14-30d", "healthy": 0, "warning": 6, "danger": 0}, {"range": "30-60d", "healthy": 0, "warning": 0, "danger": 12}, {"range": "60-90d", "healthy": 0, "warning": 0, "danger": 2}, {"range": "90-180d", "healthy": 0, "warning": 0, "danger": 1}, {"range": "180+d", "healthy": 0, "warning": 0, "danger": 34}], "repBreakdown": [{"rep": "kym", "totalDeals": 84, "active": 51, "likelyCold": 33, "coldPct": 39.3}, {"rep": "david", "totalDeals": 50, "active": 42, "likelyCold": 8, "coldPct": 16.0}, {"rep": "sohrab", "totalDeals": 11, "active": 9, "likelyCold": 2, "coldPct": 18.2}, {"rep": "michael", "totalDeals": 4, "active": 4, "likelyCold": 0, "coldPct": 0}, {"rep": "ross", "totalDeals": 2, "active": 2, "likelyCold": 0, "coldPct": 0}, {"rep": "josh", "totalDeals": 2, "active": 2, "likelyCold": 0, "coldPct": 0}, {"rep": "jess", "totalDeals": 1, "active": 1, "likelyCold": 0, "coldPct": 0}, {"rep": "jordan", "totalDeals": 1, "active": 1, "likelyCold": 0, "coldPct": 0}]}', '(() => {
-  const totalOpenDeals = 189;
-  const likelyCold = 43;
-  const overdueFollowUps = 21;
-  const avgDays = 9.4;
-  const followUpRanges = [{"range": "0-3d", "healthy": 44, "warning": 0, "danger": 0}, {"range": "3-7d", "healthy": 82, "warning": 0, "danger": 0}, {"range": "7-14d", "healthy": 0, "warning": 8, "danger": 0}, {"range": "14-30d", "healthy": 0, "warning": 6, "danger": 0}, {"range": "30-60d", "healthy": 0, "warning": 0, "danger": 12}, {"range": "60-90d", "healthy": 0, "warning": 0, "danger": 2}, {"range": "90-180d", "healthy": 0, "warning": 0, "danger": 1}, {"range": "180+d", "healthy": 0, "warning": 0, "danger": 34}];
-  const repBreakdown = [{"rep": "kym", "totalDeals": 84, "active": 51, "likelyCold": 33, "coldPct": 39.3}, {"rep": "david", "totalDeals": 50, "active": 42, "likelyCold": 8, "coldPct": 16.0}, {"rep": "sohrab", "totalDeals": 11, "active": 9, "likelyCold": 2, "coldPct": 18.2}, {"rep": "michael", "totalDeals": 4, "active": 4, "likelyCold": 0, "coldPct": 0}, {"rep": "ross", "totalDeals": 2, "active": 2, "likelyCold": 0, "coldPct": 0}, {"rep": "josh", "totalDeals": 2, "active": 2, "likelyCold": 0, "coldPct": 0}, {"rep": "jess", "totalDeals": 1, "active": 1, "likelyCold": 0, "coldPct": 0}, {"rep": "jordan", "totalDeals": 1, "active": 1, "likelyCold": 0, "coldPct": 0}];
-  const generatedAt = "2/18/2026";
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('88bb71bf-b065-4bc8-a298-3eec8a78ea67', '3b4f2305-5220-4824-8f77-e78afe3906ad', '{"avgDaysSinceContact":9.4,"followUpNeeded":0,"followUpRanges":[{"danger":0,"healthy":44,"range":"0-3d","warning":0},{"danger":0,"healthy":82,"range":"3-7d","warning":0},{"danger":0,"healthy":0,"range":"7-14d","warning":8},{"danger":0,"healthy":0,"range":"14-30d","warning":6},{"danger":12,"healthy":0,"range":"30-60d","warning":0},{"danger":2,"healthy":0,"range":"60-90d","warning":0},{"danger":1,"healthy":0,"range":"90-180d","warning":0},{"danger":34,"healthy":0,"range":"180+d","warning":0}],"generatedAt":"2/18/2026","likelyCold":43,"overdueFollowUps":21,"repBreakdown":[{"active":51,"coldPct":"39.3%","likelyCold":33,"rep":"kym","totalDeals":84},{"active":42,"coldPct":"16%","likelyCold":8,"rep":"david","totalDeals":50},{"active":34,"coldPct":"0%","likelyCold":0,"rep":"Unassigned","totalDeals":34},{"active":9,"coldPct":"18.2%","likelyCold":2,"rep":"sohrab","totalDeals":11},{"active":4,"coldPct":"0%","likelyCold":0,"rep":"michael","totalDeals":4},{"active":2,"coldPct":"0%","likelyCold":0,"rep":"ross","totalDeals":2},{"active":2,"coldPct":"0%","likelyCold":0,"rep":"josh","totalDeals":2},{"active":1,"coldPct":"0%","likelyCold":0,"rep":"jess.hartmann","totalDeals":1},{"active":1,"coldPct":"0%","likelyCold":0,"rep":"jordan","totalDeals":1}],"totalOpenDeals":189,"withDiscovery":132,"withoutDiscovery":57}', '(() => {
+ const totalOpenDeals = 189;
+ const likelyCold = 43;
+ const overdueFollowUps = 21;
+ const avgDays = 9.4;
+ const followUpRanges = [
+ { range: ''0-3d'', healthy: 44, warning: 0, danger: 0 },
+ { range: ''3-7d'', healthy: 82, warning: 0, danger: 0 },
+ { range: ''7-14d'', healthy: 0, warning: 8, danger: 0 },
+ { range: ''14-30d'', healthy: 0, warning: 6, danger: 0 },
+ { range: ''30-60d'', healthy: 0, warning: 0, danger: 12 },
+ { range: ''60-90d'', healthy: 0, warning: 0, danger: 2 },
+ { range: ''90-180d'', healthy: 0, warning: 0, danger: 1 },
+ { range: ''180+d'', healthy: 0, warning: 0, danger: 34 }
+ ];
+ const repBreakdown = [
+ { rep: ''kym'', totalDeals: 84, active: 51, likelyCold: 33, coldPct: ''39.3%'' },
+ { rep: ''david'', totalDeals: 50, active: 42, likelyCold: 8, coldPct: ''16%'' },
+ { rep: ''Unassigned'', totalDeals: 34, active: 34, likelyCold: 0, coldPct: ''0%'' },
+ { rep: ''sohrab'', totalDeals: 11, active: 9, likelyCold: 2, coldPct: ''18.2%'' },
+ { rep: ''michael'', totalDeals: 4, active: 4, likelyCold: 0, coldPct: ''0%'' },
+ { rep: ''ross'', totalDeals: 2, active: 2, likelyCold: 0, coldPct: ''0%'' },
+ { rep: ''josh'', totalDeals: 2, active: 2, likelyCold: 0, coldPct: ''0%'' },
+ { rep: ''jess.hartmann'', totalDeals: 1, active: 1, likelyCold: 0, coldPct: ''0%'' },
+ { rep: ''jordan'', totalDeals: 1, active: 1, likelyCold: 0, coldPct: ''0%'' }
+ ];
+ const generatedAt = ''2/18/2026'';
 
-  return (
-    <MetricSection>
-      <MetricRow>
-        <StatCard label={''Open Deals''} value={totalOpenDeals} subtitle={''Total pipeline''} />
-        <StatCard label={''Likely Cold''} value={likelyCold} subtitle={((likelyCold / totalOpenDeals) * 100).toFixed(0) + ''% of pipeline''} />
-        <StatCard label={''Overdue >14d''} value={overdueFollowUps} subtitle={''Need attention''} />
-        <StatCard label={''Avg Days Since Contact''} value={avgDays.toFixed(1)} subtitle={''Lower is better''} />
-      </MetricRow>
+ return (
+ <MetricSection>
+ <MetricRow>
+ <StatCard label={''Open Deals''} value={totalOpenDeals} subtitle={''Total pipeline''} />
+ <StatCard label={''Likely Cold''} value={likelyCold} subtitle={((likelyCold / totalOpenDeals) * 100).toFixed(0) + ''% of pipeline''} trendDirection=''down'' />
+ <StatCard label={''Overdue >14d''} value={overdueFollowUps} subtitle={''Need attention''} trendDirection=''down'' />
+ <StatCard label={''Avg Days Since Contact''} value={avgDays.toFixed(1)} subtitle={''Lower is better''} />
+ </MetricRow>
 
-      <div style={{ height: 300, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: theme.ink }}>Follow-Up Range Distribution</div>
-        <ResponsiveContainer width="100%" height="90%">
-          <BarChart data={followUpRanges} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
-            <XAxis dataKey="range" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} angle={-25} textAnchor="end" />
-            <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
-            <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
-            <Legend />
-            <Bar dataKey="healthy" name="Healthy (0-7d)" stackId="a" fill="#16a34a" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="warning" name="Needs Attention (7-30d)" stackId="a" fill="#eab308" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="danger" name="At Risk (30d+)" stackId="a" fill={theme.danger} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+ <div style={{ height: 300, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}>
+ <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: theme.ink }}>Follow-Up Range Distribution</div>
+ <ResponsiveContainer width="100%" height="90%">
+ <BarChart data={followUpRanges} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
+ <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+ <XAxis dataKey="range" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} angle={-25} textAnchor="end" />
+ <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+ <Legend />
+ <Bar dataKey="healthy" name="Healthy (0-7d)" stackId="a" fill="#16a34a" radius={[0, 0, 0, 0]} />
+ <Bar dataKey="warning" name="Needs Attention (7-30d)" stackId="a" fill="#eab308" radius={[0, 0, 0, 0]} />
+ <Bar dataKey="danger" name="At Risk (30d+)" stackId="a" fill={theme.danger} radius={[4, 4, 0, 0]} />
+ </BarChart>
+ </ResponsiveContainer>
+ </div>
 
-      <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: theme.ink }}>Sales Rep Follow-Up Health</div>
-        <ResponsiveContainer width="100%" height="90%">
-          <BarChart data={repBreakdown} layout="vertical" margin={{ top: 10, right: 30, left: 60, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
-            <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
-            <YAxis type="category" dataKey="rep" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={55} />
-            <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
-            <Legend />
-            <Bar dataKey="active" name="Active" stackId="a" fill={theme.accent} radius={[0, 0, 0, 0]} />
-            <Bar dataKey="likelyCold" name="Likely Cold" stackId="a" fill={theme.danger} radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+ <div style={{ height: 340, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 16 }}>
+ <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: theme.ink }}>Sales Rep Follow-Up Health</div>
+ <ResponsiveContainer width="100%" height="90%">
+ <BarChart data={repBreakdown} layout="vertical" margin={{ top: 10, right: 30, left: 60, bottom: 0 }}>
+ <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
+ <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
+ <YAxis type="category" dataKey="rep" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={55} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} />
+ <Legend />
+ <Bar dataKey="active" name="Active" stackId="a" fill={theme.accent} radius={[0, 0, 0, 0]} />
+ <Bar dataKey="likelyCold" name="Likely Cold" stackId="a" fill={theme.danger} radius={[0, 4, 4, 0]} />
+ </BarChart>
+ </ResponsiveContainer>
+ </div>
 
-      <MetricNote>Source: CRM SharePoint · SALES Follow-Up Metrics Report · {generatedAt}</MetricNote>
-    </MetricSection>
-  );
-})()', 'completed', '2026-02-18T23:43:35+00:00', '2026-02-18T23:43:35+00:00');
+ <MetricNote>Source: CRM SharePoint · SALES Follow-Up Metrics Report · {generatedAt}</MetricNote>
+ </MetricSection>
+ );
+})()', 'completed', '2026-02-19T22:21:50.183719+00:00', '2026-02-19T22:24:13.722730+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('cc8f13e3-f7f5-448a-bfb4-792a05c2fde9', '3ec99942-c4b5-4702-bce5-9e712cc978a8', '{"atRiskRocks":["Rock 4: Vault Infrastructure","Rock 5: Team Upskilling","Rock 6: Content Pipeline","Rock 7: Capacity Planning"],"overallProgress":28,"rocks":[{"pct":69,"projects":3,"rock":"Rock 1: Champion Program","tasksComplete":11,"tasksTotal":16},{"pct":50,"projects":3,"rock":"Rock 2: Content Update","tasksComplete":6,"tasksTotal":12},{"pct":29,"projects":3,"rock":"Rock 3: New Course","tasksComplete":4,"tasksTotal":14},{"pct":19,"projects":3,"rock":"Rock 4: Vault Infrastructure","tasksComplete":3,"tasksTotal":16},{"pct":0,"projects":4,"rock":"Rock 5: Team Upskilling","tasksComplete":0,"tasksTotal":0},{"pct":17,"projects":3,"rock":"Rock 6: Content Pipeline","tasksComplete":3,"tasksTotal":18},{"pct":0,"projects":3,"rock":"Rock 7: Capacity Planning","tasksComplete":0,"tasksTotal":13},{"pct":37,"projects":7,"rock":"Rock 8: System Documentation","tasksComplete":11,"tasksTotal":30}]}', '(() => {
  const data = [{"rock":"Rock 1: Champion Program","projects":3,"tasksComplete":11,"tasksTotal":16,"pct":69},{"rock":"Rock 2: Content Update","projects":3,"tasksComplete":6,"tasksTotal":12,"pct":50},{"rock":"Rock 3: New Course","projects":3,"tasksComplete":4,"tasksTotal":14,"pct":29},{"rock":"Rock 4: Vault Infrastructure","projects":3,"tasksComplete":3,"tasksTotal":16,"pct":19},{"rock":"Rock 5: Team Upskilling","projects":4,"tasksComplete":0,"tasksTotal":0,"pct":0},{"rock":"Rock 6: Content Pipeline","projects":3,"tasksComplete":3,"tasksTotal":18,"pct":17},{"rock":"Rock 7: Capacity Planning","projects":3,"tasksComplete":0,"tasksTotal":13,"pct":0},{"rock":"Rock 8: System Documentation","projects":7,"tasksComplete":11,"tasksTotal":30,"pct":37}];
  const overall = Math.round(data.reduce((s, d) => s + d.pct, 0) / data.length);
@@ -4409,25 +4446,25 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </MetricSection>
  );
 })()', 'completed', '2026-02-15T19:28:48.162917+00:00', '2026-02-15T19:32:02.543226+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('47059202-b5a3-4260-965a-20caa10e6935', '44aed376-61f4-4b67-820c-7697f1a5179d', '{"avgDealSize":5292,"avgMonthlyRevenue":166947,"byService":[{"count":4,"revenue":44050,"service":"Private AI Foundational Bootcamp"},{"count":7,"revenue":15000,"service":"AI Foundational Bootcamp"},{"count":1,"revenue":9000,"service":"AI Agents Bootcamp"},{"count":1,"revenue":749,"service":"AI Champions Group"}],"collectionRate":91,"currentMonthInvoiced":49799,"currentMonthRevenue":68799,"dealCount":13,"ltmCollected":1828222,"ltmRevenue":2003362,"momGrowth":-66,"monthLabel":"February 2026","monthlyTrend":[{"collected":84150,"count":35,"invoiced":87650,"month":"Feb ''25"},{"collected":151123,"count":66,"invoiced":190174,"month":"Mar ''25"},{"collected":117289,"count":62,"invoiced":106283,"month":"Apr ''25"},{"collected":107693,"count":34,"invoiced":125354,"month":"May ''25"},{"collected":126010,"count":61,"invoiced":139671,"month":"Jun ''25"},{"collected":159150,"count":48,"invoiced":98864,"month":"Jul ''25"},{"collected":89494,"count":51,"invoiced":114698,"month":"Aug ''25"},{"collected":146281,"count":56,"invoiced":263725,"month":"Sep ''25"},{"collected":191140,"count":48,"invoiced":197685,"month":"Oct ''25"},{"collected":204403,"count":48,"invoiced":206919,"month":"Nov ''25"},{"collected":207654,"count":60,"invoiced":120579,"month":"Dec ''25"},{"collected":135066,"count":56,"invoiced":199568,"month":"Jan ''26"},{"collected":108770,"count":25,"invoiced":152193,"month":"Feb ''26"}],"newBizCount":10,"newBizRevenue":57800,"outstanding":19000,"priorMonthRevenue":199568,"topDeals":[{"amount":14000,"client":"Tire Discounter Group","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":10450,"client":"Preservation Equity Fund Advisors","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":10000,"client":"Total Package HR","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":9600,"client":"SVN (1st cohort)","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":9000,"client":"Immatics","service":"AI Agents Bootcamp","type":"Upsell"}],"upsellCount":3,"upsellRevenue":10999}', '(() => {
- const currentMonthRevenue = 68799;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('caa89201-9bfc-4c82-88a6-527723137ff5', '44aed376-61f4-4b67-820c-7697f1a5179d', '{"avgDealSize":5925,"avgMonthlyRevenue":166947,"byService":[{"count":7,"revenue":70050,"service":"Private AI Foundational Bootcamp"},{"count":7,"revenue":15000,"service":"AI Foundational Bootcamp"},{"count":1,"revenue":9000,"service":"AI Agents Bootcamp"},{"count":1,"revenue":749,"service":"AI Champions Group"}],"collectionRate":91,"currentMonthInvoiced":49799,"currentMonthRevenue":94799,"dealCount":16,"ltmCollected":1828222,"ltmRevenue":2003362,"momGrowth":-53,"monthLabel":"February 2026","monthlyTrend":[{"collected":84150,"count":35,"invoiced":87650,"month":"Feb ''25"},{"collected":151123,"count":66,"invoiced":190174,"month":"Mar ''25"},{"collected":117289,"count":62,"invoiced":106283,"month":"Apr ''25"},{"collected":107693,"count":34,"invoiced":125354,"month":"May ''25"},{"collected":126010,"count":61,"invoiced":139671,"month":"Jun ''25"},{"collected":159150,"count":48,"invoiced":98864,"month":"Jul ''25"},{"collected":89494,"count":51,"invoiced":114698,"month":"Aug ''25"},{"collected":146281,"count":56,"invoiced":263725,"month":"Sep ''25"},{"collected":191140,"count":48,"invoiced":197685,"month":"Oct ''25"},{"collected":204403,"count":48,"invoiced":206919,"month":"Nov ''25"},{"collected":207654,"count":60,"invoiced":120579,"month":"Dec ''25"},{"collected":135066,"count":56,"invoiced":199568,"month":"Jan ''26"},{"collected":108770,"count":25,"invoiced":152193,"month":"Feb ''26"}],"newBizCount":13,"newBizRevenue":83800,"outstanding":45000,"priorMonthRevenue":199568,"topDeals":[{"amount":14000,"client":"Tire Discounter Group","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":10450,"client":"Preservation Equity Fund Advisors","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":10000,"client":"Total Package HR","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":10000,"client":"Port City Baker","service":"Private AI Foundational Bootcamp","type":"New Biz"},{"amount":9600,"client":"SVN (1st cohort)","service":"Private AI Foundational Bootcamp","type":"New Biz"}],"upsellCount":3,"upsellRevenue":10999}', '(() => {
+ const currentMonthRevenue = 94799;
  const currentMonthInvoiced = 49799;
- const outstanding = 19000;
- const dealCount = 13;
- const avgDealSize = 5292;
- const newBizRevenue = 57800;
- const newBizCount = 10;
+ const outstanding = 45000;
+ const dealCount = 16;
+ const avgDealSize = 5925;
+ const newBizRevenue = 83800;
+ const newBizCount = 13;
  const upsellRevenue = 10999;
  const upsellCount = 3;
- const byService = [{"service":"Private AI Foundational Bootcamp","count":4,"revenue":44050},{"service":"AI Foundational Bootcamp","count":7,"revenue":15000},{"service":"AI Agents Bootcamp","count":1,"revenue":9000},{"service":"AI Champions Group","count":1,"revenue":749}];
- const topDeals = [{"client":"Tire Discounter Group","amount":14000,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"Preservation Equity Fund Advisors","amount":10450,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"Total Package HR","amount":10000,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"SVN (1st cohort)","amount":9600,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"Immatics","amount":9000,"service":"AI Agents Bootcamp","type":"Upsell"}];
+ const byService = [{"service":"Private AI Foundational Bootcamp","count":7,"revenue":70050},{"service":"AI Foundational Bootcamp","count":7,"revenue":15000},{"service":"AI Agents Bootcamp","count":1,"revenue":9000},{"service":"AI Champions Group","count":1,"revenue":749}];
+ const topDeals = [{"client":"Tire Discounter Group","amount":14000,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"Preservation Equity Fund Advisors","amount":10450,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"Total Package HR","amount":10000,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"Port City Baker","amount":10000,"service":"Private AI Foundational Bootcamp","type":"New Biz"},{"client":"SVN (1st cohort)","amount":9600,"service":"Private AI Foundational Bootcamp","type":"New Biz"}];
  const monthLabel = "February 2026";
  const monthlyTrend = [{"month":"Feb ''25","invoiced":87650,"collected":84150,"count":35},{"month":"Mar ''25","invoiced":190174,"collected":151123,"count":66},{"month":"Apr ''25","invoiced":106283,"collected":117289,"count":62},{"month":"May ''25","invoiced":125354,"collected":107693,"count":34},{"month":"Jun ''25","invoiced":139671,"collected":126010,"count":61},{"month":"Jul ''25","invoiced":98864,"collected":159150,"count":48},{"month":"Aug ''25","invoiced":114698,"collected":89494,"count":51},{"month":"Sep ''25","invoiced":263725,"collected":146281,"count":56},{"month":"Oct ''25","invoiced":197685,"collected":191140,"count":48},{"month":"Nov ''25","invoiced":206919,"collected":204403,"count":48},{"month":"Dec ''25","invoiced":120579,"collected":207654,"count":60},{"month":"Jan ''26","invoiced":199568,"collected":135066,"count":56},{"month":"Feb ''26","invoiced":152193,"collected":108770,"count":25}];
  const ltmRevenue = 2003362;
  const ltmCollected = 1828222;
  const collectionRate = 91;
  const priorMonthRevenue = 199568;
- const momGrowth = -66;
+ const momGrowth = -53;
  const avgMonthlyRevenue = 166947;
 
  const fmt = (n) => ''$'' + (n || 0).toLocaleString();
@@ -4437,7 +4474,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <MetricSection>
  <MetricRow>
  <StatCard label={monthLabel + '' Revenue''} value={fmtK(currentMonthRevenue)} subtitle={dealCount + '' deals closed''} />
- <StatCard label="Prior Month" value={fmtK(priorMonthRevenue)} subtitle={''MoM: '' + (momGrowth >= 0 ? ''+'' : '''') + momGrowth + ''%''} trendDirection="down" />
+ <StatCard label="Prior Month (Jan)" value={fmtK(priorMonthRevenue)} subtitle={''MoM: '' + momGrowth + ''% (month in progress)''} trendDirection="down" />
  <StatCard label="LTM Revenue" value={fmtK(ltmRevenue)} subtitle={''Avg '' + fmtK(avgMonthlyRevenue) + ''/mo''} />
  <StatCard label="Collection Rate" value={collectionRate + ''%''} subtitle={fmtK(ltmCollected) + '' collected LTM''} />
  </MetricRow>
@@ -4454,8 +4491,8 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <ComposedChart data={monthlyTrend} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
  <defs>
  <linearGradient id="revOverviewGrad" x1="0" y1="0" x2="0" y2="1">
- <stop offset="0%" stopColor="#2563eb" stopOpacity={0.15} />
- <stop offset="100%" stopColor="#2563eb" stopOpacity={0.02} />
+ <stop offset="0%" stopColor={theme.accent} stopOpacity={0.2} />
+ <stop offset="100%" stopColor={theme.accent} stopOpacity={0.02} />
  </linearGradient>
  </defs>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
@@ -4463,8 +4500,8 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={(v) => ''$'' + (v / 1000).toFixed(0) + ''K''} />
  <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v, name) => [fmt(v), name]} />
  <Legend />
- <Area type="monotone" dataKey="invoiced" name="Invoiced" stroke="#2563eb" strokeWidth={2} fill="url(#revOverviewGrad)" />
- <Line type="monotone" dataKey="collected" name="Collected" stroke="#16a34a" strokeWidth={2} strokeDasharray="6 3" dot={{ fill: ''#16a34a'', r: 3 }} />
+ <Area type="monotone" dataKey="invoiced" name="Invoiced" stroke={theme.accent} strokeWidth={2} fill="url(#revOverviewGrad)" />
+ <Line type="monotone" dataKey="collected" name="Collected" stroke={theme.accentStrong} strokeWidth={2} strokeDasharray="6 3" dot={{ fill: theme.accentStrong, r: 3 }} />
  </ComposedChart>
  </ResponsiveContainer>
  </div>
@@ -4477,7 +4514,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <BarChart data={byService} layout="vertical" margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} tickFormatter={(v) => ''$'' + (v / 1000).toFixed(0) + ''K''} />
- <YAxis type="category" dataKey="service" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} width={140} />
+ <YAxis type="category" dataKey="service" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} width={160} />
  <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 12 }} formatter={(v) => [fmt(v), ''Revenue'']} />
  <Bar dataKey="revenue" fill={theme.accent} radius={[0, 6, 6, 0]} />
  </BarChart>
@@ -4500,7 +4537,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <tr key={i} style={{ borderBottom: ''1px solid '' + theme.line }}>
  <td style={{ padding: ''6px 8px'', color: theme.ink }}>{d.client}</td>
  <td style={{ padding: ''6px 8px'', color: theme.ink, textAlign: ''right'', fontVariantNumeric: ''tabular-nums'' }}>{fmt(d.amount)}</td>
- <td style={{ padding: ''6px 8px'' }}><span style={{ padding: ''2px 6px'', borderRadius: 6, fontSize: 10, fontWeight: 600, background: d.type === ''New Biz'' ? theme.accent + ''22'' : theme.secondary + ''22'', color: d.type === ''New Biz'' ? theme.accent : theme.secondary }}>{d.type}</span></td>
+ <td style={{ padding: ''6px 8px'' }}><span style={{ padding: ''2px 6px'', borderRadius: 6, fontSize: 10, fontWeight: 600, background: theme.accent + ''22'', color: theme.accent }}>{d.type}</span></td>
  </tr>
  ))}
  </tbody>
@@ -4508,10 +4545,10 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </div>
  </div>
 
- <MetricNote>Combines Revenue Tracker (OneDrive) + QuickBooks invoicing data · Month in progress · MoM vs prior month invoiced (QB), current month from tracker</MetricNote>
+ <MetricNote>Combines Revenue Tracker (OneDrive) + QuickBooks invoicing data · February 2026 in progress · MoM compares tracker closed deals vs. prior full month QB invoiced</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-17T23:55:08.364754+00:00', '2026-02-17T23:56:00.853566+00:00');
+})()', 'completed', '2026-02-26T00:28:52.503038+00:00', '2026-02-26T00:31:32.386987+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('b6019911-fe21-4cd3-bcbd-6d32ab81abd7', '50e1135e-e4f0-4860-91a0-44a257c8e930', '{"avgCreated":91,"avgWon":48,"monthlyData":[{"created":0,"month":"Mar ''25","won":0},{"created":0,"month":"Apr ''25","won":0},{"created":0,"month":"May ''25","won":0},{"created":0,"month":"Jun ''25","won":6},{"created":0,"month":"Jul ''25","won":10},{"created":0,"month":"Aug ''25","won":34},{"created":503,"month":"Sep ''25","won":39},{"created":263,"month":"Oct ''25","won":117},{"created":199,"month":"Nov ''25","won":63},{"created":123,"month":"Dec ''25","won":61},{"created":89,"month":"Jan ''26","won":53},{"created":60,"month":"Feb ''26","won":31}],"totalCreatedLTM":1237}', '(() => {
  const data = [{"month":"Mar ''25","created":0,"won":0},{"month":"Apr ''25","created":0,"won":0},{"month":"May ''25","created":0,"won":0},{"month":"Jun ''25","created":0,"won":6},{"month":"Jul ''25","created":0,"won":10},{"month":"Aug ''25","created":0,"won":34},{"month":"Sep ''25","created":503,"won":39},{"month":"Oct ''25","created":263,"won":117},{"month":"Nov ''25","created":199,"won":63},{"month":"Dec ''25","created":123,"won":61},{"month":"Jan ''26","created":89,"won":53},{"month":"Feb ''26","created":60,"won":31}];
  const avgCreated = 91;
@@ -4541,47 +4578,42 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </MetricSection>
  );
 })()', 'completed', '2026-02-18T22:45:35.267338+00:00', '2026-02-18T22:52:40.168370+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('ac30c330-6b97-4e8c-a3bf-52155c829505', '53ac482e-61fd-4faf-9cd2-829ea591372d', '{"ar":133340.88,"cash":315964.94,"cashFlowByMonth":[{"financing":0,"month":"Aug ''25","net":13364.27,"operating":13364.27},{"financing":-63000,"month":"Sep ''25","net":3097.12,"operating":66097.12},{"financing":0,"month":"Oct ''25","net":76406.61,"operating":76406.61},{"financing":0,"month":"Nov ''25","net":97239.44,"operating":97239.44},{"financing":-233037,"month":"Dec ''25","net":-140563.95,"operating":92473.05},{"financing":0,"month":"Jan ''26","net":5806.09,"operating":5806.09},{"financing":0,"month":"Feb ''26","net":66707.31,"operating":66707.31}],"totalLiquid":449305.82}', '(() => {
- const cash = 315964.94;
- const ar = 133340.88;
- const totalLiquid = 449305.82;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('32b2659d-78bd-4c04-9754-4cf6bb120a29', '53ac482e-61fd-4faf-9cd2-829ea591372d', '{"ar":177216.88,"cash":280425.17,"cashFlowByMonth":[{"financing":-63000.0,"month":"Sep ''25","netCashFlow":3097.12,"operating":66097.12},{"financing":0.0,"month":"Oct ''25","netCashFlow":76406.61,"operating":76406.61},{"financing":0.0,"month":"Nov ''25","netCashFlow":97239.44,"operating":97239.44},{"financing":-233037.0,"month":"Dec ''25","netCashFlow":-140563.95,"operating":92473.05},{"financing":0.0,"month":"Jan ''26","netCashFlow":5806.09,"operating":5806.09},{"financing":0.0,"month":"Feb ''26","netCashFlow":20654.74,"operating":20654.74}],"totalLiquid":457642.05}', '(() => {
+ const cash = 280425.17;
+ const ar = 177216.88;
+ const totalLiquid = 457642.05;
  const data = [
- { month: "Aug ''25", operating: 13364.27, financing: 0, netCashFlow: 13364.27 },
- { month: "Sep ''25", operating: 66097.12, financing: -63000, netCashFlow: 3097.12 },
- { month: "Oct ''25", operating: 76406.61, financing: 0, netCashFlow: 76406.61 },
- { month: "Nov ''25", operating: 97239.44, financing: 0, netCashFlow: 97239.44 },
- { month: "Dec ''25", operating: 92473.05, financing: -233037, netCashFlow: -140563.95 },
- { month: "Jan ''26", operating: 5806.09, financing: 0, netCashFlow: 5806.09 },
- { month: "Feb ''26", operating: 66707.31, financing: 0, netCashFlow: 66707.31 },
+ { month: "Sep ''25", operating: 66097.12, financing: -63000.00, netCashFlow: 3097.12 },
+ { month: "Oct ''25", operating: 76406.61, financing: 0.00, netCashFlow: 76406.61 },
+ { month: "Nov ''25", operating: 97239.44, financing: 0.00, netCashFlow: 97239.44 },
+ { month: "Dec ''25", operating: 92473.05, financing: -233037.00, netCashFlow: -140563.95 },
+ { month: "Jan ''26", operating: 5806.09, financing: 0.00, netCashFlow: 5806.09 },
+ { month: "Feb ''26", operating: 20654.74, financing: 0.00, netCashFlow: 20654.74 }
  ];
 
  return (
  <MetricSection>
  <MetricRow>
- <StatCard label="Cash" value={''$'' + (cash / 1000).toFixed(0) + ''K''} subtitle="Bank accounts" trend="+$67K this month" trendDirection="up" />
+ <StatCard label="Cash" value={''$'' + (cash / 1000).toFixed(0) + ''K''} subtitle="Bank accounts" />
  <StatCard label="Receivables" value={''$'' + (ar / 1000).toFixed(0) + ''K''} subtitle="Accounts receivable" />
  <StatCard label="Total Liquid" value={''$'' + (totalLiquid / 1000).toFixed(0) + ''K''} subtitle="Cash + AR" />
  </MetricRow>
- <div style={{ height: 220, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
+ <div style={{ height: 200, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
  <ResponsiveContainer width="100%" height="100%">
  <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000).toFixed(0) + ''K''} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => [''$'' + Number(v).toLocaleString(), ''Net Cash Flow'']} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} />
  <ReferenceLine y={0} stroke={theme.danger} strokeWidth={1} />
- <Bar dataKey="netCashFlow" name="Net Cash Flow" radius={[4, 4, 0, 0]}>
- {data.map((entry, index) => (
- <Cell key={index} fill={entry.netCashFlow >= 0 ? theme.accent : theme.danger} />
- ))}
- </Bar>
+ <Bar dataKey="netCashFlow" name="Net Cash Flow" fill={theme.accent} radius={[4, 4, 0, 0]} />
  </BarChart>
  </ResponsiveContainer>
  </div>
  <MetricNote>Source: QuickBooks Balance Sheet + Cash Flow via Kiingo MCP</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-18T23:00:50.757886+00:00', '2026-02-18T23:04:58.999453+00:00');
+})()', 'completed', '2026-02-26T00:28:52.499420+00:00', '2026-02-26T00:36:18.015856+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('06c8cace-100c-4e4f-b887-20bdc73b52c0', '55d47cfc-5648-4fa7-be79-7ff67d7115d3', '{"arAgingOver90":0,"arBalance":187986.88,"cashPosition":284422.93,"collectionRate":89.4}', '(() => {
  const cash = 284422.93;
  const ar = 187986.88;
@@ -4810,19 +4842,24 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-19T00:40:01+00:00', '2026-02-19T00:40:01+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('a966ee86-df22-44c2-9758-c6a93fd3e8aa', '6353801b-e51e-491d-ab5e-a780ed36b62a', '{"currentMonth":-57718.51,"ltmTotal":720695.84,"monthlyData":[{"expenses":28149.03,"grossProfit":54828.75,"month":"Feb ''25","netIncome":26679.72},{"expenses":29008.37,"grossProfit":162336.98,"month":"Mar ''25","netIncome":133328.61},{"expenses":37359.8,"grossProfit":71685.75,"month":"Apr ''25","netIncome":34325.95},{"expenses":34172.47,"grossProfit":93168.75,"month":"May ''25","netIncome":58996.28},{"expenses":51073.14,"grossProfit":113997.91,"month":"Jun ''25","netIncome":62924.77},{"expenses":52371.15,"grossProfit":71083.51,"month":"Jul ''25","netIncome":18712.36},{"expenses":64774.7,"grossProfit":89772.92,"month":"Aug ''25","netIncome":25139.33},{"expenses":74215.28,"grossProfit":234948.41,"month":"Sep ''25","netIncome":161054.1},{"expenses":66572.18,"grossProfit":166139.59,"month":"Oct ''25","netIncome":99889.98},{"expenses":71879.07,"grossProfit":171661.82,"month":"Nov ''25","netIncome":100082.03},{"expenses":97923.15,"grossProfit":87912.2,"month":"Dec ''25","netIncome":-9713.46},{"expenses":87120.32,"grossProfit":96107.81,"month":"Jan ''26","netIncome":9276.17},{"expenses":73871.12,"grossProfit":16143.47,"month":"Feb ''26","netIncome":-57718.51}],"priorMonth":9276.17,"trailing3Avg":33214.91}', '(() => {
- const data = [{"month":"Feb ''25","netIncome":26679.72,"grossProfit":54828.75,"expenses":28149.03},{"month":"Mar ''25","netIncome":133328.61,"grossProfit":162336.98,"expenses":29008.37},{"month":"Apr ''25","netIncome":34325.95,"grossProfit":71685.75,"expenses":37359.8},{"month":"May ''25","netIncome":58996.28,"grossProfit":93168.75,"expenses":34172.47},{"month":"Jun ''25","netIncome":62924.77,"grossProfit":113997.91,"expenses":51073.14},{"month":"Jul ''25","netIncome":18712.36,"grossProfit":71083.51,"expenses":52371.15},{"month":"Aug ''25","netIncome":25139.33,"grossProfit":89772.92,"expenses":64774.7},{"month":"Sep ''25","netIncome":161054.1,"grossProfit":234948.41,"expenses":74215.28},{"month":"Oct ''25","netIncome":99889.98,"grossProfit":166139.59,"expenses":66572.18},{"month":"Nov ''25","netIncome":100082.03,"grossProfit":171661.82,"expenses":71879.07},{"month":"Dec ''25","netIncome":-9713.46,"grossProfit":87912.2,"expenses":97923.15},{"month":"Jan ''26","netIncome":9276.17,"grossProfit":96107.81,"expenses":87120.32},{"month":"Feb ''26","netIncome":-57718.51,"grossProfit":16143.47,"expenses":73871.12}];
- const currentMonth = -57718.51;
- const trailing3Avg = 33214.91;
- const ltmTotal = 720695.84;
- const fmt = (v) => (v < 0 ? ''-$'' : ''$'') + Math.abs(v / 1000).toFixed(0) + ''K'';
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('a6ed8138-c0fa-402a-a7aa-0f2dbce8ef72', '6353801b-e51e-491d-ab5e-a780ed36b62a', '{"currentMonth":-125670.93,"ltmTotal":567345.19,"monthlyData":[{"expenses":29008.37,"grossProfit":162336.98,"month":"Mar","netIncome":133328.61},{"expenses":37359.8,"grossProfit":71685.75,"month":"Apr","netIncome":34325.95},{"expenses":34172.47,"grossProfit":93168.75,"month":"May","netIncome":58996.28},{"expenses":51073.14,"grossProfit":113997.91,"month":"Jun","netIncome":62924.77},{"expenses":52371.15,"grossProfit":71083.51,"month":"Jul","netIncome":18712.36},{"expenses":64774.7,"grossProfit":89772.92,"month":"Aug","netIncome":25139.33},{"expenses":74215.28,"grossProfit":234948.41,"month":"Sep","netIncome":161054.1},{"expenses":66572.18,"grossProfit":166139.59,"month":"Oct","netIncome":99889.98},{"expenses":71879.07,"grossProfit":171661.82,"month":"Nov","netIncome":100082.03},{"expenses":97923.15,"grossProfit":87912.2,"month":"Dec","netIncome":-9713.46},{"expenses":87120.32,"grossProfit":95107.81,"month":"Jan","netIncome":8276.17},{"expenses":137524.54,"grossProfit":11844.47,"month":"Feb","netIncome":-125670.93}],"priorMonth":8276.17,"trailing3Avg":32881.58}', '(() => {
+ const data = [{"month":"Mar","netIncome":133328.61,"grossProfit":162336.98,"expenses":29008.37},{"month":"Apr","netIncome":34325.95,"grossProfit":71685.75,"expenses":37359.8},{"month":"May","netIncome":58996.28,"grossProfit":93168.75,"expenses":34172.47},{"month":"Jun","netIncome":62924.77,"grossProfit":113997.91,"expenses":51073.14},{"month":"Jul","netIncome":18712.36,"grossProfit":71083.51,"expenses":52371.15},{"month":"Aug","netIncome":25139.33,"grossProfit":89772.92,"expenses":64774.7},{"month":"Sep","netIncome":161054.1,"grossProfit":234948.41,"expenses":74215.28},{"month":"Oct","netIncome":99889.98,"grossProfit":166139.59,"expenses":66572.18},{"month":"Nov","netIncome":100082.03,"grossProfit":171661.82,"expenses":71879.07},{"month":"Dec","netIncome":-9713.46,"grossProfit":87912.2,"expenses":97923.15},{"month":"Jan","netIncome":8276.17,"grossProfit":95107.81,"expenses":87120.32},{"month":"Feb","netIncome":-125670.93,"grossProfit":11844.47,"expenses":137524.54}];
+ const currentMonth = -125670.93;
+ const trailing3Avg = 32881.58;
+ const ltmTotal = 567345.19;
+
+ const fmt = (v) => {
+ const abs = Math.abs(v);
+ const str = ''$'' + (abs / 1000).toFixed(0) + ''K'';
+ return v < 0 ? ''-'' + str : str;
+ };
 
  return (
  <MetricSection>
  <MetricRow>
- <StatCard label="This Month" value={fmt(currentMonth)} subtitle="Feb ''26 · In progress" trendDirection="down" />
- <StatCard label="3-Mo Avg" value={fmt(trailing3Avg)} subtitle="Nov ''25 – Jan ''26" />
- <StatCard label="LTM Net Income" value={fmt(ltmTotal)} subtitle="Feb ''25 – Jan ''26" />
+ <StatCard label="This Month" value={fmt(currentMonth)} subtitle="Feb 2026 · In progress" trend="vs $8K last month" trendDirection="down" />
+ <StatCard label="3-Mo Avg" value={fmt(trailing3Avg)} subtitle="Nov–Jan trailing avg" />
+ <StatCard label="LTM Net Income" value={fmt(ltmTotal)} subtitle="Mar 2025 – Feb 2026" trendDirection="up" />
  </MetricRow>
  <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
  <ResponsiveContainer width="100%" height="100%">
@@ -4835,17 +4872,17 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </defs>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
- <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => (v < 0 ? ''-$'' : ''$'') + Math.abs(v / 1000).toFixed(0) + ''K''} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => (v < 0 ? ''-$'' : ''$'') + Math.abs(Number(v)).toLocaleString(undefined, { maximumFractionDigits: 0 })} />
+ <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000).toFixed(0) + ''K''} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} />
  <ReferenceLine y={0} stroke={theme.danger} strokeWidth={1.5} />
  <Area type="monotone" dataKey="netIncome" name="Net Income" stroke={theme.accent} strokeWidth={2.5} fill="url(#niGrad)" dot={{ fill: theme.accent, r: 3, strokeWidth: 0 }} />
  </AreaChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Source: QuickBooks P&L (Accrual) via Kiingo MCP</MetricNote>
+ <MetricNote>Source: QuickBooks P&amp;L (Accrual) · Mar 2025–Feb 2026 · Feb is partial</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-18T22:45:33.872469+00:00', '2026-02-18T23:00:21.006825+00:00');
+})()', 'completed', '2026-02-26T00:28:52.496456+00:00', '2026-02-26T00:33:22.857772+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('41716d37-cd55-409f-80db-db1f9bc5013a', '65e79c58-154a-5e6d-6a25-ba4610bb1829', '{"avgPerWeek":2.9,"currentWeek":7,"dailyData":[{"count":0,"date":"2025-11-25"},{"count":0,"date":"2025-11-26"},{"count":0,"date":"2025-11-27"},{"count":0,"date":"2025-11-28"},{"count":0,"date":"2025-11-29"},{"count":0,"date":"2025-11-30"},{"count":0,"date":"2025-12-01"},{"count":0,"date":"2025-12-02"},{"count":0,"date":"2025-12-03"},{"count":0,"date":"2025-12-04"},{"count":0,"date":"2025-12-05"},{"count":0,"date":"2025-12-06"},{"count":0,"date":"2025-12-07"},{"count":0,"date":"2025-12-08"},{"count":0,"date":"2025-12-09"},{"count":0,"date":"2025-12-10"},{"count":0,"date":"2025-12-11"},{"count":0,"date":"2025-12-12"},{"count":0,"date":"2025-12-13"},{"count":0,"date":"2025-12-14"},{"count":0,"date":"2025-12-15"},{"count":0,"date":"2025-12-16"},{"count":0,"date":"2025-12-17"},{"count":0,"date":"2025-12-18"},{"count":0,"date":"2025-12-19"},{"count":0,"date":"2025-12-20"},{"count":0,"date":"2025-12-21"},{"count":0,"date":"2025-12-22"},{"count":0,"date":"2025-12-23"},{"count":0,"date":"2025-12-24"},{"count":0,"date":"2025-12-25"},{"count":0,"date":"2025-12-26"},{"count":0,"date":"2025-12-27"},{"count":0,"date":"2025-12-28"},{"count":0,"date":"2025-12-29"},{"count":0,"date":"2025-12-30"},{"count":0,"date":"2025-12-31"},{"count":0,"date":"2026-01-01"},{"count":0,"date":"2026-01-02"},{"count":0,"date":"2026-01-03"},{"count":0,"date":"2026-01-04"},{"count":0,"date":"2026-01-05"},{"count":0,"date":"2026-01-06"},{"count":0,"date":"2026-01-07"},{"count":0,"date":"2026-01-08"},{"count":0,"date":"2026-01-09"},{"count":0,"date":"2026-01-10"},{"count":0,"date":"2026-01-11"},{"count":0,"date":"2026-01-12"},{"count":0,"date":"2026-01-13"},{"count":0,"date":"2026-01-14"},{"count":0,"date":"2026-01-15"},{"count":0,"date":"2026-01-16"},{"count":0,"date":"2026-01-17"},{"count":0,"date":"2026-01-18"},{"count":0,"date":"2026-01-19"},{"count":0,"date":"2026-01-20"},{"count":1,"date":"2026-01-21"},{"count":0,"date":"2026-01-22"},{"count":0,"date":"2026-01-23"},{"count":0,"date":"2026-01-24"},{"count":0,"date":"2026-01-25"},{"count":0,"date":"2026-01-26"},{"count":1,"date":"2026-01-27"},{"count":4,"date":"2026-01-28"},{"count":0,"date":"2026-01-29"},{"count":2,"date":"2026-01-30"},{"count":0,"date":"2026-01-31"},{"count":0,"date":"2026-02-01"},{"count":1,"date":"2026-02-02"},{"count":0,"date":"2026-02-03"},{"count":2,"date":"2026-02-04"},{"count":3,"date":"2026-02-05"},{"count":6,"date":"2026-02-06"},{"count":0,"date":"2026-02-07"},{"count":0,"date":"2026-02-08"},{"count":1,"date":"2026-02-09"},{"count":1,"date":"2026-02-10"},{"count":0,"date":"2026-02-11"},{"count":6,"date":"2026-02-12"},{"count":7,"date":"2026-02-13"},{"count":0,"date":"2026-02-14"},{"count":0,"date":"2026-02-15"},{"count":5,"date":"2026-02-16"},{"count":2,"date":"2026-02-17"}],"priorWeek":15,"total":42,"trend":"increasing","weeklyData":[{"count":0,"weekOf":"2025-11-24"},{"count":0,"weekOf":"2025-12-01"},{"count":0,"weekOf":"2025-12-08"},{"count":0,"weekOf":"2025-12-15"},{"count":0,"weekOf":"2025-12-22"},{"count":0,"weekOf":"2025-12-29"},{"count":0,"weekOf":"2026-01-05"},{"count":0,"weekOf":"2026-01-12"},{"count":1,"weekOf":"2026-01-19"},{"count":7,"weekOf":"2026-01-26"},{"count":12,"weekOf":"2026-02-02"},{"count":15,"weekOf":"2026-02-09"},{"count":7,"weekOf":"2026-02-16"}]}', '<MetricSection title="Weekly Follow-Up Calls">
  {(() => {
  const weeklyData = [{weekOf:''2025-11-24'',count:0,label:''Nov 24''},{weekOf:''2025-12-01'',count:0,label:''Dec 1''},{weekOf:''2025-12-08'',count:0,label:''Dec 8''},{weekOf:''2025-12-15'',count:0,label:''Dec 15''},{weekOf:''2025-12-22'',count:0,label:''Dec 22''},{weekOf:''2025-12-29'',count:0,label:''Dec 29''},{weekOf:''2026-01-05'',count:0,label:''Jan 5''},{weekOf:''2026-01-12'',count:0,label:''Jan 12''},{weekOf:''2026-01-19'',count:1,label:''Jan 19''},{weekOf:''2026-01-26'',count:7,label:''Jan 26''},{weekOf:''2026-02-02'',count:12,label:''Feb 2''},{weekOf:''2026-02-09'',count:15,label:''Feb 9''},{weekOf:''2026-02-16'',count:7,label:''Feb 16*''}];
@@ -4880,60 +4917,49 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  })()}
 </MetricSection>', 'completed', '2026-02-17T18:07:04.301738+00:00', '2026-02-17T18:09:48.273504+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('9f67ead7-48af-4c1f-9c47-12dcdde32dd9', '67f3b504-f1c1-4239-8640-dae49706e583', '{"projects":[{"lastModified":"2026-02-16T14:10:48.127Z","openTasks":16,"priority":"High","project":"Kiingo Command Center"},{"lastModified":"2026-02-12T18:09:12.858Z","openTasks":15,"priority":"High","project":"Kiingo MCP Server"},{"lastModified":"2025-12-15T03:24:12.573Z","openTasks":21,"priority":"Medium","project":"Kiingo Chat"},{"lastModified":"2026-01-11T08:06:03.624Z","openTasks":14,"priority":"Medium","project":"Kiingo Cloud"},{"lastModified":"2026-02-09T17:01:09.108Z","openTasks":6,"priority":"Low","project":"Kiingo Website"},{"lastModified":"2026-02-08T05:46:21.110Z","openTasks":3,"priority":"Low","project":"Engineering - Kiingo Cloud Actions"}],"totalOpenTasks":75}', '(() => { const data = [{project:''Kiingo Command Center'',openTasks:16,priority:''High''},{project:''Kiingo MCP Server'',openTasks:15,priority:''High''},{project:''Kiingo Chat'',openTasks:21,priority:''Medium''},{project:''Kiingo Cloud'',openTasks:14,priority:''Medium''},{project:''Kiingo Website'',openTasks:6,priority:''Low''},{project:''Engineering - Kiingo Cloud Actions'',openTasks:3,priority:''Low''}]; const total = data.reduce((s, d) => s + d.openTasks, 0); return (<MetricSection><StatCard label="Open Engineering Tasks" value={total} subtitle="Across 6 projects" /><div style={{ marginTop: 16 }}>{data.map((d, i) => (<div key={i} style={{ display: ''flex'', alignItems: ''center'', gap: 12, padding: ''10px 12px'', background: i % 2 === 0 ? theme.panel : ''transparent'', borderRadius: 8 }}><span style={{ flex: 1, color: theme.ink, fontSize: 13, fontWeight: 600 }}>{d.project}</span><span style={{ color: theme.inkMuted, fontSize: 12 }}>{d.openTasks} tasks</span><span style={{ fontSize: 11, padding: ''2px 8px'', borderRadius: 4, background: d.priority === ''High'' ? theme.danger : d.priority === ''Medium'' ? theme.accent : theme.inkMuted, color: ''#fff'' }}>{d.priority}</span></div>))}</div><MetricNote>Source: Asana Projects via Kiingo MCP • Last updated {new Date().toLocaleDateString()}</MetricNote></MetricSection>); })()', 'completed', '2026-02-16T23:38:31.381782+00:00', '2026-02-16T23:39:27.819694+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('9f7528fd-b3c8-4f8d-bac9-16dad5ee920f', '6978d569-0b74-452b-b3e7-5de51c90d239', '{"byStage":[{"amount":531190,"count":79,"stage":"Proposal Sent","weighted":265595},{"amount":370747,"count":71,"stage":"On Hold","weighted":37075},{"amount":130747,"count":21,"stage":"Proposal (Upsell)","weighted":65374},{"amount":32850,"count":23,"stage":"Discovery Call","weighted":9855},{"amount":11498,"count":9,"stage":"Cold (Upsell)","weighted":1150},{"amount":7298,"count":27,"stage":"Outreach (Upsell)","weighted":730},{"amount":6698,"count":13,"stage":"On Hold (Upsell)","weighted":670},{"amount":850,"count":3,"stage":"Discovery (Upsell)","weighted":255},{"amount":0,"count":1,"stage":"Lead In (Partner)","weighted":0},{"amount":0,"count":2,"stage":"Discovery (Partner)","weighted":0},{"amount":0,"count":11,"stage":"Requirements (Partner)","weighted":0},{"amount":0,"count":1,"stage":"Proposal (Partner)","weighted":0},{"amount":0,"count":4,"stage":"On Hold (Partner)","weighted":0},{"amount":0,"count":3,"stage":"Free Trial (Partner)","weighted":0}],"closingNextMonth":228249,"closingThisMonth":71294,"dealCount":268,"totalUnweighted":1091878,"totalWeighted":380703}', '(() => {
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('02f9bbbd-d86c-431b-aab7-db7fe29feae5', '6978d569-0b74-452b-b3e7-5de51c90d239', '{"byStage":[{"amount":574190,"count":83,"stage":"Proposal Sent","weighted":287095},{"amount":395747,"count":71,"stage":"On Hold","weighted":39575},{"amount":198247,"count":24,"stage":"Proposal (Upsell)","weighted":99124},{"amount":66698,"count":14,"stage":"On Hold (Upsell)","weighted":6670},{"amount":32850,"count":23,"stage":"Discovery Call","weighted":9855},{"amount":11498,"count":9,"stage":"Cold (Upsell)","weighted":1150},{"amount":7298,"count":27,"stage":"Outreach (Upsell)","weighted":730},{"amount":850,"count":3,"stage":"Discovery (Upsell)","weighted":255}],"closingNextMonth":504599,"closingThisMonth":176793,"dealCount":277,"totalUnweighted":1287378,"totalWeighted":444453}', '(() => {
  const data = [
- { stage: ''Proposal Sent'', count: 79, amount: 531190, weighted: 265595 },
- { stage: ''On Hold'', count: 71, amount: 370747, weighted: 37075 },
- { stage: ''Proposal (Upsell)'', count: 21, amount: 130747, weighted: 65374 },
+ { stage: ''Proposal Sent'', count: 83, amount: 574190, weighted: 287095 },
+ { stage: ''On Hold'', count: 71, amount: 395747, weighted: 39575 },
+ { stage: ''Proposal (Upsell)'', count: 24, amount: 198247, weighted: 99124 },
+ { stage: ''On Hold (Upsell)'', count: 14, amount: 66698, weighted: 6670 },
  { stage: ''Discovery Call'', count: 23, amount: 32850, weighted: 9855 },
  { stage: ''Cold (Upsell)'', count: 9, amount: 11498, weighted: 1150 },
  { stage: ''Outreach (Upsell)'', count: 27, amount: 7298, weighted: 730 },
- { stage: ''On Hold (Upsell)'', count: 13, amount: 6698, weighted: 670 },
  { stage: ''Discovery (Upsell)'', count: 3, amount: 850, weighted: 255 },
- { stage: ''Requirements (Partner)'', count: 11, amount: 0, weighted: 0 },
- { stage: ''Free Trial (Partner)'', count: 3, amount: 0, weighted: 0 },
- { stage: ''On Hold (Partner)'', count: 4, amount: 0, weighted: 0 },
- { stage: ''Discovery (Partner)'', count: 2, amount: 0, weighted: 0 },
- { stage: ''Proposal (Partner)'', count: 1, amount: 0, weighted: 0 },
- { stage: ''Lead In (Partner)'', count: 1, amount: 0, weighted: 0 },
  ];
- const totalUnweighted = 1091878;
- const totalWeighted = 380703;
- const dealCount = 268;
- const closingThisMonth = 71294;
- const closingNextMonth = 228249;
- const chartData = data.filter(d => d.amount > 0);
+ const totalUnweighted = 1287378;
+ const totalWeighted = 444453;
+ const dealCount = 277;
+ const closingThisMonth = 176793;
+ const closingNextMonth = 504599;
 
  return (
  <MetricSection>
  <MetricRow>
- <StatCard label="Open Pipeline" value={''$'' + (totalUnweighted / 1000).toFixed(0) + ''K''} subtitle={dealCount + '' deals''} />
- <StatCard label="Weighted Pipeline" value={''$'' + (totalWeighted / 1000).toFixed(0) + ''K''} subtitle="Probability-adjusted" />
+ <StatCard label="Open Pipeline" value={''$'' + (totalUnweighted / 1000).toFixed(0) + ''K''} subtitle={dealCount + '' open deals''} />
+ <StatCard label="Weighted Value" value={''$'' + (totalWeighted / 1000).toFixed(0) + ''K''} subtitle="Probability-adjusted" />
  <StatCard label="Closing This Month" value={''$'' + (closingThisMonth / 1000).toFixed(0) + ''K''} subtitle="Feb 2026" />
  <StatCard label="Closing Next Month" value={''$'' + (closingNextMonth / 1000).toFixed(0) + ''K''} subtitle="Mar 2026" />
  </MetricRow>
- <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: ''20px 20px 20px 20px'', border: `1px solid ${theme.line}` }}>
+ <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
  <ResponsiveContainer width="100%" height="100%">
- <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 60, left: 130, bottom: 5 }}>
+ <BarChart data={data} layout="vertical" margin={{ top: 5, right: 60, left: 120, bottom: 5 }}>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} horizontal={false} />
  <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000).toFixed(0) + ''K''} />
- <YAxis type="category" dataKey="stage" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={125} />
- <Tooltip
- contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }}
- formatter={(v, name) => [''$'' + Number(v).toLocaleString(), name]}
- />
- <Legend wrapperStyle={{ fontSize: 12, color: theme.inkMuted }} />
+ <YAxis type="category" dataKey="stage" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={115} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v, name) => [''$'' + Number(v).toLocaleString(), name]} />
  <Bar dataKey="amount" name="Pipeline Value" fill={theme.accent} radius={[0, 4, 4, 0]}>
- <LabelList dataKey="count" position="right" style={{ fill: theme.inkMuted, fontSize: 11 }} formatter={v => v + '' deals''} />
+ <LabelList dataKey="amount" position="right" style={{ fill: theme.inkMuted, fontSize: 10 }} formatter={v => v > 0 ? ''$'' + (v / 1000).toFixed(0) + ''K'' : ''''} />
  </Bar>
- <Bar dataKey="weighted" name="Weighted Value" fill={theme.accentStrong} radius={[0, 4, 4, 0]} opacity={0.7} />
+ <Bar dataKey="weighted" name="Weighted" fill={theme.accentStrong} radius={[0, 4, 4, 0]} opacity={0.6} />
  </BarChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Open sales deals across New Business, Upsells &amp; Partnership pipelines · Source: HubSpot CRM via Kiingo MCP · As of Feb 17, 2026</MetricNote>
+ <MetricNote>Open deals across New Business, Upsells &amp; Partnership pipelines (1,507 total deals, 277 open) · Source: HubSpot CRM via Kiingo MCP · As of Feb 25, 2026</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-17T18:22:46.041617+00:00', '2026-02-17T18:24:44.948310+00:00');
+})()', 'completed', '2026-02-26T00:28:52.497509+00:00', '2026-02-26T00:35:31.245846+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('eb1ec21e-536a-4372-8735-0785171334c8', '6ca5270a-b1c7-4646-bc2f-f0e0d78e61f0', '{"totalWon": 349, "uniqueCompanies": 142, "growthMultiple": 5.2, "lastMonthWon": 30, "monthlyData": [{"month": "Sep ''24", "won": 2}, {"month": "Oct ''24", "won": 5}, {"month": "Nov ''24", "won": 8}, {"month": "Dec ''24", "won": 10}, {"month": "Jan ''25", "won": 14}, {"month": "Feb ''25", "won": 22}, {"month": "Mar ''25", "won": 18}, {"month": "Apr ''25", "won": 20}, {"month": "May ''25", "won": 24}, {"month": "Jun ''25", "won": 22}, {"month": "Jul ''25", "won": 18}, {"month": "Aug ''25", "won": 20}, {"month": "Sep ''25", "won": 26}, {"month": "Oct ''25", "won": 32}, {"month": "Nov ''25", "won": 28}, {"month": "Dec ''25", "won": 24}, {"month": "Jan ''26", "won": 30}, {"month": "Feb ''26", "won": 18}], "monthlyByType": [{"month": "Sep ''24", "foundational": 2, "private": 0, "agents": 0, "specialized": 0}, {"month": "Oct ''24", "foundational": 4, "private": 1, "agents": 0, "specialized": 0}, {"month": "Nov ''24", "foundational": 6, "private": 2, "agents": 0, "specialized": 0}, {"month": "Dec ''24", "foundational": 7, "private": 3, "agents": 0, "specialized": 0}, {"month": "Jan ''25", "foundational": 10, "private": 3, "agents": 1, "specialized": 0}, {"month": "Feb ''25", "foundational": 14, "private": 5, "agents": 2, "specialized": 1}, {"month": "Mar ''25", "foundational": 12, "private": 4, "agents": 1, "specialized": 1}, {"month": "Apr ''25", "foundational": 12, "private": 4, "agents": 2, "specialized": 2}, {"month": "May ''25", "foundational": 14, "private": 5, "agents": 3, "specialized": 2}, {"month": "Jun ''25", "foundational": 12, "private": 5, "agents": 3, "specialized": 2}, {"month": "Jul ''25", "foundational": 10, "private": 4, "agents": 2, "specialized": 2}, {"month": "Aug ''25", "foundational": 12, "private": 4, "agents": 2, "specialized": 2}, {"month": "Sep ''25", "foundational": 16, "private": 5, "agents": 3, "specialized": 2}, {"month": "Oct ''25", "foundational": 18, "private": 6, "agents": 4, "specialized": 4}, {"month": "Nov ''25", "foundational": 16, "private": 5, "agents": 4, "specialized": 3}, {"month": "Dec ''25", "foundational": 14, "private": 4, "agents": 3, "specialized": 3}, {"month": "Jan ''26", "foundational": 18, "private": 5, "agents": 4, "specialized": 3}, {"month": "Feb ''26", "foundational": 10, "private": 4, "agents": 2, "specialized": 2}]}', '(() => {
   const totalWon = 349;
   const uniqueCompanies = 142;
@@ -5048,15 +5074,15 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </MetricSection>
  );
 })()', 'completed', '2026-02-16T22:43:36.929875+00:00', '2026-02-16T22:44:28.407545+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('6c4b1746-7895-448e-8d57-6ef64dea2441', '7fca257d-0bd2-4d86-af90-a1a8df626d5c', '{"avgMoMGrowth":15.01,"latestGrowth":65.51,"monthlyGrowth":[{"growth":-42.28,"month":"2025-02"},{"growth":116.97,"month":"2025-03"},{"growth":-44.11,"month":"2025-04"},{"growth":17.94,"month":"2025-05"},{"growth":11.42,"month":"2025-06"},{"growth":-29.22,"month":"2025-07"},{"growth":16.02,"month":"2025-08"},{"growth":129.93,"month":"2025-09"},{"growth":-25.04,"month":"2025-10"},{"growth":4.67,"month":"2025-11"},{"growth":-41.73,"month":"2025-12"},{"growth":65.51,"month":"2026-01"}]}', '(() => {
- const data = [{"month":"Feb ''25","growth":-42.28},{"month":"Mar ''25","growth":116.97},{"month":"Apr ''25","growth":-44.11},{"month":"May ''25","growth":17.94},{"month":"Jun ''25","growth":11.42},{"month":"Jul ''25","growth":-29.22},{"month":"Aug ''25","growth":16.02},{"month":"Sep ''25","growth":129.93},{"month":"Oct ''25","growth":-25.04},{"month":"Nov ''25","growth":4.67},{"month":"Dec ''25","growth":-41.73},{"month":"Jan ''26","growth":65.51}];
- const avg = 15.01;
- const latest = 65.51;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('791f6b5e-3da6-497d-8382-9f9b7f8871b3', '7fca257d-0bd2-4d86-af90-a1a8df626d5c', '{"avgMoMGrowth":14.94,"latestGrowth":64.7,"monthlyGrowth":[{"growth":-42.3,"month":"Feb ''25"},{"growth":117,"month":"Mar ''25"},{"growth":-44.1,"month":"Apr ''25"},{"growth":17.9,"month":"May ''25"},{"growth":11.4,"month":"Jun ''25"},{"growth":-29.2,"month":"Jul ''25"},{"growth":16,"month":"Aug ''25"},{"growth":129.9,"month":"Sep ''25"},{"growth":-25,"month":"Oct ''25"},{"growth":4.7,"month":"Nov ''25"},{"growth":-41.7,"month":"Dec ''25"},{"growth":64.7,"month":"Jan ''26"}]}', '(() => {
+ const data = [{"month":"Feb ''25","growth":-42.3},{"month":"Mar ''25","growth":117},{"month":"Apr ''25","growth":-44.1},{"month":"May ''25","growth":17.9},{"month":"Jun ''25","growth":11.4},{"month":"Jul ''25","growth":-29.2},{"month":"Aug ''25","growth":16},{"month":"Sep ''25","growth":129.9},{"month":"Oct ''25","growth":-25},{"month":"Nov ''25","growth":4.7},{"month":"Dec ''25","growth":-41.7},{"month":"Jan ''26","growth":64.7}];
+ const avg = 14.94;
+ const latest = 64.7;
  return (
  <MetricSection title="Revenue Growth Rate">
  <MetricRow>
- <StatCard label="Avg MoM Growth" value={avg.toFixed(1) + ''%''} subtitle="Trailing 12 months" trend="+15.0%" trendDirection="up" />
- <StatCard label="Latest MoM Growth" value={latest.toFixed(1) + ''%''} subtitle="Jan ''26 vs Dec ''25" trend="+65.5%" trendDirection="up" />
+ <StatCard label="Avg MoM Growth" value={avg.toFixed(1) + ''%''} subtitle="Trailing 12 months" trendDirection={avg >= 0 ? ''up'' : ''down''} />
+ <StatCard label="Latest MoM Growth" value={latest.toFixed(1) + ''%''} subtitle="Jan ''26 vs Dec ''25" trendDirection={latest >= 0 ? ''up'' : ''down''} />
  </MetricRow>
  <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}>
  <ResponsiveContainer width="100%" height="100%">
@@ -5064,9 +5090,9 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => v + ''%''} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => Number(v).toFixed(1) + ''%''} />
- <ReferenceLine y={0} stroke={theme.danger} strokeWidth={1} strokeDasharray="4 2" />
- <Bar dataKey="growth" name="MoM Growth" radius={[4,4,0,0]}>
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => [Number(v).toFixed(1) + ''%'', ''MoM Growth'']} />
+ <ReferenceLine y={0} stroke={theme.danger} strokeWidth={1.5} />
+ <Bar dataKey="growth" name="MoM Growth" radius={[4, 4, 0, 0]}>
  {data.map((entry, index) => (
  <Cell key={index} fill={entry.growth >= 0 ? theme.accent : theme.danger} />
  ))}
@@ -5074,10 +5100,10 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </BarChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Source: QuickBooks invoices · 668 invoices · Jan 2025 – Jan 2026</MetricNote>
+ <MetricNote>668 invoices · Jan 2025 – Jan 2026 · Negative bars shown in danger color</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-18T22:45:35.264423+00:00', '2026-02-18T22:57:39.732772+00:00');
+})()', 'completed', '2026-02-26T00:28:51.307800+00:00', '2026-02-26T00:30:37.686071+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('5df46984-0a5d-41b5-8be6-ea79517bb731', '8123728e-8c27-4272-9123-ca9b8cda9ddb', '{"generatedAt": "2/18/2026", "totalOpenDeals": 58, "withDiscovery": 51, "withoutDiscovery": 7, "likelyCold": 2, "overdueFollowUps": 37, "followUpNeeded": 0, "avgDaysSinceContact": 39.6, "followUpRanges": [{"range": "0-3d", "healthy": 3, "warning": 0, "danger": 0}, {"range": "3-7d", "healthy": 8, "warning": 0, "danger": 0}, {"range": "7-14d", "healthy": 0, "warning": 5, "danger": 0}, {"range": "14-30d", "healthy": 0, "warning": 9, "danger": 0}, {"range": "30-60d", "healthy": 0, "warning": 0, "danger": 10}, {"range": "60-90d", "healthy": 0, "warning": 0, "danger": 16}, {"range": "90-180d", "healthy": 0, "warning": 0, "danger": 1}, {"range": "180+d", "healthy": 0, "warning": 0, "danger": 6}], "repBreakdown": [{"rep": "kym", "totalDeals": 23, "active": 22, "likelyCold": 1, "coldPct": 4.3}, {"rep": "ross", "totalDeals": 10, "active": 10, "likelyCold": 0, "coldPct": 0}, {"rep": "josh", "totalDeals": 6, "active": 6, "likelyCold": 0, "coldPct": 0}, {"rep": "david", "totalDeals": 4, "active": 3, "likelyCold": 1, "coldPct": 25.0}, {"rep": "michael", "totalDeals": 4, "active": 4, "likelyCold": 0, "coldPct": 0}, {"rep": "james", "totalDeals": 3, "active": 3, "likelyCold": 0, "coldPct": 0}, {"rep": "jordan", "totalDeals": 2, "active": 2, "likelyCold": 0, "coldPct": 0}, {"rep": "jess", "totalDeals": 1, "active": 1, "likelyCold": 0, "coldPct": 0}]}', '(() => {
   const totalOpenDeals = 58;
   const likelyCold = 2;
@@ -5219,20 +5245,20 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-18T01:06:32+00:00', '2026-02-18T01:06:32+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('67cf5a31-e264-427e-afa8-50ac86edb4ec', '93ba384c-b172-4072-9e74-c4705f38c349', '{"bestMonth":{"amount":369676,"month":"Oct ''25"},"currentMonth":144899,"monthlyData":[{"amount":19420,"count":5,"month":"Jun ''25"},{"amount":25387,"count":10,"month":"Jul ''25"},{"amount":106600,"count":33,"month":"Aug ''25"},{"amount":212700,"count":36,"month":"Sep ''25"},{"amount":369676,"count":115,"month":"Oct ''25"},{"amount":247744,"count":61,"month":"Nov ''25"},{"amount":152094,"count":57,"month":"Dec ''25"},{"amount":299297,"count":53,"month":"Jan ''26"},{"amount":144899,"count":29,"month":"Feb ''26"}],"totalWon":1577817,"trailingAvg":175313}', '(() => {
- const data = [{"month":"Jun ''25","amount":19420,"count":5},{"month":"Jul ''25","amount":25387,"count":10},{"month":"Aug ''25","amount":106600,"count":33},{"month":"Sep ''25","amount":212700,"count":36},{"month":"Oct ''25","amount":369676,"count":115},{"month":"Nov ''25","amount":247744,"count":61},{"month":"Dec ''25","amount":152094,"count":57},{"month":"Jan ''26","amount":299297,"count":53},{"month":"Feb ''26","amount":144899,"count":29}];
- const currentMonth = 144899;
- const bestMonth = 369676;
- const trailingAvg = 175313;
- const totalWon = 1577817;
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('de8c8ffb-edd7-4452-8886-985bdd214367', '93ba384c-b172-4072-9e74-c4705f38c349', '{"bestMonth":{"amount":369676,"month":"Oct 25"},"currentMonth":184399,"monthlyData":[{"amount":19420,"count":5,"month":"Jun 25"},{"amount":25387,"count":10,"month":"Jul 25"},{"amount":106600,"count":33,"month":"Aug 25"},{"amount":212700,"count":36,"month":"Sep 25"},{"amount":369676,"count":115,"month":"Oct 25"},{"amount":247744,"count":61,"month":"Nov 25"},{"amount":152094,"count":57,"month":"Dec 25"},{"amount":299297,"count":53,"month":"Jan 26"},{"amount":184399,"count":36,"month":"Feb 26"}],"totalWon":1617317,"trailingAvg":179702}', '(() => {
+ const data = [{"month":"Jun 25","amount":19420,"count":5},{"month":"Jul 25","amount":25387,"count":10},{"month":"Aug 25","amount":106600,"count":33},{"month":"Sep 25","amount":212700,"count":36},{"month":"Oct 25","amount":369676,"count":115},{"month":"Nov 25","amount":247744,"count":61},{"month":"Dec 25","amount":152094,"count":57},{"month":"Jan 26","amount":299297,"count":53},{"month":"Feb 26","amount":184399,"count":36}];
+ const currentMonth = 184399;
+ const bestMonth = { month: ''Oct 25'', amount: 369676 };
+ const trailingAvg = 179702;
+ const totalWon = 1617317;
 
  return (
  <MetricSection>
  <MetricRow>
- <StatCard label="This Month" value={''$'' + (currentMonth / 1000).toFixed(0) + ''K''} subtitle="Closed won · Feb ''26" trend={''+'' + ((currentMonth / trailingAvg - 1) * 100).toFixed(0) + ''% vs avg''} trendDirection={currentMonth >= trailingAvg ? ''up'' : ''down''} />
- <StatCard label="Best Month" value={''$'' + (bestMonth / 1000).toFixed(0) + ''K''} subtitle="Oct ''25 · Peak" />
- <StatCard label="Monthly Avg" value={''$'' + (trailingAvg / 1000).toFixed(0) + ''K''} subtitle="Trailing average" />
- <StatCard label="Total Won" value={''$'' + (totalWon / 1000).toFixed(0) + ''K''} subtitle="All time · 418 deals" />
+ <StatCard label="This Month" value={''$'' + (currentMonth / 1000).toFixed(0) + ''K''} subtitle="Closed won · Feb 26" trend="+3%" trendDirection="up" />
+ <StatCard label="Best Month" value={''$'' + (bestMonth.amount / 1000).toFixed(0) + ''K''} subtitle={bestMonth.month + '' · Peak''} />
+ <StatCard label="Monthly Avg" value={''$'' + (trailingAvg / 1000).toFixed(0) + ''K''} subtitle="All-time average" />
+ <StatCard label="Total Won" value={''$'' + (totalWon / 1000).toFixed(0) + ''K''} subtitle="9 months · 406 deals" />
  </MetricRow>
  <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
  <ResponsiveContainer width="100%" height="100%">
@@ -5240,16 +5266,16 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000).toFixed(0) + ''K''} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v, name, props) => [''$'' + Number(v).toLocaleString(), ''Closed Won ('' + props.payload.count + '' deals)'']} />
- <ReferenceLine y={trailingAvg} stroke={theme.line} strokeDasharray="6 4" label={{ value: ''Avg'', fill: theme.inkMuted, fontSize: 10 }} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v, name, props) => [''$'' + Number(v).toLocaleString(), ''Closed Won'']} labelFormatter={label => label + '' · '' + (data.find(d => d.month === label) || {}).count + '' deals''} />
+ <ReferenceLine y={trailingAvg} stroke={theme.inkMuted} strokeDasharray="6 4" label={{ value: ''Avg'', fill: theme.inkMuted, fontSize: 10, position: ''right'' }} />
  <Bar dataKey="amount" name="Closed Won" fill={theme.accent} radius={[4, 4, 0, 0]} />
  </BarChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>HubSpot closed-won deals across all sales pipelines · 418 deals · Jun 2025–Feb 2026 · Source: HubSpot CRM via Kiingo MCP</MetricNote>
+ <MetricNote>HubSpot closed-won deals across all sales pipelines · 425 deals total · Source: HubSpot CRM via Kiingo MCP</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-19T00:49:14.872177+00:00', '2026-02-19T00:50:50.974955+00:00');
+})()', 'completed', '2026-02-26T00:28:51.307791+00:00', '2026-02-26T00:40:18.885798+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('d259c321-975c-40e5-9c81-8680cab2bf05', '95795ece-97c3-4fef-987a-67f543b85c8d', '{"monthlyData": [{"month": "Jan ''25", "completed": 6}, {"month": "Feb ''25", "completed": 8}, {"month": "Mar ''25", "completed": 1}, {"month": "May ''25", "completed": 18}, {"month": "Jun ''25", "completed": 5}, {"month": "Jul ''25", "completed": 3}, {"month": "Aug ''25", "completed": 1}, {"month": "Sep ''25", "completed": 9}, {"month": "Oct ''25", "completed": 7}], "totalCompleted": 72, "avgPerMonth": 6.5, "lastMonthCount": 7, "peakMonth": "May ''25", "peakCount": 18, "trend": "accelerating", "byInstructor": [{"name": "Josh", "completed": 40}, {"name": "James", "completed": 20}, {"name": "Ross", "completed": 3}]}', '(() => {
   const monthlyData = [{"month": "Jan ''25", "completed": 6}, {"month": "Feb ''25", "completed": 8}, {"month": "Mar ''25", "completed": 1}, {"month": "May ''25", "completed": 18}, {"month": "Jun ''25", "completed": 5}, {"month": "Jul ''25", "completed": 3}, {"month": "Aug ''25", "completed": 1}, {"month": "Sep ''25", "completed": 9}, {"month": "Oct ''25", "completed": 7}];
   const totalCompleted = 72;
@@ -5578,6 +5604,71 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  );
 })()', 'completed', '2026-02-16T23:38:32.245751+00:00', '2026-02-16T23:40:19.363943+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('6ba4e551-4063-407f-99dc-30fbb568e23e', 'c8f0a7ec-5cc2-4990-b7e1-9cf0f247992c', '{"byProduct":[{"count":175,"name":"New Business","value":937287},{"count":46,"name":"(Ops) Private Bootcamp","value":626249},{"count":67,"name":"Upsells","value":133342},{"count":36,"name":"(Ops) AI Assessment & Roadmap","value":97820},{"count":56,"name":"Other","value":100372}],"totalDeals":380,"totalPipeline":1895070}', '(() => { const data = [{name: ''New Business'', value: 937287, count: 175}, {name: ''(Ops) Private Bootcamp'', value: 626249, count: 46}, {name: ''Upsells'', value: 133342, count: 67}, {name: ''(Ops) AI Assessment & Roadmap'', value: 97820, count: 36}, {name: ''Other'', value: 100372, count: 56}]; const total = 1895070; return (<MetricSection><StatCard label="Total Pipeline" value={''$'' + (total / 1000).toFixed(0) + ''K''} subtitle={''5 product lines''} /><div style={{ height: 260, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}><ResponsiveContainer width="100%" height="100%"><BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 5 }}><CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} /><XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v/1000) + ''K''} /><YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={75} /><Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} /><Bar dataKey="value" name="Pipeline Value" fill={theme.accent} radius={[0,4,4,0]} /></BarChart></ResponsiveContainer></div></MetricSection>); })()', 'completed', '2026-02-16T16:16:54.245471+00:00', '2026-02-16T16:20:04.918188+00:00');
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('7e1e5d7a-fce7-4859-9814-4016093a58f4', 'cb574f79-1e09-41c4-8f65-9e7f0e32f827', '{"allDayCount":3,"calendarEmail":"ross@kiingo.com","date":"2026-02-20","events":[{"allDay":true,"endTime":null,"location":"Cruise","startTime":null,"title":"Kym PTO (Feb 16-23)"},{"allDay":true,"endTime":"2026-02-20T00:00:00","location":null,"startTime":"2026-02-19T00:00:00","title":"Home"},{"allDay":true,"endTime":"2026-02-21T00:00:00","location":null,"startTime":"2026-02-20T00:00:00","title":"Home"},{"allDay":false,"endTime":"2026-02-20T09:30:00","location":"Teams","startTime":"2026-02-20T09:00:00","title":"Canceled: Kiingo AI and Razorleaf Corporation Next Steps"},{"allDay":false,"endTime":"2026-02-20T11:00:00","location":null,"startTime":"2026-02-20T10:00:00","title":"Pow slides prep"},{"allDay":false,"endTime":"2026-02-20T11:30:00","location":"Teams","startTime":"2026-02-20T11:00:00","title":"1:1 Josh and Ross"},{"allDay":false,"endTime":"2026-02-20T12:00:00","location":"Teams","startTime":"2026-02-20T11:40:00","title":"Tactical Session"},{"allDay":false,"endTime":"2026-02-20T12:30:00","location":null,"startTime":"2026-02-20T12:00:00","title":"Prep Time"},{"allDay":false,"endTime":"2026-02-20T12:45:00","location":"Teams","startTime":"2026-02-20T12:15:00","title":"Canceled: Kiingo AI - Next Steps Workshop - Kate Bennet"},{"allDay":false,"endTime":"2026-02-20T14:00:00","location":"Zoom","startTime":"2026-02-20T12:30:00","title":"AI Roundtable - Robin''s CEO groups"},{"allDay":false,"endTime":"2026-02-20T14:30:00","location":"Teams","startTime":"2026-02-20T13:30:00","title":"Kiingo AI and Walker Tape Co. Consultative Call"},{"allDay":false,"endTime":"2026-02-20T15:00:00","location":"Zoom","startTime":"2026-02-20T14:00:00","title":"BLOCK: Wade Fuqua - POW Conference $250 honorarium"},{"allDay":false,"endTime":"2026-02-20T15:30:00","location":"Teams","startTime":"2026-02-20T15:00:00","title":"Sprint Framework"},{"allDay":false,"endTime":"2026-02-20T16:00:00","location":null,"startTime":"2026-02-20T15:30:00","title":"Prep Time"},{"allDay":false,"endTime":"2026-02-20T16:30:00","location":"Teams","startTime":"2026-02-20T15:30:00","title":"Kiingo AI and Consultative Call"},{"allDay":false,"endTime":"2026-02-20T16:30:00","location":"Teams","startTime":"2026-02-20T16:00:00","title":"Kiingo AI - Kinship Group"},{"allDay":false,"endTime":"2026-02-20T17:00:00","location":"Zoom","startTime":"2026-02-20T16:00:00","title":"Office Hours for Vistage Chairs"},{"allDay":false,"endTime":"2026-02-20T18:30:00","location":null,"startTime":"2026-02-20T18:00:00","title":"Invoice Wade"}],"rangeEnd":"2026-02-21T00:00:00","rangeStart":"2026-02-20T00:00:00","timeZone":"America/New_York","timedCount":15,"totalCount":18}', '(() => {
+ const allDayEvts = [
+ { title: ''Kym PTO (Feb 16–23)'', location: ''Cruise'' },
+ { title: ''Home'', location: null },
+ { title: ''Home'', location: null },
+ ];
+ const timedEvts = [
+ { title: ''Canceled: Kiingo AI and Razorleaf Corporation Next Steps'', s: ''2026-02-20T09:00:00'', e: ''2026-02-20T09:30:00'', loc: ''Teams'' },
+ { title: ''Pow slides prep'', s: ''2026-02-20T10:00:00'', e: ''2026-02-20T11:00:00'', loc: null },
+ { title: ''1:1 Josh and Ross'', s: ''2026-02-20T11:00:00'', e: ''2026-02-20T11:30:00'', loc: ''Teams'' },
+ { title: ''Tactical Session'', s: ''2026-02-20T11:40:00'', e: ''2026-02-20T12:00:00'', loc: ''Teams'' },
+ { title: ''Prep Time'', s: ''2026-02-20T12:00:00'', e: ''2026-02-20T12:30:00'', loc: null },
+ { title: ''Canceled: Kiingo AI - Next Steps Workshop - Kate Bennet'', s: ''2026-02-20T12:15:00'', e: ''2026-02-20T12:45:00'', loc: ''Teams'' },
+ { title: "AI Roundtable - Robin''s CEO groups", s: ''2026-02-20T12:30:00'', e: ''2026-02-20T14:00:00'', loc: ''Zoom'' },
+ { title: ''Kiingo AI and Walker Tape Co. Consultative Call'', s: ''2026-02-20T13:30:00'', e: ''2026-02-20T14:30:00'', loc: ''Teams'' },
+ { title: ''BLOCK: Wade Fuqua – POW Conference $250 honorarium'', s: ''2026-02-20T14:00:00'', e: ''2026-02-20T15:00:00'', loc: ''Zoom'' },
+ { title: ''Sprint Framework'', s: ''2026-02-20T15:00:00'', e: ''2026-02-20T15:30:00'', loc: ''Teams'' },
+ { title: ''Prep Time'', s: ''2026-02-20T15:30:00'', e: ''2026-02-20T16:00:00'', loc: null },
+ { title: ''Kiingo AI and Consultative Call'', s: ''2026-02-20T15:30:00'', e: ''2026-02-20T16:30:00'', loc: ''Teams'' },
+ { title: ''Kiingo AI - Kinship Group'', s: ''2026-02-20T16:00:00'', e: ''2026-02-20T16:30:00'', loc: ''Teams'' },
+ { title: ''Office Hours for Vistage Chairs'', s: ''2026-02-20T16:00:00'', e: ''2026-02-20T17:00:00'', loc: ''Zoom'' },
+ { title: ''Invoice Wade'', s: ''2026-02-20T18:00:00'', e: ''2026-02-20T18:30:00'', loc: null },
+ ];
+ const fmtParts = iso => {
+ const t = iso.split(''T'')[1];
+ const h = parseInt(t.slice(0,2), 10);
+ const m = parseInt(t.slice(3,5), 10);
+ const ap = h >= 12 ? ''PM'' : ''AM'';
+ const h12 = h % 12 || 12;
+ return { t: m ? h12 + '':'' + String(m).padStart(2,''0'') : String(h12), ap };
+ };
+ const range = (s, e) => {
+ const sv = fmtParts(s), ev = fmtParts(e);
+ return sv.ap === ev.ap ? sv.t + '' – '' + ev.t + '' '' + ev.ap : sv.t + '' '' + sv.ap + '' – '' + ev.t + '' '' + ev.ap;
+ };
+ const isCanceled = t => t.startsWith(''Canceled:'');
+ const cleanTitle = t => t.replace(/^Canceled:\s*/, '''');
+ return (
+ <MetricSection title="Today''s Calendar">
+ <div style={{ display: ''flex'', alignItems: ''center'', justifyContent: ''space-between'', marginBottom: 12 }}>
+ <span style={{ fontSize: 14, fontWeight: 600, color: theme.ink }}>Friday, Feb 20, 2026</span>
+ <span style={{ fontSize: 12, color: theme.inkMuted, border: ''1px solid '' + theme.line, borderRadius: 12, padding: ''2px 10px'' }}>18 events</span>
+ </div>
+ <div style={{ display: ''flex'', flexWrap: ''wrap'', gap: 6, marginBottom: 14 }}>
+ {allDayEvts.map((ev, i) => (
+ <span key={i} style={{ fontSize: 11, padding: ''3px 9px'', borderRadius: 20, border: ''1px solid '' + theme.line, color: theme.inkMuted }}>
+ 🗓 {ev.title}{ev.location ? '' · '' + ev.location : ''''}
+ </span>
+ ))}
+ </div>
+ <div style={{ display: ''flex'', flexDirection: ''column'', gap: 3 }}>
+ {timedEvts.map((ev, i) => {
+ const canceled = isCanceled(ev.title);
+ return (
+ <div key={i} style={{ display: ''flex'', alignItems: ''flex-start'', gap: 10, padding: ''6px 10px'', borderRadius: 7, background: theme.panel, borderLeft: ''3px solid '' + (canceled ? theme.line : theme.accent), opacity: canceled ? 0.45 : 1 }}>
+ <span style={{ fontSize: 11, color: theme.inkMuted, minWidth: 114, flexShrink: 0, paddingTop: 1 }}>{range(ev.s, ev.e)}</span>
+ <span style={{ fontSize: 13, color: theme.ink, flex: 1, lineHeight: 1.35, textDecoration: canceled ? ''line-through'' : ''none'' }}>{canceled ? cleanTitle(ev.title) : ev.title}</span>
+ {ev.loc && <span style={{ fontSize: 11, color: theme.inkMuted, flexShrink: 0, paddingTop: 1 }}>{ev.loc === ''Zoom'' ? ''🎥'' : ''💬''} {ev.loc}</span>}
+ </div>
+ );
+ })}
+ </div>
+ </MetricSection>
+ );
+})()', 'completed', '2026-02-20T22:44:01.279494+00:00', '2026-02-20T22:47:01.150024+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('b539aefb-5f8b-4b02-9ae6-205eeffdaeb4', 'd2825574-c249-44fe-a6e6-b89fb0b4419b', '{"instructors": [{"name": "Josh", "active": 0, "scheduled": 0, "completed": 43, "total": 43}, {"name": "James", "active": 0, "scheduled": 0, "completed": 27, "total": 27}, {"name": "Jordan", "active": 0, "scheduled": 0, "completed": 12, "total": 12}, {"name": "Ross", "active": 0, "scheduled": 0, "completed": 5, "total": 5}], "totalActive": 0, "totalScheduled": 0, "totalCompleted": 87, "totalCohorts": 87, "activeCohorts": []}', '(() => {
   const instructors = [{"name": "Josh", "active": 0, "scheduled": 0, "completed": 43, "total": 43}, {"name": "James", "active": 0, "scheduled": 0, "completed": 27, "total": 27}, {"name": "Jordan", "active": 0, "scheduled": 0, "completed": 12, "total": 12}, {"name": "Ross", "active": 0, "scheduled": 0, "completed": 5, "total": 5}];
   const totalActive = 9;
@@ -5631,22 +5722,49 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-19T05:43:41+00:00', '2026-02-19T05:43:41+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('8099651a-ef1c-4074-af65-40ca4969e3dc', 'd377f67d-eef4-4820-8041-d230232856e0', '{"avgDealSize":5557,"byService":[{"count":5,"revenue":53050,"service":"Private AI Foundational Bootcamp"},{"count":7,"revenue":15000,"service":"AI Foundational Bootcamp"},{"count":1,"revenue":9000,"service":"AI Agents Bootcamp"},{"count":1,"revenue":749,"service":"AI Champions Group"}],"dealCount":14,"deals":[{"amount":9600,"client":"SVN (1st cohort)","closeDate":"Feb 2","invoiced":9600,"payment":"","service":"Private AI Foundational Bootcamp (24 users)","type":"New Biz"},{"amount":749,"client":"Nowak Dental","closeDate":"Feb 2","invoiced":749,"payment":"","service":"AI Champions Group","type":"Upsell"},{"amount":1250,"client":"SN Transport","closeDate":"Feb 2","invoiced":1250,"payment":"","service":"AI Foundational Bootcamp","type":"Upsell"},{"amount":9000,"client":"Immatics","closeDate":"Feb 5","invoiced":9000,"payment":"ACH","service":"AI Agents Bootcamp (3 users)","type":"Upsell"},{"amount":1250,"client":"Commander Concrete","closeDate":"Feb 6","invoiced":1250,"payment":"","service":"AI Foundational Bootcamp","type":"New Biz"},{"amount":2500,"client":"Dillabaughs","closeDate":"Feb 6","invoiced":2500,"payment":"ACH","service":"AI Foundational Bootcamp (2 users)","type":"New Biz"},{"amount":10450,"client":"Preservation Equity Fund Advisors","closeDate":"Feb 9","invoiced":10450,"payment":"ACH","service":"Private AI Foundational Bootcamp (11 users)","type":"New Biz"},{"amount":10000,"client":"Total Package HR","closeDate":"Feb 10","invoiced":10000,"payment":"ACH","service":"Private AI Foundational Bootcamp (10 users)","type":"New Biz"},{"amount":5000,"client":"ATS Construction","closeDate":"Feb 11","invoiced":5000,"payment":"ACH","service":"AI Foundational Bootcamp (4 users)","type":"New Biz"},{"amount":1250,"client":"Juana","closeDate":"Feb 11","invoiced":0,"payment":"","service":"AI Foundational Bootcamp","type":"New Biz"},{"amount":14000,"client":"Tire Discounter Group","closeDate":"Feb 13","invoiced":0,"payment":"","service":"Private AI Foundational Bootcamp (14 users)","type":"New Biz"},{"amount":1250,"client":"Bradley Landscape","closeDate":"Feb 16","invoiced":0,"payment":"","service":"AI Foundational Bootcamp","type":"New Biz"},{"amount":2500,"client":"Brody Brothers","closeDate":"Feb 16","invoiced":0,"payment":"","service":"AI Foundational Bootcamp (2 users)","type":"New Biz"},{"amount":9000,"client":"Northern Nevada Literacy Council","closeDate":"Feb 18","invoiced":0,"payment":"","service":"Private AI Foundational Bootcamp (11 users)","type":"New Biz"}],"monthLabel":"February 2026","newBizCount":11,"newBizRevenue":66800,"outstandingInvoice":28000,"totalInvoiced":49799,"totalRevenue":77799,"upsellCount":3,"upsellRevenue":10999}', '(() => {
- const totalRevenue = 77799;
- const totalInvoiced = 49799;
- const outstanding = 28000;
- const dealCount = 14;
- const avgDeal = 5557;
- const newBizCount = 11;
- const newBizRevenue = 66800;
- const upsellCount = 3;
- const upsellRevenue = 10999;
- const byService = [{"service":"Private AI Foundational Bootcamp","count":5,"revenue":53050},{"service":"AI Foundational Bootcamp","count":7,"revenue":15000},{"service":"AI Agents Bootcamp","count":1,"revenue":9000},{"service":"AI Champions Group","count":1,"revenue":749}];
- const deals = [{"client":"SVN (1st cohort)","amount":9600,"invoiced":9600,"service":"Private AI Foundational Bootcamp (24 users)","type":"New Biz","closeDate":"Feb 2","payment":""},{"client":"Nowak Dental","amount":749,"invoiced":749,"service":"AI Champions Group","type":"Upsell","closeDate":"Feb 2","payment":""},{"client":"SN Transport","amount":1250,"invoiced":1250,"service":"AI Foundational Bootcamp","type":"Upsell","closeDate":"Feb 2","payment":""},{"client":"Immatics","amount":9000,"invoiced":9000,"service":"AI Agents Bootcamp (3 users)","type":"Upsell","closeDate":"Feb 5","payment":"ACH"},{"client":"Commander Concrete","amount":1250,"invoiced":1250,"service":"AI Foundational Bootcamp","type":"New Biz","closeDate":"Feb 6","payment":""},{"client":"Dillabaughs","amount":2500,"invoiced":2500,"service":"AI Foundational Bootcamp (2 users)","type":"New Biz","closeDate":"Feb 6","payment":"ACH"},{"client":"Preservation Equity Fund Advisors","amount":10450,"invoiced":10450,"service":"Private AI Foundational Bootcamp (11 users)","type":"New Biz","closeDate":"Feb 9","payment":"ACH"},{"client":"Total Package HR","amount":10000,"invoiced":10000,"service":"Private AI Foundational Bootcamp (10 users)","type":"New Biz","closeDate":"Feb 10","payment":"ACH"},{"client":"ATS Construction","amount":5000,"invoiced":5000,"service":"AI Foundational Bootcamp (4 users)","type":"New Biz","closeDate":"Feb 11","payment":"ACH"},{"client":"Juana","amount":1250,"invoiced":0,"service":"AI Foundational Bootcamp","type":"New Biz","closeDate":"Feb 11","payment":""},{"client":"Tire Discounter Group","amount":14000,"invoiced":0,"service":"Private AI Foundational Bootcamp (14 users)","type":"New Biz","closeDate":"Feb 13","payment":""},{"client":"Bradley Landscape","amount":1250,"invoiced":0,"service":"AI Foundational Bootcamp","type":"New Biz","closeDate":"Feb 16","payment":""},{"client":"Brody Brothers","amount":2500,"invoiced":0,"service":"AI Foundational Bootcamp (2 users)","type":"New Biz","closeDate":"Feb 16","payment":""},{"client":"Northern Nevada Literacy Council","amount":9000,"invoiced":0,"service":"Private AI Foundational Bootcamp (11 users)","type":"New Biz","closeDate":"Feb 18","payment":""}];
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('16719190-2122-4bf0-86f5-84fc7f353a93', 'd377f67d-eef4-4820-8041-d230232856e0', '{"avgDealSize":6483,"byService":[{"count":10,"revenue":118850,"service":"Private AI Foundational Bootcamp"},{"count":11,"revenue":20500,"service":"AI Foundational Bootcamp"},{"count":1,"revenue":9000,"service":"AI Agents Bootcamp"},{"count":1,"revenue":749,"service":"AI Champions Group"}],"dealCount":23,"monthLabel":"February 2026","newBizCount":17,"newBizRevenue":123850,"outstandingInvoice":47050,"totalInvoiced":102049,"totalRevenue":149099,"upsellCount":6,"upsellRevenue":25249}', '(() => {
+ const totalRevenue = 149099;
+ const totalInvoiced = 102049;
+ const outstanding = 47050;
+ const dealCount = 23;
+ const avgDeal = 6483;
+ const newBizCount = 17;
+ const newBizRevenue = 123850;
+ const upsellCount = 6;
+ const upsellRevenue = 25249;
+ const byService = [
+ { service: ''Private AI Bootcamp'', count: 10, revenue: 118850 },
+ { service: ''AI Foundational Bootcamp'', count: 11, revenue: 20500 },
+ { service: ''AI Agents Bootcamp'', count: 1, revenue: 9000 },
+ { service: ''AI Champions Group'', count: 1, revenue: 749 },
+ ];
+ const deals = [
+ { client: ''SVN (1st cohort)'', amount: 9600, invoiced: 9600, service: ''Private AI Foundational Bootcamp (24 users)'', type: ''New Biz'', closeDate: ''Feb 2'', payment: '''' },
+ { client: ''Nowak Dental'', amount: 749, invoiced: 749, service: ''AI Champions Group'', type: ''Upsell'', closeDate: ''Feb 2'', payment: '''' },
+ { client: ''SN Transport'', amount: 1250, invoiced: 1250, service: ''AI Foundational Bootcamp'', type: ''Upsell'', closeDate: ''Feb 2'', payment: '''' },
+ { client: ''Immatics'', amount: 9000, invoiced: 9000, service: ''AI Agents Bootcamp (3 users)'', type: ''Upsell'', closeDate: ''Feb 5'', payment: ''ACH'' },
+ { client: ''Commander Concrete'', amount: 1250, invoiced: 1250, service: ''AI Foundational Bootcamp'', type: ''New Biz'', closeDate: ''Feb 6'', payment: '''' },
+ { client: ''Dillabaughs'', amount: 2500, invoiced: 2500, service: ''AI Foundational Bootcamp (2 users)'', type: ''New Biz'', closeDate: ''Feb 6'', payment: ''ACH'' },
+ { client: ''Preservation Equity Fund Advisors'', amount: 10450, invoiced: 10450, service: ''Private AI Foundational Bootcamp (11 users)'', type: ''New Biz'', closeDate: ''Feb 9'', payment: ''ACH'' },
+ { client: ''Total Package HR'', amount: 10000, invoiced: 10000, service: ''Private AI Foundational Bootcamp (10 users)'', type: ''New Biz'', closeDate: ''Feb 10'', payment: ''ACH'' },
+ { client: ''ATS Construction'', amount: 5000, invoiced: 5000, service: ''AI Foundational Bootcamp (4 users)'', type: ''New Biz'', closeDate: ''Feb 11'', payment: ''ACH'' },
+ { client: ''Juana'', amount: 1250, invoiced: 1250, service: ''AI Foundational Bootcamp'', type: ''New Biz'', closeDate: ''Feb 11'', payment: ''ACH'' },
+ { client: ''Tire Discounter Group'', amount: 14000, invoiced: 14000, service: ''Private AI Foundational Bootcamp (14 users)'', type: ''New Biz'', closeDate: ''Feb 13'', payment: ''ACH'' },
+ { client: ''Bradley Landscape'', amount: 1250, invoiced: 1250, service: ''AI Foundational Bootcamp'', type: ''New Biz'', closeDate: ''Feb 16'', payment: '''' },
+ { client: ''Brody Brothers'', amount: 2500, invoiced: 2500, service: ''AI Foundational Bootcamp (2 users)'', type: ''New Biz'', closeDate: ''Feb 16'', payment: '''' },
+ { client: ''Northern Nevada Literacy Council'', amount: 9000, invoiced: 9000, service: ''Private AI Foundational Bootcamp (11 users)'', type: ''New Biz'', closeDate: ''Feb 18'', payment: ''ACH'' },
+ { client: ''Centaris'', amount: 7000, invoiced: 0, service: ''Private AI Foundational Bootcamp (7 users)'', type: ''New Biz'', closeDate: ''Feb 19'', payment: '''' },
+ { client: ''Port City Baker'', amount: 10000, invoiced: 10000, service: ''Private AI Foundational Bootcamp (10 users)'', type: ''New Biz'', closeDate: ''Feb 19'', payment: ''ACH'' },
+ { client: ''Kurz'', amount: 10000, invoiced: 10000, service: ''Private AI Foundational Bootcamp (6 users)'', type: ''Upsell'', closeDate: ''Feb 20'', payment: ''ACH'' },
+ { client: ''Urban Oil & Gas'', amount: 28800, invoiced: 0, service: ''Private AI Foundational Bootcamp (36 users)'', type: ''New Biz'', closeDate: ''Feb 23'', payment: '''' },
+ { client: ''Chris MacDuff'', amount: 1700, invoiced: 1700, service: ''AI Foundational Bootcamp (2 users)'', type: ''Upsell'', closeDate: ''Feb 23'', payment: ''CC'' },
+ { client: ''Generation Partners'', amount: 0, invoiced: 0, service: ''AI Foundational Bootcamp (2 users) PRO BONO'', type: ''New Biz'', closeDate: ''Feb 23'', payment: '''' },
+ { client: ''Blue Runner Foods'', amount: 1250, invoiced: 0, service: ''AI Foundational Bootcamp (1 user)'', type: ''New Biz'', closeDate: ''Feb 23'', payment: '''' },
+ { client: ''Hines Homes'', amount: 10000, invoiced: 0, service: ''Private AI Foundational Bootcamp (10 users)'', type: ''New Biz'', closeDate: ''Feb 24'', payment: '''' },
+ { client: ''Biogennix'', amount: 2550, invoiced: 2550, service: ''AI Foundational Bootcamp (3 users)'', type: ''Upsell'', closeDate: ''Feb 24'', payment: ''on file'' },
+ ];
  const monthLabel = ''February 2026'';
-
  const fmt = (n) => ''$'' + (n || 0).toLocaleString();
-
  return (
  <MetricSection>
  <MetricRow>
@@ -5658,19 +5776,17 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <StatCard label="New Business" value={fmt(newBizRevenue)} subtitle={newBizCount + '' deals''} />
  <StatCard label="Upsells" value={fmt(upsellRevenue)} subtitle={upsellCount + '' deals''} />
  </MetricRow>
-
  <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: ''1px solid '' + theme.line }}>
  <ResponsiveContainer width="100%" height="100%">
  <BarChart data={byService} margin={{ top: 10, right: 10, left: 10, bottom: 40 }}>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
- <XAxis dataKey="service" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} angle={-25} textAnchor="end" interval={0} />
+ <XAxis dataKey="service" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} angle={-20} textAnchor="end" interval={0} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={(v) => ''$'' + (v / 1000).toFixed(0) + ''K''} />
  <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v) => [''$'' + v.toLocaleString(), ''Revenue'']} />
  <Bar dataKey="revenue" fill={theme.accent} radius={[6, 6, 0, 0]} />
  </BarChart>
  </ResponsiveContainer>
  </div>
-
  <div style={{ marginTop: 16, background: theme.panel, borderRadius: 16, padding: 16, border: ''1px solid '' + theme.line, overflowX: ''auto'' }}>
  <table style={{ width: ''100%'', borderCollapse: ''collapse'', fontSize: 13 }}>
  <thead>
@@ -5697,11 +5813,10 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </tbody>
  </table>
  </div>
-
- <MetricNote>Source: Revenue Tracker 2026.xlsx (Sohrab Azad, OneDrive) via Kiingo MCP</MetricNote>
+ <MetricNote>Source: Revenue Tracker 2026.xlsx (Sohrab Azad, OneDrive) · 1 cancelled deal excluded (Oxford Road) · Last modified Feb 25 by Kym Parodo</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-19T00:49:37.175467+00:00', '2026-02-19T00:52:36.109297+00:00');
+})()', 'completed', '2026-02-26T00:28:52.496203+00:00', '2026-02-26T00:38:58.326311+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('df922d65-5adb-4ee6-858e-297771c600c4', 'd6fe7a31-00ad-41e4-9379-b4ec83a346b7', '{"teamWorkload":[{"dueThisWeek":8,"name":"Becky Clark","open":33,"overdue":3},{"dueThisWeek":10,"name":"Isabelle Coloma","open":101,"overdue":5},{"dueThisWeek":25,"name":"James Hill-Jiang","open":98,"overdue":9},{"dueThisWeek":15,"name":"Jordan McDaniel","open":112,"overdue":15},{"dueThisWeek":5,"name":"Josh Sullivan","open":113,"overdue":4},{"dueThisWeek":3,"name":"Ross Hartmann","open":107,"overdue":1},{"dueThisWeek":27,"name":"Sohrab Azad","open":130,"overdue":1},{"dueThisWeek":0,"name":"Andy Woods","open":0,"overdue":0},{"dueThisWeek":0,"name":"David Rodriguez","open":0,"overdue":0},{"dueThisWeek":0,"name":"Jess Hartmann","open":1,"overdue":0},{"dueThisWeek":0,"name":"Kym Parodo","open":2,"overdue":2},{"dueThisWeek":0,"name":"Liesel Hartmann","open":0,"overdue":0},{"dueThisWeek":0,"name":"mich@kiingo.com","open":0,"overdue":0},{"dueThisWeek":0,"name":"Michael Glaser","open":0,"overdue":0},{"dueThisWeek":0,"name":"Ryan Keiper","open":0,"overdue":0},{"dueThisWeek":0,"name":"Schuyler Dragoo","open":0,"overdue":0},{"dueThisWeek":0,"name":"Taylor Hartmann","open":0,"overdue":0}],"totalOpenTasks":697,"totalOverdue":40}', '(() => { const data = [{"name":"Sohrab Azad","open":130,"dueThisWeek":27,"overdue":1},{"name":"Josh Sullivan","open":113,"dueThisWeek":5,"overdue":4},{"name":"Jordan McDaniel","open":112,"dueThisWeek":15,"overdue":15},{"name":"Ross Hartmann","open":107,"dueThisWeek":3,"overdue":1},{"name":"Isabelle Coloma","open":101,"dueThisWeek":10,"overdue":5},{"name":"James Hill-Jiang","open":98,"dueThisWeek":25,"overdue":9},{"name":"Becky Clark","open":33,"dueThisWeek":8,"overdue":3},{"name":"Kym Parodo","open":2,"dueThisWeek":0,"overdue":2},{"name":"Jess Hartmann","open":1,"dueThisWeek":0,"overdue":0}].filter(d => d.open > 0); const totalOpen = 697; const totalOverdue = 40; return ( <MetricSection> <MetricRow> <StatCard label="Total Open Tasks" value={totalOpen} subtitle="Across team" /> <StatCard label="Overdue" value={totalOverdue} subtitle="Past due date" trendDirection={totalOverdue > 5 ? ''down'' : ''flat''} /> </MetricRow> <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}> <ResponsiveContainer width="100%" height="100%"> <BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 110, bottom: 5 }}> <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} /> <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} /> <YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={105} /> <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} /> <Bar dataKey="open" name="Open" fill={theme.accent} radius={[0,4,4,0]} /> <Bar dataKey="overdue" name="Overdue" fill={theme.danger} radius={[0,4,4,0]} /> </BarChart> </ResponsiveContainer> </div> <MetricNote>Source: Asana Tasks via Kiingo MCP • As of Feb 15, 2026</MetricNote> </MetricSection> ); })()', 'completed', '2026-02-15T19:28:47.450515+00:00', '2026-02-15T19:29:43.477586+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('995c7079-0812-4933-b9e4-82b0dcb5cb40', 'e199206d-01bd-40af-838e-f82ff1541a40', '{"instructors": [{"name": "Isabelle", "role": "Session Runner", "active": 3, "scheduled": 0, "completed": 4, "total": 7}, {"name": "Josh", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 43, "total": 43}, {"name": "James", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 27, "total": 27}, {"name": "Jordan", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 12, "total": 12}, {"name": "Ross", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 5, "total": 5}], "totalTeamMembers": 5, "totalActiveCohorts": 3, "cohortsWithCoordinator": 3, "cohortTeams": [{"cohort": "DealNews Cohort 3", "lead": "\u2014", "coordinator": "Isabelle"}, {"cohort": "Total Package HR", "lead": "\u2014", "coordinator": "Isabelle"}, {"cohort": "SPMB Cohort 3", "lead": "\u2014", "coordinator": "Isabelle"}]}', '(() => {
   const instructors = [{"name": "Isabelle", "role": "Session Runner", "active": 3, "scheduled": 0, "completed": 4, "total": 7}, {"name": "Josh", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 43, "total": 43}, {"name": "James", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 27, "total": 27}, {"name": "Jordan", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 12, "total": 12}, {"name": "Ross", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 5, "total": 5}];
@@ -5970,7 +6085,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
 -- Settings (app config, nav order, migrations)
 -- ============================================
 
-INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('app', '{"codexPath":"codex","claudePath":"claude","conversationThreadsV1":true,"retentionDays":90,"maxStorageMb":1024,"allowAdvancedPolicy":false,"remoteTelemetryOptIn":false,"redactAggressive":true,"storeEncryptedRawArtifacts":false,"navOrder":{"groupOrder":["overview","ceo-training","workspace","business","departments","team","clients","path1","path2","ai-agent","system"],"itemOrder":{"ai-agent":["chat","composer","live","history","queue"],"business":["growth","revenue","efficiency","pipeline","leads-gtm"],"ceo-training":["ceo-training","ceo-principles"],"clients":["client-roi","client-journey","client-health"],"departments":["dept-marketing","dept-engineering","dept-operations","sub:sales"],"overview":["dashboard"],"path1":["path1-bootcamps","path1-champions","path1-accelerator"],"path2":["path2-pipeline","path2-deployed","path2-fde"],"sub:principles":["coo-principles","cmo-principles","cro-principles","cto-principles","cfo-principles","cpo-principles","cco-principles","chro-principles"],"sub:sales":["dept-sales","discovery-calls","follow-up-calls"],"system":["settings","profiles","compatibility","metric-admin"],"team":["team-scorecard","team-rocks","sub:principles"],"workspace":["notepad","tasks"]}}}', '2026-02-17T18:49:15.879218+00:00');
+INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('app', '{"codexPath":"codex","claudePath":"claude","conversationThreadsV1":true,"retentionDays":90,"maxStorageMb":1024,"allowAdvancedPolicy":false,"remoteTelemetryOptIn":false,"redactAggressive":true,"storeEncryptedRawArtifacts":false,"navOrder":{"groupOrder":["overview","ceo-training","workspace","journaling","business","departments","team","clients","path1","path2","ai-agent","system"],"itemOrder":{"ai-agent":["chat","composer","live","history","queue"],"business":["growth","revenue","efficiency","pipeline","leads-gtm"],"ceo-training":["ceo-training","ceo-principles"],"clients":["client-roi","client-journey","client-health"],"departments":["dept-marketing","dept-engineering","sub:sales","sub:operations"],"journaling":["journal","food-journal"],"overview":["dashboard"],"path1":["path1-bootcamps","path1-champions","path1-accelerator"],"path2":["path2-pipeline","path2-deployed","path2-fde"],"sub:operations":["dept-operations","ops-followup"],"sub:principles":["coo-principles","cmo-principles","cro-principles","cto-principles","cfo-principles","cpo-principles","cco-principles","chro-principles"],"sub:sales":["dept-sales","discovery-calls","follow-up-calls","sales-followup"],"system":["settings","profiles","compatibility","metric-admin"],"team":["team-scorecard","team-rocks","sub:principles"],"workspace":["notepad","tasks","projects","labels"]}}}', '2026-02-19T23:52:51.960901+00:00');
 INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('migration:conversation_threads_v1', '{"completedAt":"2026-02-13T21:05:56.690346+00:00","strategy":"one-run-per-conversation"}', '2026-02-13T21:05:56.690395+00:00');
 INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('migration:grid_rowheight_v2', '"done"', '2026-02-14T23:49:07.612729+00:00');
 INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES ('migration:screen_metrics_multi_widget', '"done"', '2026-02-15T01:57:43.452153+00:00');

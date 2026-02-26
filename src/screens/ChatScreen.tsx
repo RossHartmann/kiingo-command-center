@@ -265,6 +265,9 @@ export function ChatScreen(): JSX.Element {
   const [error, setError] = useState<string>();
   const [codexDetails, setCodexDetails] = useState<Record<string, RunDetail>>({});
   const [claudeDetails, setClaudeDetails] = useState<Record<string, RunDetail>>({});
+  const [search, setSearch] = useState("");
+  const [showEdit, setShowEdit] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
   const autoCreateInFlight = useRef<Record<Provider, boolean>>({ codex: false, claude: false });
   const pendingChatHandled = useRef(false);
 
@@ -280,6 +283,12 @@ export function ChatScreen(): JSX.Element {
       .slice()
       .sort((a, b) => new Date(b.updatedAt).valueOf() - new Date(a.updatedAt).valueOf());
   }, [provider, showArchived, state.conversations]);
+
+  const filteredConversations = useMemo(() => {
+    if (!search.trim()) return conversations;
+    const q = search.trim().toLowerCase();
+    return conversations.filter((conversation) => conversation.title.toLowerCase().includes(q));
+  }, [conversations, search]);
 
   const selectedConversationId = state.selectedConversationByProvider[provider];
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -388,6 +397,10 @@ export function ChatScreen(): JSX.Element {
     }
     void actions.selectConversation(provider, selectedConversationId);
   }, [actions, provider, selectedConversationId, selectedDetail]);
+
+  useEffect(() => {
+    setShowEdit(false);
+  }, [selectedConversationId]);
 
   const latestRun = conversationRuns[conversationRuns.length - 1];
   const awaitingHarness = useMemo(() => {
@@ -639,133 +652,64 @@ export function ChatScreen(): JSX.Element {
     await actions.createConversation(provider);
   }
 
-  async function selectConversation(conversationId: string): Promise<void> {
+  async function handleSelectConversation(conversationId: string): Promise<void> {
     await actions.selectConversation(provider, conversationId);
   }
 
-  async function archiveCurrentConversation(): Promise<void> {
-    if (!selectedConversationId) {
-      return;
-    }
+  async function handleArchive(): Promise<void> {
+    if (!selectedConversationId) return;
     await actions.archiveConversation(selectedConversationId, provider, true);
+    setShowEdit(false);
   }
 
-  async function restoreCurrentConversation(): Promise<void> {
-    if (!selectedConversationId) {
-      return;
-    }
+  async function handleRestore(): Promise<void> {
+    if (!selectedConversationId) return;
     await actions.archiveConversation(selectedConversationId, provider, false);
     setShowArchived(false);
+    setShowEdit(false);
     await actions.selectConversation(provider, selectedConversationId);
   }
 
-  async function renameCurrentConversation(): Promise<void> {
-    if (!selectedConversationId) {
-      return;
-    }
-    const next = window.prompt("Rename conversation", selectedConversation?.title ?? "");
-    if (!next || !next.trim()) {
-      return;
-    }
-    await actions.renameConversation(selectedConversationId, next.trim(), provider);
+  async function handleRename(): Promise<void> {
+    if (!selectedConversationId || !editTitle.trim()) return;
+    await actions.renameConversation(selectedConversationId, editTitle.trim(), provider);
+    setShowEdit(false);
   }
 
   return (
     <section className="screen chat-screen">
-      <aside className="chat-sidebar">
-        <div className="chat-sidebar-header">
-          <strong>Chats</strong>
-          <div className="chat-sidebar-actions">
-            <button type="button" className="new-chat-btn" onClick={() => setShowArchived((value) => !value)}>
-              {showArchived ? "Active" : "Archived"}
-            </button>
-            <button type="button" className="new-chat-btn" onClick={() => void startNewChat()} disabled={showArchived}>
-              New chat
-            </button>
-          </div>
-        </div>
-        <div className="chat-sidebar-list">
-          {conversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              type="button"
-              className={`chat-thread ${conversation.id === selectedConversationId ? "active" : ""}`}
-              onClick={() => void selectConversation(conversation.id)}
-            >
-              <span className="chat-thread-title">{conversation.title}</span>
-              <small>
-                {conversation.archivedAt ? "Archived" : new Date(conversation.updatedAt).toLocaleTimeString()}
-              </small>
-            </button>
-          ))}
-          {!conversations.length && (
-            <p className="settings-hint">{showArchived ? "No archived chats." : "No chats yet."}</p>
-          )}
-        </div>
-      </aside>
-
-      <div className="chat-main">
-        <div className="chat-header-row">
-          <div>
-            <strong>{selectedConversation?.title ?? "New chat"}</strong>
-            {selectedConversation?.providerSessionId && (
-              <span className="workspace-label">session connected</span>
-            )}
-          </div>
-          {selectedConversationId && (
-            <div className="chat-header-actions">
-              <button type="button" onClick={() => void renameCurrentConversation()}>Rename</button>
-              {selectedConversation?.archivedAt ? (
-                <button type="button" onClick={() => void restoreCurrentConversation()}>Restore</button>
-              ) : (
-                <button type="button" onClick={() => void archiveCurrentConversation()}>Archive</button>
-              )}
+      <div className="page-sidebar-layout">
+        {/* ---- Sidebar ---- */}
+        <nav className="project-list-sidebar" aria-label="Chats">
+          <div className="project-list-header">
+            <h3>Chats</h3>
+            <div className="project-list-header-actions">
+              <button
+                type="button"
+                className="notepad-list-new-btn"
+                onClick={() => void startNewChat()}
+                disabled={showArchived}
+                aria-label="New chat"
+                title="New chat"
+              >
+                +
+              </button>
             </div>
-          )}
-        </div>
+          </div>
 
-        <div className="chat-messages" aria-live="polite">
-          {!messages.length && (
-            <div className="chat-empty">
-              <p>Send a message to get started.</p>
-            </div>
-          )}
-          {messages.map((message) => (
-            <article key={message.id} className={`chat-bubble ${message.role}${message.kind ? ` ${message.kind}` : ""}`}>
-              <header>
-                <strong>{message.role === "user" ? "You" : provider === "codex" ? "Codex" : "Claude"}</strong>
-                <small>{new Date(message.timestamp).toLocaleTimeString()}</small>
-              </header>
-              {message.kind === "loading" ? (
-                <div className="harness-loading inline" role="status" aria-live="polite">
-                  <div className="harness-loading-head">
-                    <span className="typing-dots" aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
-                    </span>
-                    <span>Thinking...</span>
-                  </div>
-                  <div className="harness-progress" aria-hidden="true">
-                    <span />
-                  </div>
-                </div>
-              ) : (
-                <p>{message.text}</p>
-              )}
-            </article>
-          ))}
-        </div>
+          <div className="project-list-search">
+            <input
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search chats..."
+              aria-label="Search chats"
+            />
+          </div>
 
-        {error && <div className="banner error">{error}</div>}
-        {!workspace && (
-          <div className="banner info">No workspace configured. Add one in Settings.</div>
-        )}
-
-        <form className="chat-input" onSubmit={(event) => void submit(event)}>
-          <div className="chat-input-row">
+          {/* Provider, model & filter controls */}
+          <div className="project-list-create" style={{ padding: "0.3rem 0.5rem" }}>
             <select
-              className="model-select"
               value={provider}
               onChange={(event) => setProvider(event.target.value as Provider)}
               aria-label="Provider"
@@ -774,7 +718,6 @@ export function ChatScreen(): JSX.Element {
               <option value="claude">Claude</option>
             </select>
             <input
-              className="model-select model-input"
               type="text"
               list={`model-options-${provider}`}
               value={modelsByProvider[provider]}
@@ -789,11 +732,6 @@ export function ChatScreen(): JSX.Element {
               spellCheck={false}
               autoComplete="off"
             />
-            {provider === "codex" && codexModelWarning && (
-              <span className="model-warning-sign" title={codexModelWarning} aria-label={codexModelWarning}>
-                ⚠
-              </span>
-            )}
             <datalist id={`model-options-${provider}`}>
               {MODEL_OPTIONS[provider].map((modelName) => (
                 <option key={modelName} value={modelName} />
@@ -801,7 +739,6 @@ export function ChatScreen(): JSX.Element {
             </datalist>
             {provider === "codex" && (
               <select
-                className="model-select reasoning-select"
                 value={codexReasoning}
                 onChange={(event) => setCodexReasoning(event.target.value as CodexReasoningLevel)}
                 aria-label="Codex reasoning level"
@@ -818,38 +755,183 @@ export function ChatScreen(): JSX.Element {
                 </option>
               </select>
             )}
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                const composing = (event.nativeEvent as { isComposing?: boolean }).isComposing === true;
-                if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.repeat && !composing) {
-                  event.preventDefault();
-                  void submitCurrentDraft();
-                }
-              }}
-              onBlur={() => setCtrlHeld(false)}
-              rows={2}
-              placeholder="Message..."
-            />
-            <button type="submit" className="primary send-btn" disabled={sending || !workspace || awaitingHarness}>
-              {sending ? "..." : awaitingHarness ? "..." : "\u2191"}
-            </button>
+            <select
+              value={showArchived ? "archived" : "active"}
+              onChange={(event) => setShowArchived(event.target.value === "archived")}
+              aria-label="Chat filter"
+            >
+              <option value="active">Active chats</option>
+              <option value="archived">Archived chats</option>
+            </select>
           </div>
-          <div className="chat-input-meta">
-            <span className="workspace-label">model: {modelsByProvider[provider].trim() || "default"}</span>
-            {provider === "codex" && (
-              <span className="workspace-label">
-                reasoning: {codexReasoning === "default" ? "default" : codexReasoning}
-              </span>
+
+          {/* Conversation list */}
+          <ul className="project-list-items" role="listbox" aria-label="Conversations">
+            {filteredConversations.map((conversation) => {
+              const isActive = conversation.id === selectedConversationId;
+              return (
+                <li key={conversation.id} role="option" aria-selected={isActive}>
+                  <div className={`project-list-item${isActive ? " active" : ""}`}>
+                    <button
+                      type="button"
+                      className="project-list-item-btn"
+                      onClick={() => void handleSelectConversation(conversation.id)}
+                    >
+                      <span className="project-list-item-name">{conversation.title}</span>
+                      <span className="project-list-item-tags">
+                        <span className="project-list-tag">
+                          {conversation.archivedAt
+                            ? "Archived"
+                            : new Date(conversation.updatedAt).toLocaleTimeString()}
+                        </span>
+                        {conversation.providerSessionId && (
+                          <span className="project-list-tag">session</span>
+                        )}
+                      </span>
+                    </button>
+                    {isActive && (
+                      <button
+                        type="button"
+                        className="project-list-edit-btn"
+                        onClick={() => {
+                          if (showEdit) {
+                            setShowEdit(false);
+                          } else {
+                            setEditTitle(conversation.title);
+                            setShowEdit(true);
+                          }
+                        }}
+                        aria-label="Edit conversation"
+                        title="Edit conversation"
+                      >
+                        ...
+                      </button>
+                    )}
+                  </div>
+                  {isActive && showEdit && (
+                    <form
+                      className="project-list-edit"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleRename();
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(event) => setEditTitle(event.target.value)}
+                        placeholder="Title"
+                        autoFocus
+                      />
+                      <div className="project-list-create-actions">
+                        <button
+                          type="submit"
+                          className="primary"
+                          disabled={!editTitle.trim()}
+                        >
+                          Save
+                        </button>
+                        {conversation.archivedAt ? (
+                          <button type="button" onClick={() => void handleRestore()}>
+                            Restore
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => void handleArchive()}>
+                            Archive
+                          </button>
+                        )}
+                        <button type="button" onClick={() => setShowEdit(false)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </li>
+              );
+            })}
+            {filteredConversations.length === 0 && (
+              <li className="project-list-empty">
+                {search.trim() ? "No matches" : showArchived ? "No archived chats" : "No chats yet"}
+              </li>
             )}
-            {provider === "codex" && codexModelWarning && (
-              <span className="workspace-label warning-chip">{codexModelWarning}</span>
+          </ul>
+        </nav>
+
+        {/* ---- Main content ---- */}
+        <div className="page-sidebar-main">
+          {error && <div className="banner error">{error}</div>}
+          {!workspace && (
+            <div className="banner info">No workspace configured. Add one in Settings.</div>
+          )}
+
+          <div className="chat-messages" aria-live="polite">
+            {!messages.length && (
+              <div className="chat-empty">
+                <p>Send a message to get started.</p>
+              </div>
             )}
-            <span className="workspace-label">{ctrlHeld ? "Release Ctrl/Cmd to type newline" : "Ctrl/Cmd + Enter sends"}</span>
-            {workspace && <span className="workspace-label">{workspace.split("/").pop()}</span>}
+            {messages.map((message) => (
+              <article key={message.id} className={`chat-bubble ${message.role}${message.kind ? ` ${message.kind}` : ""}`}>
+                <header>
+                  <strong>{message.role === "user" ? "You" : provider === "codex" ? "Codex" : "Claude"}</strong>
+                  <small>{new Date(message.timestamp).toLocaleTimeString()}</small>
+                </header>
+                {message.kind === "loading" ? (
+                  <div className="harness-loading inline" role="status" aria-live="polite">
+                    <div className="harness-loading-head">
+                      <span className="typing-dots" aria-hidden="true">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                      <span>Thinking...</span>
+                    </div>
+                    <div className="harness-progress" aria-hidden="true">
+                      <span />
+                    </div>
+                  </div>
+                ) : (
+                  <p>{message.text}</p>
+                )}
+              </article>
+            ))}
           </div>
-        </form>
+
+          <form className="chat-input" onSubmit={(event) => void submit(event)}>
+            <div className="chat-input-row">
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  const composing = (event.nativeEvent as { isComposing?: boolean }).isComposing === true;
+                  if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.repeat && !composing) {
+                    event.preventDefault();
+                    void submitCurrentDraft();
+                  }
+                }}
+                onBlur={() => setCtrlHeld(false)}
+                rows={2}
+                placeholder="Message..."
+              />
+              <button type="submit" className="primary send-btn" disabled={sending || !workspace || awaitingHarness}>
+                {sending ? "..." : awaitingHarness ? "..." : "\u2191"}
+              </button>
+            </div>
+            <div className="chat-input-meta">
+              <span className="workspace-label">model: {modelsByProvider[provider].trim() || "default"}</span>
+              {provider === "codex" && (
+                <span className="workspace-label">
+                  reasoning: {codexReasoning === "default" ? "default" : codexReasoning}
+                </span>
+              )}
+              {provider === "codex" && codexModelWarning && (
+                <span className="workspace-label warning-chip">{codexModelWarning}</span>
+              )}
+              <span className="workspace-label">{ctrlHeld ? "Release Ctrl/Cmd to type newline" : "Ctrl/Cmd + Enter sends"}</span>
+              {workspace && <span className="workspace-label">{workspace.split("/").pop()}</span>}
+            </div>
+          </form>
+        </div>
       </div>
     </section>
   );

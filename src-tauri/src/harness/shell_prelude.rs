@@ -10,15 +10,21 @@ pub struct PreparedShellPrelude {
     pub cleanup_paths: Vec<PathBuf>,
 }
 
-pub fn prepare_shell_prelude(config: &ShellPreludeConfig, temp_dir: &Path) -> AppResult<PreparedShellPrelude> {
+pub fn prepare_shell_prelude(
+    config: &ShellPreludeConfig,
+    temp_dir: &Path,
+) -> AppResult<PreparedShellPrelude> {
     let content = config.content.trim();
     if content.is_empty() {
-        return Err(AppError::Policy("shellPrelude content cannot be empty".to_string()));
+        return Err(AppError::Policy(
+            "shellPrelude content cannot be empty".to_string(),
+        ));
     }
 
     std::fs::create_dir_all(temp_dir).map_err(|err| AppError::Io(err.to_string()))?;
     let file_path = temp_dir.join(format!("harness-prelude-{}.sh", uuid::Uuid::new_v4()));
-    std::fs::write(&file_path, format!("{}\n", content)).map_err(|err| AppError::Io(err.to_string()))?;
+    std::fs::write(&file_path, format!("{}\n", content))
+        .map_err(|err| AppError::Io(err.to_string()))?;
 
     #[cfg(unix)]
     {
@@ -32,7 +38,10 @@ pub fn prepare_shell_prelude(config: &ShellPreludeConfig, temp_dir: &Path) -> Ap
 
     let mut env = BTreeMap::new();
     if config.bash_env.unwrap_or(true) {
-        env.insert("BASH_ENV".to_string(), file_path.to_string_lossy().to_string());
+        env.insert(
+            "BASH_ENV".to_string(),
+            file_path.to_string_lossy().to_string(),
+        );
     }
     if config.sh_env.unwrap_or(true) {
         env.insert("ENV".to_string(), file_path.to_string_lossy().to_string());

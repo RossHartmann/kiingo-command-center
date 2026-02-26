@@ -19,7 +19,10 @@ fn fixture_scripts_report_expected_versions() {
         .output()
         .expect("run codex fixture");
     assert!(codex.status.success());
-    assert_eq!(String::from_utf8_lossy(&codex.stdout).trim(), "codex 0.27.0");
+    assert_eq!(
+        String::from_utf8_lossy(&codex.stdout).trim(),
+        "codex 0.27.0"
+    );
 
     let claude = Command::new("bash")
         .arg("tests/fixtures/mock-claude.sh")
@@ -27,7 +30,10 @@ fn fixture_scripts_report_expected_versions() {
         .output()
         .expect("run claude fixture");
     assert!(claude.status.success());
-    assert_eq!(String::from_utf8_lossy(&claude.stdout).trim(), "claude 0.31.1");
+    assert_eq!(
+        String::from_utf8_lossy(&claude.stdout).trim(),
+        "claude 0.31.1"
+    );
 }
 
 #[cfg(unix)]

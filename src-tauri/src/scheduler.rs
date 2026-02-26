@@ -255,7 +255,10 @@ mod tests {
         };
 
         scheduler.enqueue(first).await.expect("first enqueue");
-        let err = scheduler.enqueue(second).await.expect_err("second enqueue should fail");
+        let err = scheduler
+            .enqueue(second)
+            .await
+            .expect_err("second enqueue should fail");
         assert!(err.contains("Queue capacity exceeded"));
     }
 }

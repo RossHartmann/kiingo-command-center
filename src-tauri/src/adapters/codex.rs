@@ -1,8 +1,6 @@
 use super::{Adapter, CommandMeta, ValidatedCommand};
 use crate::errors::{AppError, AppResult};
-use crate::models::{
-    CapabilityProfile, RunMode, SandboxMode, StartRunPayload, UnifiedTool,
-};
+use crate::models::{CapabilityProfile, RunMode, SandboxMode, StartRunPayload, UnifiedTool};
 use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -32,7 +30,9 @@ impl Adapter for CodexAdapter {
         binary_path: &str,
     ) -> AppResult<ValidatedCommand> {
         if capability.blocked {
-            return Err(AppError::Cli("Codex CLI is blocked by compatibility profile".to_string()));
+            return Err(AppError::Cli(
+                "Codex CLI is blocked by compatibility profile".to_string(),
+            ));
         }
 
         let mut args = Vec::new();
@@ -72,13 +72,19 @@ impl Adapter for CodexAdapter {
 
         if payload.mode == RunMode::NonInteractive {
             if let Some(output_format) = &payload.output_format {
-                if output_format == "json" || output_format == "stream-json" || output_format == "text" {
+                if output_format == "json"
+                    || output_format == "stream-json"
+                    || output_format == "text"
+                {
                     args.push("--json".to_string());
                 }
             } else {
                 args.push("--json".to_string());
             }
         }
+
+        let supports_flag =
+            |flag: &str| capability.supported_flags.iter().any(|value| value == flag);
 
         if let Some(harness) = &payload.harness {
             if let Some(permissions) = &harness.permissions {
@@ -89,26 +95,33 @@ impl Adapter for CodexAdapter {
                         Some(crate::models::ApprovalPolicy::Untrusted) => "untrusted".to_string(),
                         Some(crate::models::ApprovalPolicy::OnFailure) => "on-failure".to_string(),
                         Some(crate::models::ApprovalPolicy::Never) => "never".to_string(),
-                        Some(crate::models::ApprovalPolicy::OnRequest) | None => "on-request".to_string(),
+                        Some(crate::models::ApprovalPolicy::OnRequest) | None => {
+                            "on-request".to_string()
+                        }
                     }
                 };
-                args.push("--ask-for-approval".to_string());
-                args.push(approval);
+                if supports_flag("--ask-for-approval") {
+                    args.push("--ask-for-approval".to_string());
+                    args.push(approval);
+                }
 
                 let sandbox = match permissions.sandbox_mode {
                     SandboxMode::ReadOnly => "read-only",
                     SandboxMode::WorkspaceWrite => "workspace-write",
                     SandboxMode::FullAccess => "danger-full-access",
                 };
-                args.push("--sandbox".to_string());
-                args.push(sandbox.to_string());
+                if supports_flag("--sandbox") {
+                    args.push("--sandbox".to_string());
+                    args.push(sandbox.to_string());
+                }
 
                 let search_enabled = permissions.network_access
                     && harness
                         .tools
                         .as_ref()
                         .map(|tools| tools.contains(&UnifiedTool::WebSearch))
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                    && supports_flag("--search");
                 if search_enabled {
                     args.push("--search".to_string());
                 }
@@ -188,7 +201,8 @@ impl Adapter for CodexAdapter {
             }
 
             if let Some(structured_output) = &harness.structured_output {
-                let schema_path = std::env::temp_dir().join(format!("codex-schema-{}.json", uuid::Uuid::new_v4()));
+                let schema_path = std::env::temp_dir()
+                    .join(format!("codex-schema-{}.json", uuid::Uuid::new_v4()));
                 std::fs::write(
                     &schema_path,
                     serde_json::to_vec_pretty(&structured_output.schema)
@@ -196,8 +210,8 @@ impl Adapter for CodexAdapter {
                 )
                 .map_err(|error| AppError::Io(error.to_string()))?;
 
-                let output_path =
-                    std::env::temp_dir().join(format!("codex-output-{}.json", uuid::Uuid::new_v4()));
+                let output_path = std::env::temp_dir()
+                    .join(format!("codex-output-{}.json", uuid::Uuid::new_v4()));
                 args.push("--output-schema".to_string());
                 args.push(schema_path.to_string_lossy().to_string());
                 args.push("--output-last-message".to_string());
@@ -206,8 +220,10 @@ impl Adapter for CodexAdapter {
                 meta.structured_output_path = Some(output_path.to_string_lossy().to_string());
                 meta.structured_output_schema = Some(structured_output.schema.clone());
                 meta.structured_output_strict = structured_output.strict.unwrap_or(false);
-                meta.cleanup_paths.push(schema_path.to_string_lossy().to_string());
-                meta.cleanup_paths.push(output_path.to_string_lossy().to_string());
+                meta.cleanup_paths
+                    .push(schema_path.to_string_lossy().to_string());
+                meta.cleanup_paths
+                    .push(output_path.to_string_lossy().to_string());
             }
 
             let mut image_paths = Vec::new();
@@ -218,13 +234,16 @@ impl Adapter for CodexAdapter {
                     } else {
                         "jpg"
                     };
-                    let image_path =
-                        std::env::temp_dir().join(format!("harness-image-{}.{}", image.id, extension));
+                    let image_path = std::env::temp_dir()
+                        .join(format!("harness-image-{}.{}", image.id, extension));
                     let base64 = extract_base64_data_url(&image.data_url);
                     let bytes = base64::engine::general_purpose::STANDARD
                         .decode(base64)
-                        .map_err(|error| AppError::Cli(format!("Invalid image base64 payload: {}", error)))?;
-                    std::fs::write(&image_path, bytes).map_err(|error| AppError::Io(error.to_string()))?;
+                        .map_err(|error| {
+                            AppError::Cli(format!("Invalid image base64 payload: {}", error))
+                        })?;
+                    std::fs::write(&image_path, bytes)
+                        .map_err(|error| AppError::Io(error.to_string()))?;
                     image_paths.push(image_path);
                 }
             }
@@ -371,7 +390,9 @@ impl Adapter for CodexAdapter {
             let item_type = item_type(parsed_obj, item, item_id.as_deref(), state);
 
             if event_type == "thread.started" {
-                if let Some(thread_id) = parsed_obj.get("thread_id").and_then(|value| value.as_str()) {
+                if let Some(thread_id) =
+                    parsed_obj.get("thread_id").and_then(|value| value.as_str())
+                {
                     state.session_id = Some(thread_id.to_string());
                     events.push(serde_json::json!({
                         "type": "session_complete",
@@ -396,7 +417,11 @@ impl Adapter for CodexAdapter {
                         );
                     }
 
-                    match item_obj.get("type").and_then(|value| value.as_str()).unwrap_or_default() {
+                    match item_obj
+                        .get("type")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                    {
                         "command_execution" => {
                             events.push(serde_json::json!({
                                 "type": "tool_start",
@@ -438,7 +463,11 @@ impl Adapter for CodexAdapter {
                 let delta = parsed_obj
                     .get("delta")
                     .and_then(|value| value.as_object())
-                    .or_else(|| item.and_then(|item_obj| item_obj.get("delta").and_then(|value| value.as_object())));
+                    .or_else(|| {
+                        item.and_then(|item_obj| {
+                            item_obj.get("delta").and_then(|value| value.as_object())
+                        })
+                    });
                 let delta_type = normalize_type(delta.and_then(|obj| obj.get("type")));
                 let is_reasoning = format!("{} {} {}", event_type, item_type, delta_type)
                     .to_ascii_lowercase()
@@ -489,9 +518,15 @@ impl Adapter for CodexAdapter {
 
             if event_type == "item.completed" {
                 if let Some(item_obj) = item {
-                    match item_obj.get("type").and_then(|value| value.as_str()).unwrap_or_default() {
+                    match item_obj
+                        .get("type")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                    {
                         "agent_message" => {
-                            if let Some(text) = item_obj.get("text").and_then(|value| value.as_str()) {
+                            if let Some(text) =
+                                item_obj.get("text").and_then(|value| value.as_str())
+                            {
                                 if !text.is_empty() {
                                     events.push(serde_json::json!({
                                         "type": "text_complete",
@@ -504,7 +539,9 @@ impl Adapter for CodexAdapter {
                             let text = item_obj
                                 .get("text")
                                 .and_then(|value| value.as_str())
-                                .or_else(|| item_obj.get("summary").and_then(|value| value.as_str()))
+                                .or_else(|| {
+                                    item_obj.get("summary").and_then(|value| value.as_str())
+                                })
                                 .unwrap_or_default();
                             if !text.is_empty() {
                                 events.push(serde_json::json!({
@@ -637,7 +674,10 @@ impl Adapter for CodexAdapter {
                     .unwrap_or("Codex error");
 
                 let lower = message.to_ascii_lowercase();
-                if lower.contains("rate limit") || lower.contains("too many requests") || lower.contains("429") {
+                if lower.contains("rate limit")
+                    || lower.contains("too many requests")
+                    || lower.contains("429")
+                {
                     events.push(serde_json::json!({
                         "type": "rate_limited",
                         "retryAfterMs": parsed_obj
@@ -741,7 +781,10 @@ fn item_id(
         .get("item_id")
         .and_then(|value| value.as_str())
         .or_else(|| parsed.get("itemId").and_then(|value| value.as_str()))
-        .or_else(|| item.and_then(|obj| obj.get("id")).and_then(|value| value.as_str()))
+        .or_else(|| {
+            item.and_then(|obj| obj.get("id"))
+                .and_then(|value| value.as_str())
+        })
         .or_else(|| parsed.get("id").and_then(|value| value.as_str()))
         .map(ToString::to_string)
 }
@@ -922,8 +965,8 @@ mod tests {
     use super::{extract_last_agent_message, resume_session_id, CodexAdapter};
     use crate::adapters::Adapter;
     use crate::models::{
-        CapabilityProfile, HarnessRequestOptions, Provider, RunMode, SandboxMode, StartRunPayload, UnifiedPermission,
-        UnifiedTool,
+        CapabilityProfile, HarnessRequestOptions, Provider, RunMode, SandboxMode, StartRunPayload,
+        UnifiedPermission, UnifiedTool,
     };
     use std::collections::BTreeMap;
 
@@ -953,7 +996,32 @@ mod tests {
             supported: true,
             degraded: false,
             blocked: false,
-            supported_flags: vec!["--model".to_string(), "--json".to_string()],
+            supported_flags: vec![
+                "--model".to_string(),
+                "--json".to_string(),
+                "--ask-for-approval".to_string(),
+                "--sandbox".to_string(),
+                "--search".to_string(),
+                "--output-schema".to_string(),
+                "--output-last-message".to_string(),
+            ],
+            supported_modes: vec![RunMode::NonInteractive, RunMode::Interactive],
+            disabled_reasons: vec![],
+        }
+    }
+
+    fn capability_without_permission_flags() -> CapabilityProfile {
+        CapabilityProfile {
+            provider: Provider::Codex,
+            cli_version: "0.101.0".to_string(),
+            supported: true,
+            degraded: false,
+            blocked: false,
+            supported_flags: vec![
+                "--model".to_string(),
+                "--json".to_string(),
+                "--sandbox".to_string(),
+            ],
             supported_modes: vec![RunMode::NonInteractive, RunMode::Interactive],
             disabled_reasons: vec![],
         }
@@ -963,9 +1031,10 @@ mod tests {
     fn builds_resume_command_when_internal_resume_id_is_present() {
         let adapter = CodexAdapter::default();
         let mut payload = base_payload();
-        payload
-            .optional_flags
-            .insert("__resume_session_id".to_string(), serde_json::json!("session-123"));
+        payload.optional_flags.insert(
+            "__resume_session_id".to_string(),
+            serde_json::json!("session-123"),
+        );
 
         let built = adapter
             .build_command(&payload, &capability(), "codex")
@@ -981,18 +1050,16 @@ mod tests {
         let raw = r#"{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}
 {"type":"item.completed","item":{"type":"agent_message","text":"first"}}
 {"type":"item.completed","item":{"type":"agent_message","text":"second"}}"#;
-        assert_eq!(
-            extract_last_agent_message(raw).as_deref(),
-            Some("second")
-        );
+        assert_eq!(extract_last_agent_message(raw).as_deref(), Some("second"));
     }
 
     #[test]
     fn reads_internal_resume_session_id() {
         let mut payload = base_payload();
-        payload
-            .optional_flags
-            .insert("__resume_session_id".to_string(), serde_json::json!("  abc-123  "));
+        payload.optional_flags.insert(
+            "__resume_session_id".to_string(),
+            serde_json::json!("  abc-123  "),
+        );
         assert_eq!(resume_session_id(&payload), Some("abc-123"));
     }
 
@@ -1039,6 +1106,28 @@ mod tests {
         assert!(built.args.contains(&"--output-schema".to_string()));
         assert!(built.args.contains(&"--output-last-message".to_string()));
         assert!(!built.meta.cleanup_paths.is_empty());
+    }
+
+    #[test]
+    fn omits_approval_flag_when_capability_does_not_support_it() {
+        let adapter = CodexAdapter::default();
+        let mut payload = base_payload();
+        payload.harness = Some(HarnessRequestOptions {
+            permissions: Some(UnifiedPermission {
+                sandbox_mode: SandboxMode::ReadOnly,
+                auto_approve: true,
+                network_access: false,
+                approval_policy: Some(crate::models::ApprovalPolicy::Never),
+            }),
+            ..Default::default()
+        });
+
+        let built = adapter
+            .build_command(&payload, &capability_without_permission_flags(), "codex")
+            .expect("build command");
+
+        assert!(!built.args.contains(&"--ask-for-approval".to_string()));
+        assert!(built.args.contains(&"--sandbox".to_string()));
     }
 
     #[test]

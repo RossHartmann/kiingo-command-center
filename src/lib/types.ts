@@ -450,6 +450,23 @@ export interface MetricDiagnostics {
   nextRefreshAt: string | null;
 }
 
+// ─── Journal ─────────────────────────────────────────────────────────────────
+
+export type JournalType = "journal" | "food-journal";
+
+export interface JournalEntry {
+  date: string;
+  journalType: JournalType;
+  content: string;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export interface JournalEntryMeta {
+  date: string;
+  journalType: JournalType;
+}
+
 // ─── Workspace (Tasks + Notepad Platform) ───────────────────────────────────
 
 export type IsoDateTime = string;
@@ -660,6 +677,7 @@ export interface NotepadViewDefinition {
   layoutMode: "outline" | "list" | "focus";
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
+  archivedAt?: IsoDateTime;
   revision: number;
 }
 
@@ -869,6 +887,7 @@ export interface ListPlacementsRequest extends PageRequest {
 
 export interface CreateBlockInNotepadRequest {
   notepadId: EntityId;
+  projectId?: EntityId;
   rawText: string;
   body?: string;
   captureSource?: CaptureSource;
@@ -1354,7 +1373,9 @@ export type FeatureFlagKey =
   | "workspace.notepad_context_menu"
   | "workspace.projects_v1"
   | "workspace.notepad_project_split_ui"
-  | "workspace.project_default_views";
+  | "workspace.project_default_views"
+  | "workspace.project_context_chips_v1"
+  | "workspace.label_registry_ui_v1";
 
 export interface FeatureFlag {
   key: FeatureFlagKey;
@@ -1372,7 +1393,7 @@ export interface WorkspaceCapabilitySnapshot {
   featureFlags: FeatureFlag[];
 }
 
-export type MigrationDomain = "schema" | "projection" | "rule";
+export type MigrationDomain = "schema" | "projection" | "project" | "rule";
 export type MigrationStatus = "pending" | "running" | "succeeded" | "failed" | "rolled_back";
 
 export interface MigrationPlan {

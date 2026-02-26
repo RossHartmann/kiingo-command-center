@@ -11,12 +11,22 @@ interface ProjectListSidebarProps {
   createKind: ProjectDefinition["kind"];
   createLabels: string;
   createDefaultViewId: string;
+  createCaptureLabels: string;
+  createCaptureCategories: string;
+  createCaptureThreadIds: string;
+  createCaptureTaskStatus: "todo" | "doing" | "blocked" | "done" | "";
+  createCaptureTaskPriority: "1" | "2" | "3" | "4" | "5" | "";
   creatingProject: boolean;
   onChangeCreateName: (value: string) => void;
   onChangeCreateDescription: (value: string) => void;
   onChangeCreateKind: (value: ProjectDefinition["kind"]) => void;
   onChangeCreateLabels: (value: string) => void;
   onChangeCreateDefaultViewId: (value: string) => void;
+  onChangeCreateCaptureLabels: (value: string) => void;
+  onChangeCreateCaptureCategories: (value: string) => void;
+  onChangeCreateCaptureThreadIds: (value: string) => void;
+  onChangeCreateCaptureTaskStatus: (value: "todo" | "doing" | "blocked" | "done" | "") => void;
+  onChangeCreateCaptureTaskPriority: (value: "1" | "2" | "3" | "4" | "5" | "") => void;
   onCreateProject: (event: FormEvent) => void;
   editName: string;
   editDescription: string;
@@ -41,12 +51,22 @@ export function ProjectListSidebar({
   createKind,
   createLabels,
   createDefaultViewId,
+  createCaptureLabels,
+  createCaptureCategories,
+  createCaptureThreadIds,
+  createCaptureTaskStatus,
+  createCaptureTaskPriority,
   creatingProject,
   onChangeCreateName,
   onChangeCreateDescription,
   onChangeCreateKind,
   onChangeCreateLabels,
   onChangeCreateDefaultViewId,
+  onChangeCreateCaptureLabels,
+  onChangeCreateCaptureCategories,
+  onChangeCreateCaptureThreadIds,
+  onChangeCreateCaptureTaskStatus,
+  onChangeCreateCaptureTaskPriority,
   onCreateProject,
   editName,
   editDescription,
@@ -165,6 +185,45 @@ export function ProjectListSidebar({
             onChange={(e) => onChangeCreateDescription(e.target.value)}
             placeholder="Description (optional)"
           />
+          <input
+            type="text"
+            value={createCaptureLabels}
+            onChange={(e) => onChangeCreateCaptureLabels(e.target.value)}
+            placeholder="Capture labels (comma-separated)"
+          />
+          <input
+            type="text"
+            value={createCaptureCategories}
+            onChange={(e) => onChangeCreateCaptureCategories(e.target.value)}
+            placeholder="Capture categories (comma-separated)"
+          />
+          <input
+            type="text"
+            value={createCaptureThreadIds}
+            onChange={(e) => onChangeCreateCaptureThreadIds(e.target.value)}
+            placeholder="Capture thread IDs (comma-separated)"
+          />
+          <select
+            value={createCaptureTaskStatus}
+            onChange={(e) => onChangeCreateCaptureTaskStatus(e.target.value as "todo" | "doing" | "blocked" | "done" | "")}
+          >
+            <option value="">Capture status (inherit)</option>
+            <option value="todo">todo</option>
+            <option value="doing">doing</option>
+            <option value="blocked">blocked</option>
+            <option value="done">done</option>
+          </select>
+          <select
+            value={createCaptureTaskPriority}
+            onChange={(e) => onChangeCreateCaptureTaskPriority(e.target.value as "1" | "2" | "3" | "4" | "5" | "")}
+          >
+            <option value="">Capture priority (inherit)</option>
+            <option value="1">P1</option>
+            <option value="2">P2</option>
+            <option value="3">P3</option>
+            <option value="4">P4</option>
+            <option value="5">P5</option>
+          </select>
           <div className="project-list-create-actions">
             <button
               type="submit"

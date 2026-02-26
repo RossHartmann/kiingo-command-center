@@ -7,17 +7,17 @@ use crate::models::{
     ConditionSetTaskRequest, CreateAtomRequest, CreateBlockInNotepadRequest,
     DecisionGenerateRequest, DecisionGenerateResponse, DecisionMutationPayload, DecisionPrompt,
     DeleteAtomRequest, EncryptionScope, FacetKind, FeatureFlag, GovernanceMeta,
-    GovernancePoliciesResponse, JobDefinition, JobMutationPayload, JobRunRecord, ListAtomsRequest,
-    ListBlocksRequest, ListConditionsRequest, ListEventsRequest, ListPlacementsRequest,
-    MigrationPlan, MigrationRun, NotepadFilter, NotepadSort, NotepadViewDefinition,
-    NotificationDeliveryRecord, NotificationMessage, NotificationMutationPayload,
-    ObsidianTaskSyncResult, PageResponse, PlacementRecord, PlacementReorderRequest,
-    ProjectDefinition, ProjectOpenResponse,
-    ProjectionCheckpoint, ProjectionDefinition, ProjectionMutationPayload,
-    ProjectionRebuildResponse, RecurrenceInstance, RecurrenceSpawnRequest, RecurrenceSpawnResponse,
-    RecurrenceTemplate, RegistryEntry, RegistryMutationPayload, RegistrySuggestionsResponse,
-    RuleDefinition, RuleEvaluateRequest, RuleEvaluationResult, RuleMutationPayload,
-    SaveNotepadViewRequest, SaveProjectDefinitionRequest, SemanticChunk, SemanticReindexResponse, SemanticSearchHit,
+    GovernancePoliciesResponse, JobDefinition, JobMutationPayload, JobRunRecord, JournalEntry,
+    JournalEntryMeta, ListAtomsRequest, ListBlocksRequest, ListConditionsRequest,
+    ListEventsRequest, ListPlacementsRequest, MigrationPlan, MigrationRun, NotepadFilter,
+    NotepadSort, NotepadViewDefinition, NotificationDeliveryRecord, NotificationMessage,
+    NotificationMutationPayload, ObsidianTaskSyncResult, PageResponse, PlacementRecord,
+    PlacementReorderRequest, ProjectDefinition, ProjectOpenResponse, ProjectionCheckpoint,
+    ProjectionDefinition, ProjectionMutationPayload, ProjectionRebuildResponse, RecurrenceInstance,
+    RecurrenceSpawnRequest, RecurrenceSpawnResponse, RecurrenceTemplate, RegistryEntry,
+    RegistryMutationPayload, RegistrySuggestionsResponse, RuleDefinition, RuleEvaluateRequest,
+    RuleEvaluationResult, RuleMutationPayload, SaveNotepadViewRequest,
+    SaveProjectDefinitionRequest, SemanticChunk, SemanticReindexResponse, SemanticSearchHit,
     SemanticSearchRequest, SemanticSearchResponse, SensitivityLevel, SetTaskStatusRequest,
     TaskFacet, TaskReopenRequest, TaskStatus, UpdateAtomRequest, WorkSessionCancelRequest,
     WorkSessionEndRequest, WorkSessionNoteRequest, WorkSessionRecord, WorkSessionStartRequest,
@@ -72,6 +72,7 @@ const ROOT_DIRS: &[&str] = &[
     "governance",
     "migrations/schema",
     "migrations/projections",
+    "migrations/projects",
     "migrations/rules",
     "migrations/plans",
     "migrations/runs",
@@ -80,6 +81,8 @@ const ROOT_DIRS: &[&str] = &[
     "notifications/messages",
     "notifications/deliveries",
     "registry",
+    "journal",
+    "food-journal",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -656,7 +659,7 @@ pub fn atoms_list(root: &Path, request: ListAtomsRequest) -> AppResult<PageRespo
     ensure_topology(root)?;
 
     let mut atoms = load_all_atoms(root)?;
-    apply_atom_filter(&mut atoms, request.filter.as_ref());
+    apply_atom_filter(root, &mut atoms, request.filter.as_ref())?;
     sort_atoms(&mut atoms, request.sort.as_ref());
 
     paginate(atoms, request.limit, request.cursor)
@@ -980,9 +983,10 @@ pub fn notepad_delete(
         &json!({"notepadId": notepad_id}),
         || {
             if notepad_id == "now" {
-                return Err(AppError::Policy(
-                    "Cannot delete system notepad 'now'".to_string(),
-                ));
+                return Err(AppError::Policy(format!(
+                    "Cannot delete system notepad '{}'",
+                    notepad_id
+                )));
             }
 
             let path = resolve_notepad_path(root, notepad_id);
@@ -996,12 +1000,150 @@ pub fn notepad_delete(
     )
 }
 
+// ─── Journal ────────────────────────────────────────────────────────────────
+
+fn validate_journal_type(journal_type: &str) -> AppResult<()> {
+    if matches!(journal_type, "journal" | "food-journal") {
+        Ok(())
+    } else {
+        Err(AppError::Policy(format!(
+            "Invalid journal type: '{}'",
+            journal_type
+        )))
+    }
+}
+
+fn journal_entry_path(root: &Path, journal_type: &str, date: &str) -> PathBuf {
+    root.join(journal_type).join(format!("{}.md", date))
+}
+
+pub fn journal_list_entries(root: &Path, journal_type: &str) -> AppResult<Vec<JournalEntryMeta>> {
+    validate_journal_type(journal_type)?;
+    ensure_topology(root)?;
+
+    let dir = root.join(journal_type);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&dir).map_err(|e| AppError::Io(e.to_string()))? {
+        let entry = entry.map_err(|e| AppError::Io(e.to_string()))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if NaiveDate::parse_from_str(&stem, "%Y-%m-%d").is_err() {
+            continue;
+        }
+        entries.push(JournalEntryMeta {
+            date: stem,
+            journal_type: journal_type.to_string(),
+        });
+    }
+
+    entries.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(entries)
+}
+
+pub fn journal_get_entry(
+    root: &Path,
+    journal_type: &str,
+    date: &str,
+) -> AppResult<Option<JournalEntry>> {
+    validate_journal_type(journal_type)?;
+    ensure_topology(root)?;
+
+    let path = journal_entry_path(root, journal_type, date);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let (metadata, body) = read_markdown_frontmatter(root, &path)?;
+    let created_at = metadata
+        .get("createdAt")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+        .unwrap_or_else(Utc::now);
+    let updated_at = metadata
+        .get("updatedAt")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+        .unwrap_or(created_at);
+
+    Ok(Some(JournalEntry {
+        date: date.to_string(),
+        journal_type: journal_type.to_string(),
+        content: body,
+        created_at,
+        updated_at,
+    }))
+}
+
+pub fn journal_save_entry(
+    root: &Path,
+    journal_type: &str,
+    date: &str,
+    content: &str,
+) -> AppResult<Option<JournalEntry>> {
+    validate_journal_type(journal_type)?;
+    ensure_topology(root)?;
+
+    let path = journal_entry_path(root, journal_type, date);
+
+    if content.trim().is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| AppError::Io(e.to_string()))?;
+        }
+        return Ok(None);
+    }
+
+    let now = Utc::now();
+    let created_at = if path.exists() {
+        read_markdown_frontmatter(root, &path)
+            .ok()
+            .and_then(|(m, _)| {
+                m.get("createdAt")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+            })
+            .unwrap_or(now)
+    } else {
+        now
+    };
+
+    let metadata = json!({
+        "date": date,
+        "journalType": journal_type,
+        "createdAt": created_at.to_rfc3339(),
+        "updatedAt": now.to_rfc3339(),
+    });
+
+    write_markdown_frontmatter(root, &path, &metadata, content)?;
+
+    Ok(Some(JournalEntry {
+        date: date.to_string(),
+        journal_type: journal_type.to_string(),
+        content: content.to_string(),
+        created_at,
+        updated_at: now,
+    }))
+}
+
+// ─── Projects ───────────────────────────────────────────────────────────────
+
 pub fn projects_list(root: &Path) -> AppResult<Vec<ProjectDefinition>> {
     ensure_topology(root)?;
     ensure_projects_backfilled(root)?;
 
     let mut items = Vec::new();
-    for entry in fs::read_dir(root.join("projects")).map_err(|error| AppError::Io(error.to_string()))? {
+    for entry in
+        fs::read_dir(root.join("projects")).map_err(|error| AppError::Io(error.to_string()))?
+    {
         let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
@@ -1032,7 +1174,10 @@ pub fn project_get(root: &Path, project_id: &str) -> AppResult<Option<ProjectDef
     read_project_file(&path).map(Some)
 }
 
-pub fn project_save(root: &Path, request: SaveProjectDefinitionRequest) -> AppResult<ProjectDefinition> {
+pub fn project_save(
+    root: &Path,
+    request: SaveProjectDefinitionRequest,
+) -> AppResult<ProjectDefinition> {
     ensure_topology(root)?;
     ensure_projects_backfilled(root)?;
     let key = request.idempotency_key.clone();
@@ -1133,7 +1278,7 @@ pub fn notepad_atoms_list(
     // Keep placement-backed views and filter-backed views in sync by ensuring every
     // current membership atom has a placement in this view.
     let mut membership_atoms = load_all_atoms(root)?;
-    apply_atom_filter(&mut membership_atoms, Some(&notepad.filters));
+    apply_atom_filter(root, &mut membership_atoms, Some(&notepad.filters))?;
     sort_atoms(&mut membership_atoms, Some(&notepad.sorts));
 
     backfill_blocks_from_atoms(root)?;
@@ -1181,7 +1326,7 @@ pub fn notepad_atoms_list(
             ranked.push((index, atom));
         }
         let mut atoms = ranked.into_iter().map(|(_, atom)| atom).collect::<Vec<_>>();
-        apply_atom_filter(&mut atoms, Some(&notepad.filters));
+        apply_atom_filter(root, &mut atoms, Some(&notepad.filters))?;
         return paginate(atoms, limit, cursor);
     }
 
@@ -1217,9 +1362,65 @@ fn notepad_block_create_inner(
 ) -> AppResult<BlockRecord> {
     let notepad = notepad_get(root, &request.notepad_id)?
         .ok_or_else(|| AppError::NotFound(format!("Notepad '{}' not found", request.notepad_id)))?;
-    let capture_defaults = notepad.capture_defaults.clone().unwrap_or_default();
+    let notepad_capture_defaults = notepad.capture_defaults.clone().unwrap_or_default();
+    let project_capture_defaults = request
+        .project_id
+        .as_deref()
+        .map(|project_id| project_get(root, project_id))
+        .transpose()?
+        .flatten()
+        .and_then(|project| project.capture_defaults);
+    let merged_thread_ids = merge_optional_id_lists(
+        notepad_capture_defaults.thread_ids.clone(),
+        project_capture_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.thread_ids.clone()),
+    );
+    let merged_label_ids = merge_optional_id_lists(
+        notepad_capture_defaults.label_ids.clone(),
+        project_capture_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.label_ids.clone()),
+    );
+    let merged_category_ids = merge_optional_id_lists(
+        notepad_capture_defaults.category_ids.clone(),
+        project_capture_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.category_ids.clone()),
+    );
+    let merged_labels = merge_optional_string_lists(
+        notepad_capture_defaults.labels.clone(),
+        project_capture_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.labels.clone()),
+    );
+    let merged_categories = merge_optional_string_lists(
+        notepad_capture_defaults.categories.clone(),
+        project_capture_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.categories.clone()),
+    );
+    let mut resolved_thread_ids = merged_thread_ids.unwrap_or_default();
+    let mut resolved_labels = merged_labels.unwrap_or_default();
+    let mut resolved_categories = merged_categories.unwrap_or_default();
+    let taxonomy_ids =
+        merge_optional_id_lists(merged_label_ids, merged_category_ids).unwrap_or_default();
+    let ids_to_resolve =
+        merge_optional_id_lists(Some(taxonomy_ids), Some(resolved_thread_ids.clone()))
+            .unwrap_or_default();
+    for registry_id in ids_to_resolve {
+        let Some(entry) = registry_entry_get(root, &registry_id)? else {
+            continue;
+        };
+        push_unique_case_insensitive(&mut resolved_labels, &entry.name);
+        if entry.kind.eq_ignore_ascii_case("thread") {
+            push_unique_exact(&mut resolved_thread_ids, &entry.id);
+        } else {
+            push_unique_case_insensitive(&mut resolved_categories, &entry.name);
+        }
+    }
 
-    let mut initial_facets = capture_defaults
+    let mut initial_facets = notepad_capture_defaults
         .initial_facets
         .clone()
         .unwrap_or_else(|| vec![FacetKind::Task]);
@@ -1227,15 +1428,30 @@ fn notepad_block_create_inner(
         initial_facets.push(FacetKind::Task);
     }
 
-    let task_status = capture_defaults.task_status.unwrap_or(TaskStatus::Todo);
-    let task_priority = capture_defaults.task_priority.unwrap_or(3).clamp(1, 5);
+    let task_status = notepad_capture_defaults
+        .task_status
+        .or_else(|| {
+            project_capture_defaults
+                .as_ref()
+                .and_then(|defaults| defaults.task_status)
+        })
+        .unwrap_or(TaskStatus::Todo);
+    let task_priority = notepad_capture_defaults
+        .task_priority
+        .or_else(|| {
+            project_capture_defaults
+                .as_ref()
+                .and_then(|defaults| defaults.task_priority)
+        })
+        .unwrap_or(3)
+        .clamp(1, 5);
 
     let task_facet = if initial_facets.contains(&FacetKind::Task) {
         Some(TaskFacet {
             status: task_status,
             priority: task_priority,
-            commitment_level: capture_defaults.commitment_level,
-            attention_layer: capture_defaults.attention_layer,
+            commitment_level: notepad_capture_defaults.commitment_level,
+            attention_layer: notepad_capture_defaults.attention_layer,
             ..TaskFacet::default()
         })
     } else {
@@ -1245,8 +1461,16 @@ fn notepad_block_create_inner(
     let facet_data = AtomFacets {
         task: task_facet,
         meta: Some(crate::models::MetaFacet {
-            labels: capture_defaults.labels.clone(),
-            categories: capture_defaults.categories.clone(),
+            labels: if resolved_labels.is_empty() {
+                None
+            } else {
+                Some(resolved_labels)
+            },
+            categories: if resolved_categories.is_empty() {
+                None
+            } else {
+                Some(resolved_categories)
+            },
         }),
         ..AtomFacets::default()
     };
@@ -1260,7 +1484,7 @@ fn notepad_block_create_inner(
             initial_facets: Some(initial_facets),
             facet_data: Some(facet_data),
             relations: Some(AtomRelations {
-                thread_ids: capture_defaults.thread_ids.unwrap_or_default(),
+                thread_ids: resolved_thread_ids,
                 ..AtomRelations::default()
             }),
             governance: None,
@@ -1270,6 +1494,84 @@ fn notepad_block_create_inner(
     let block = upsert_block_from_atom(root, &atom)?;
     let _ = ensure_placement_for_view(root, &block.id, &notepad.id, None)?;
     Ok(block)
+}
+
+fn merge_optional_id_lists(
+    primary: Option<Vec<String>>,
+    secondary: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+    for value in primary
+        .into_iter()
+        .flatten()
+        .chain(secondary.into_iter().flatten())
+    {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            merged.push(trimmed.to_string());
+        }
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged)
+    }
+}
+
+fn push_unique_exact(values: &mut Vec<String>, candidate: &str) {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if values.iter().any(|value| value == trimmed) {
+        return;
+    }
+    values.push(trimmed.to_string());
+}
+
+fn push_unique_case_insensitive(values: &mut Vec<String>, candidate: &str) {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if values
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case(trimmed))
+    {
+        return;
+    }
+    values.push(trimmed.to_string());
+}
+
+fn merge_optional_string_lists(
+    primary: Option<Vec<String>>,
+    secondary: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+    for value in primary
+        .into_iter()
+        .flatten()
+        .chain(secondary.into_iter().flatten())
+    {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let key = trimmed.to_ascii_lowercase();
+        if seen.insert(key) {
+            merged.push(trimmed.to_string());
+        }
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged)
+    }
 }
 
 pub fn blocks_list(
@@ -2240,6 +2542,12 @@ fn notepad_save_inner(
         .unwrap_or(1);
 
     let id = input.id.clone();
+    if input.archived_at.is_some() && (input.is_system || id == "now") {
+        return Err(AppError::Policy(
+            "Cannot archive the system notepad".to_string(),
+        ));
+    }
+
     let definition = NotepadViewDefinition {
         id,
         schema_version: if input.schema_version <= 0 {
@@ -2265,6 +2573,7 @@ fn notepad_save_inner(
         },
         created_at,
         updated_at: now,
+        archived_at: input.archived_at,
         revision,
     };
 
@@ -2272,7 +2581,10 @@ fn notepad_save_inner(
     Ok(definition)
 }
 
-fn project_save_inner(root: &Path, request: SaveProjectDefinitionRequest) -> AppResult<ProjectDefinition> {
+fn project_save_inner(
+    root: &Path,
+    request: SaveProjectDefinitionRequest,
+) -> AppResult<ProjectDefinition> {
     let SaveProjectDefinitionRequest {
         expected_revision,
         idempotency_key: _,
@@ -3509,10 +3821,169 @@ fn clear_blocking_from_atom_if_unblocked(root: &Path, atom_id: &str) -> AppResul
     Ok(())
 }
 
-fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>) {
+#[derive(Default)]
+struct RegistryFilterIndex {
+    alias_to_id: HashMap<String, String>,
+    id_to_name: HashMap<String, String>,
+    id_to_kind: HashMap<String, String>,
+    parent_to_children: HashMap<String, Vec<String>>,
+}
+
+fn build_registry_filter_index(root: &Path) -> AppResult<RegistryFilterIndex> {
+    let mut index = RegistryFilterIndex::default();
+    for value in list_json_entities(root, "registry")? {
+        let entry: RegistryEntry = match deserialize_entity(value, "registry entry") {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(error = %error, "skipping malformed registry entry during filter index build");
+                continue;
+            }
+        };
+        let id = entry.id.trim().to_string();
+        if id.is_empty() {
+            continue;
+        }
+        index.id_to_name.insert(id.clone(), entry.name.clone());
+        index
+            .id_to_kind
+            .insert(id.clone(), entry.kind.to_ascii_lowercase());
+
+        let canonical = entry.name.trim().to_ascii_lowercase();
+        if !canonical.is_empty() {
+            index.alias_to_id.entry(canonical).or_insert(id.clone());
+        }
+        for alias in entry.aliases {
+            let normalized = alias.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            index.alias_to_id.entry(normalized).or_insert(id.clone());
+        }
+
+        for parent_id in entry.parent_ids {
+            let normalized = parent_id.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            index
+                .parent_to_children
+                .entry(normalized.to_string())
+                .or_default()
+                .push(id.clone());
+        }
+    }
+    Ok(index)
+}
+
+fn normalize_filter_id_set(values: Option<Vec<String>>) -> Option<HashSet<String>> {
+    let mut set = HashSet::new();
+    for value in values.into_iter().flatten() {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_string());
+        }
+    }
+    if set.is_empty() {
+        None
+    } else {
+        Some(set)
+    }
+}
+
+fn expand_category_descendant_ids(
+    seed_ids: &HashSet<String>,
+    index: &RegistryFilterIndex,
+) -> HashSet<String> {
+    let mut expanded = seed_ids.clone();
+    let mut stack = seed_ids.iter().cloned().collect::<Vec<_>>();
+    while let Some(current) = stack.pop() {
+        let Some(children) = index.parent_to_children.get(&current) else {
+            continue;
+        };
+        for child_id in children {
+            if index.id_to_kind.get(child_id).map(|kind| kind.as_str()) != Some("category") {
+                continue;
+            }
+            if expanded.insert(child_id.clone()) {
+                stack.push(child_id.clone());
+            }
+        }
+    }
+    expanded
+}
+
+fn atom_label_id_candidates(atom: &AtomRecord, index: &RegistryFilterIndex) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    for thread_id in &atom.relations.thread_ids {
+        let trimmed = thread_id.trim();
+        if !trimmed.is_empty() {
+            ids.insert(trimmed.to_string());
+        }
+    }
+    if let Some(meta) = atom.facet_data.meta.as_ref() {
+        for value in meta
+            .labels
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .chain(meta.categories.as_ref().into_iter().flatten())
+        {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            if let Some(id) = index.alias_to_id.get(&normalized) {
+                ids.insert(id.clone());
+            }
+        }
+    }
+    ids
+}
+
+fn atom_category_id_candidates(atom: &AtomRecord, index: &RegistryFilterIndex) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    if let Some(meta) = atom.facet_data.meta.as_ref() {
+        for value in meta
+            .categories
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .chain(meta.labels.as_ref().into_iter().flatten())
+        {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            let Some(id) = index.alias_to_id.get(&normalized) else {
+                continue;
+            };
+            if index.id_to_kind.get(id).map(|kind| kind.as_str()) == Some("category") {
+                ids.insert(id.clone());
+            }
+        }
+    }
+    ids
+}
+
+fn matches_filter_mode(mode: &str, expected: &HashSet<String>, actual: &HashSet<String>) -> bool {
+    if expected.is_empty() {
+        return true;
+    }
+    if mode.eq_ignore_ascii_case("and") {
+        expected.iter().all(|item| actual.contains(item))
+    } else {
+        actual.iter().any(|item| expected.contains(item))
+    }
+}
+
+fn apply_atom_filter(
+    root: &Path,
+    atoms: &mut Vec<AtomRecord>,
+    filter: Option<&NotepadFilter>,
+) -> AppResult<()> {
     let Some(filter) = filter else {
         atoms.retain(|atom| atom.archived_at.is_none());
-        return;
+        return Ok(());
     };
 
     let include_archived = filter.include_archived.unwrap_or(false);
@@ -3532,6 +4003,15 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
         .category_filter_mode
         .clone()
         .unwrap_or_else(|| "or".to_string());
+    let include_category_descendants = filter.include_category_descendants.unwrap_or(false);
+    let expected_label_ids = normalize_filter_id_set(filter.label_ids.clone());
+    let expected_category_ids_base = normalize_filter_id_set(filter.category_ids.clone());
+    let expected_category_names: Option<HashSet<String>> = categories.as_ref().map(|values| {
+        values
+            .iter()
+            .map(|value| value.to_ascii_lowercase())
+            .collect::<HashSet<_>>()
+    });
     let text_query = filter
         .text_query
         .as_ref()
@@ -3540,6 +4020,49 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
     let commitment_levels = filter.commitment_levels.clone();
     let due_from = filter.due_from.as_deref().and_then(parse_filter_date);
     let due_to = filter.due_to.as_deref().and_then(parse_filter_date);
+
+    let needs_registry = expected_label_ids.is_some()
+        || expected_category_ids_base.is_some()
+        || include_category_descendants;
+    let registry_index = if needs_registry {
+        Some(build_registry_filter_index(root)?)
+    } else {
+        None
+    };
+
+    let expected_category_ids = if include_category_descendants {
+        if let (Some(index), Some(seed)) =
+            (registry_index.as_ref(), expected_category_ids_base.as_ref())
+        {
+            Some(expand_category_descendant_ids(seed, index))
+        } else {
+            expected_category_ids_base.clone()
+        }
+    } else {
+        expected_category_ids_base.clone()
+    };
+
+    let descendant_category_ids_from_names = if include_category_descendants {
+        if let (Some(index), Some(expected_names)) =
+            (registry_index.as_ref(), expected_category_names.as_ref())
+        {
+            let mut seed = HashSet::new();
+            for name in expected_names {
+                if let Some(id) = index.alias_to_id.get(name) {
+                    seed.insert(id.clone());
+                }
+            }
+            if seed.is_empty() {
+                None
+            } else {
+                Some(expand_category_descendant_ids(&seed, index))
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     atoms.retain(|atom| {
         if !include_archived && atom.archived_at.is_some() {
@@ -3574,8 +4097,7 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
                     .iter()
                     .all(|thread_id| atom.relations.thread_ids.contains(thread_id))
             } else {
-                atom
-                    .relations
+                atom.relations
                     .thread_ids
                     .iter()
                     .any(|thread_id| expected_set.contains(thread_id))
@@ -3597,9 +4119,11 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
                 .and_then(|meta| meta.labels.clone())
                 .unwrap_or_default();
             let matches = if label_filter_mode.eq_ignore_ascii_case("and") {
-                expected_set
-                    .iter()
-                    .all(|label| actual_labels.iter().any(|actual| actual.eq_ignore_ascii_case(label)))
+                expected_set.iter().all(|label| {
+                    actual_labels
+                        .iter()
+                        .any(|actual| actual.eq_ignore_ascii_case(label))
+                })
             } else {
                 actual_labels
                     .iter()
@@ -3610,29 +4134,53 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
             }
         }
 
-        if let Some(expected_categories) = categories.as_ref() {
-            let expected_set: HashSet<String> = expected_categories
-                .iter()
-                .map(|value| value.to_ascii_lowercase())
-                .collect();
-            let actual_categories = atom
-                .facet_data
-                .meta
+        if let Some(expected_ids) = expected_label_ids.as_ref() {
+            let actual_ids = registry_index
                 .as_ref()
-                .and_then(|meta| meta.categories.clone())
+                .map(|index| atom_label_id_candidates(atom, index))
                 .unwrap_or_default();
-            let matches = if category_filter_mode.eq_ignore_ascii_case("and") {
-                expected_set.iter().all(|category| {
-                    actual_categories
-                        .iter()
-                        .any(|actual| actual.eq_ignore_ascii_case(category))
-                })
+            if !matches_filter_mode(&label_filter_mode, expected_ids, &actual_ids) {
+                return false;
+            }
+        }
+
+        if let Some(expected_categories) = expected_category_names.as_ref() {
+            let matches = if let Some(expected_ids) = descendant_category_ids_from_names.as_ref() {
+                let actual_ids = registry_index
+                    .as_ref()
+                    .map(|index| atom_category_id_candidates(atom, index))
+                    .unwrap_or_default();
+                matches_filter_mode(&category_filter_mode, expected_ids, &actual_ids)
             } else {
-                actual_categories
-                    .iter()
-                    .any(|category| expected_set.contains(&category.to_ascii_lowercase()))
+                let actual_categories = atom
+                    .facet_data
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.categories.clone())
+                    .unwrap_or_default();
+                if category_filter_mode.eq_ignore_ascii_case("and") {
+                    expected_categories.iter().all(|category| {
+                        actual_categories
+                            .iter()
+                            .any(|actual| actual.eq_ignore_ascii_case(category))
+                    })
+                } else {
+                    actual_categories.iter().any(|category| {
+                        expected_categories.contains(&category.to_ascii_lowercase())
+                    })
+                }
             };
             if !matches {
+                return false;
+            }
+        }
+
+        if let Some(expected_ids) = expected_category_ids.as_ref() {
+            let actual_ids = registry_index
+                .as_ref()
+                .map(|index| atom_category_id_candidates(atom, index))
+                .unwrap_or_default();
+            if !matches_filter_mode(&category_filter_mode, expected_ids, &actual_ids) {
                 return false;
             }
         }
@@ -3712,6 +4260,7 @@ fn apply_atom_filter(atoms: &mut Vec<AtomRecord>, filter: Option<&NotepadFilter>
 
         true
     });
+    Ok(())
 }
 
 fn sort_atoms(atoms: &mut [AtomRecord], sort: Option<&Vec<NotepadSort>>) {
@@ -3950,9 +4499,74 @@ fn ensure_now_notepad(root: &Path) -> AppResult<()> {
     write_notepad_file(root, &path, &definition)
 }
 
+fn derive_project_from_notepad(
+    notepad: &NotepadViewDefinition,
+    now: DateTime<Utc>,
+) -> ProjectDefinition {
+    let mut label_ids = Vec::new();
+    if let Some(ids) = notepad.filters.category_ids.clone() {
+        label_ids.extend(ids);
+    }
+    if let Some(ids) = notepad.filters.label_ids.clone() {
+        label_ids.extend(ids);
+    }
+    if let Some(ids) = notepad.filters.thread_ids.clone() {
+        label_ids.extend(ids);
+    }
+    label_ids.sort();
+    label_ids.dedup();
+
+    let inferred_label_project = !label_ids.is_empty()
+        || notepad
+            .filters
+            .categories
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false)
+        || notepad
+            .filters
+            .labels
+            .as_ref()
+            .map(|values| !values.is_empty())
+            .unwrap_or(false);
+
+    ProjectDefinition {
+        id: format!("project_{}", sanitize_component(&notepad.id)),
+        schema_version: 1,
+        name: notepad.name.clone(),
+        description: notepad.description.clone(),
+        status: "active".to_string(),
+        kind: if inferred_label_project {
+            "label_project".to_string()
+        } else {
+            "workspace_project".to_string()
+        },
+        label_ids,
+        default_view_id: Some(notepad.id.clone()),
+        view_ids: vec![notepad.id.clone()],
+        capture_defaults: notepad.capture_defaults.as_ref().map(|defaults| {
+            crate::models::ProjectCaptureDefaults {
+                thread_ids: defaults.thread_ids.clone(),
+                label_ids: defaults.label_ids.clone(),
+                category_ids: defaults.category_ids.clone(),
+                categories: defaults.categories.clone(),
+                labels: defaults.labels.clone(),
+                task_status: defaults.task_status,
+                task_priority: defaults.task_priority,
+            }
+        }),
+        source: Some("migrated_derived".to_string()),
+        created_at: now,
+        updated_at: now,
+        revision: 1,
+    }
+}
+
 fn ensure_projects_backfilled(root: &Path) -> AppResult<()> {
     let mut has_projects = false;
-    for entry in fs::read_dir(root.join("projects")).map_err(|error| AppError::Io(error.to_string()))? {
+    for entry in
+        fs::read_dir(root.join("projects")).map_err(|error| AppError::Io(error.to_string()))?
+    {
         let entry = entry.map_err(|error| AppError::Io(error.to_string()))?;
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) == Some("json") {
@@ -3969,60 +4583,7 @@ fn ensure_projects_backfilled(root: &Path) -> AppResult<()> {
         if notepad.is_system {
             continue;
         }
-        let mut label_ids = Vec::new();
-        if let Some(ids) = notepad.filters.category_ids.clone() {
-            label_ids.extend(ids);
-        }
-        if let Some(ids) = notepad.filters.label_ids.clone() {
-            label_ids.extend(ids);
-        }
-        if let Some(ids) = notepad.filters.thread_ids.clone() {
-            label_ids.extend(ids);
-        }
-        label_ids.sort();
-        label_ids.dedup();
-
-        let inferred_label_project = !label_ids.is_empty()
-            || notepad
-                .filters
-                .categories
-                .as_ref()
-                .map(|values| !values.is_empty())
-                .unwrap_or(false)
-            || notepad
-                .filters
-                .labels
-                .as_ref()
-                .map(|values| !values.is_empty())
-                .unwrap_or(false);
-        let project = ProjectDefinition {
-            id: format!("project_{}", sanitize_component(&notepad.id)),
-            schema_version: 1,
-            name: notepad.name.clone(),
-            description: notepad.description.clone(),
-            status: "active".to_string(),
-            kind: if inferred_label_project {
-                "label_project".to_string()
-            } else {
-                "workspace_project".to_string()
-            },
-            label_ids,
-            default_view_id: Some(notepad.id.clone()),
-            view_ids: vec![notepad.id.clone()],
-            capture_defaults: notepad.capture_defaults.as_ref().map(|defaults| crate::models::ProjectCaptureDefaults {
-                thread_ids: defaults.thread_ids.clone(),
-                label_ids: defaults.label_ids.clone(),
-                category_ids: defaults.category_ids.clone(),
-                categories: defaults.categories.clone(),
-                labels: defaults.labels.clone(),
-                task_status: defaults.task_status,
-                task_priority: defaults.task_priority,
-            }),
-            source: Some("migrated_derived".to_string()),
-            created_at: now,
-            updated_at: now,
-            revision: 1,
-        };
+        let project = derive_project_from_notepad(&notepad, now);
         write_project_file(&project_path(root, &project.id), &project)?;
     }
     Ok(())
@@ -4032,9 +4593,7 @@ fn infer_notepad_view_kind(notepad_id: &str, filters: &NotepadFilter) -> String 
     if notepad_id == "now" {
         return "inbox".to_string();
     }
-    let has_computed_selectors = filters
-        .facet
-        .is_some()
+    let has_computed_selectors = filters.facet.is_some()
         || filters
             .categories
             .as_ref()
@@ -4106,6 +4665,7 @@ fn default_now_notepad(now: DateTime<Utc>) -> NotepadViewDefinition {
         layout_mode: "list".to_string(),
         created_at: now,
         updated_at: now,
+        archived_at: None,
         revision: 1,
     }
 }
@@ -4967,6 +5527,7 @@ fn recurrence_spawn_inner(
                 .default_notepad_id
                 .clone()
                 .unwrap_or_else(|| "now".to_string()),
+            project_id: None,
             raw_text: if template.raw_text_template.trim().is_empty() {
                 template.title_template.clone()
             } else {
@@ -5935,10 +6496,47 @@ pub fn feature_flags_list(root: &Path) -> AppResult<Vec<FeatureFlag>> {
     let path = root.join("governance/feature-flags.json");
     if path.exists() {
         let values: Vec<Value> = read_json_file(&path)?;
-        return values
+        let mut flags: Vec<FeatureFlag> = values
             .into_iter()
             .map(|value| deserialize_entity(value, "feature flag"))
-            .collect();
+            .collect::<AppResult<Vec<_>>>()?;
+        let now = Utc::now();
+        let mut changed = false;
+        let mut known = HashSet::new();
+        for flag in &flags {
+            known.insert(flag.key.clone());
+        }
+        for key in FEATURE_FLAG_KEYS {
+            if known.insert((*key).to_string()) {
+                flags.push(FeatureFlag {
+                    key: (*key).to_string(),
+                    enabled: default_feature_flag_enabled(key),
+                    rollout_percent: None,
+                    updated_at: now,
+                });
+                changed = true;
+            }
+        }
+        // Backfill legacy defaults where registry shipped as disabled.
+        let labels_ui_enabled = flags
+            .iter()
+            .find(|flag| flag.key == "workspace.label_registry_ui_v1")
+            .map(|flag| flag.enabled)
+            .unwrap_or(true);
+        if labels_ui_enabled {
+            if let Some(registry_flag) = flags
+                .iter_mut()
+                .find(|flag| flag.key == "workspace.registry" && !flag.enabled)
+            {
+                registry_flag.enabled = true;
+                registry_flag.updated_at = now;
+                changed = true;
+            }
+        }
+        if changed {
+            write_json_file(&path, &flags)?;
+        }
+        return Ok(flags);
     }
     let defaults = default_feature_flags();
     write_json_file(&path, &defaults)?;
@@ -6216,6 +6814,7 @@ fn canonical_migration_domain(domain: &str) -> Option<&'static str> {
     match domain.trim().to_ascii_lowercase().as_str() {
         "schema" => Some("schema"),
         "projection" | "projections" => Some("projection"),
+        "project" | "projects" => Some("project"),
         "rule" | "rules" => Some("rule"),
         _ => None,
     }
@@ -6234,6 +6833,11 @@ fn migration_steps_for_domain(domain: &str) -> Vec<String> {
             "validate projection manifests".to_string(),
             "verify snapshot/checkpoint consistency".to_string(),
             "record projection migration summary".to_string(),
+        ],
+        Some("project") => vec![
+            "scan notepads for missing derived projects".to_string(),
+            "backfill missing projects with deterministic IDs".to_string(),
+            "record project migration summary".to_string(),
         ],
         Some("rule") => vec![
             "validate rule definitions".to_string(),
@@ -6265,6 +6869,7 @@ fn execute_migration_plan(
     let outcome = match canonical_domain {
         "schema" => execute_schema_migration(root, dry_run),
         "projection" => execute_projection_migration(root, dry_run),
+        "project" => execute_project_migration(root, dry_run),
         "rule" => execute_rule_migration(root, dry_run),
         _ => Err(AppError::Policy(format!(
             "unsupported migration domain '{}'",
@@ -6366,7 +6971,7 @@ fn execute_schema_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>
 
     for notepad in &notepads {
         let mut scoped_atoms = atoms.clone();
-        apply_atom_filter(&mut scoped_atoms, Some(&notepad.filters));
+        apply_atom_filter(root, &mut scoped_atoms, Some(&notepad.filters))?;
         sort_atoms(&mut scoped_atoms, Some(&notepad.sorts));
 
         let mut existing_ids: HashSet<String> = load_placements_for_view(root, &notepad.id)?
@@ -6455,6 +7060,52 @@ fn execute_projection_migration(root: &Path, dry_run: bool) -> AppResult<Vec<Str
         format!("projection snapshots: {}", snapshots.len()),
         format!("projection migration dryRun={}", dry_run),
     ];
+    Ok(logs)
+}
+
+fn execute_project_migration(root: &Path, dry_run: bool) -> AppResult<Vec<String>> {
+    ensure_topology(root)?;
+    let now = Utc::now();
+    let notepads = list_notepads_for_migration(root, dry_run)?;
+    let existing_projects = list_json_entities(root, "projects")?;
+    let mut existing_ids: HashSet<String> = existing_projects
+        .iter()
+        .filter_map(|value| value.get("id").and_then(Value::as_str))
+        .map(|value| value.to_string())
+        .collect();
+
+    let mut scanned_notepads = 0usize;
+    let mut candidate_projects = 0usize;
+    let mut created_projects = 0usize;
+    let mut skipped_existing = 0usize;
+
+    for notepad in notepads.into_iter().filter(|value| !value.is_system) {
+        scanned_notepads += 1;
+        let project = derive_project_from_notepad(&notepad, now);
+        if existing_ids.contains(&project.id) {
+            skipped_existing += 1;
+            continue;
+        }
+        candidate_projects += 1;
+        if !dry_run {
+            write_project_file(&project_path(root, &project.id), &project)?;
+            existing_ids.insert(project.id);
+            created_projects += 1;
+        }
+    }
+
+    let mut logs = vec![
+        format!("project migration dryRun={}", dry_run),
+        format!("notepads scanned: {}", scanned_notepads),
+        format!("existing projects: {}", existing_projects.len()),
+        format!("derived candidates: {}", candidate_projects),
+        format!("skipped existing: {}", skipped_existing),
+    ];
+    if dry_run {
+        logs.push("project migration apply skipped (dry run)".to_string());
+    } else {
+        logs.push(format!("projects created: {}", created_projects));
+    }
     Ok(logs)
 }
 
@@ -7024,11 +7675,6 @@ fn validate_registry_uniqueness(
             .and_then(Value::as_str)
             .map(|value| value.to_string())
     });
-    let candidate_kind = candidate
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or("thread")
-        .to_ascii_lowercase();
     let candidate_name = candidate
         .get("name")
         .and_then(Value::as_str)
@@ -7069,20 +7715,11 @@ fn validate_registry_uniqueness(
     }
 
     let existing_entries = list_json_entities(root, "registry")?;
-    for existing in existing_entries {
+    for existing in &existing_entries {
         let existing_id = existing.get("id").and_then(Value::as_str);
         if existing_id == candidate_id.as_deref() {
             continue;
         }
-        let existing_kind = existing
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("thread")
-            .to_ascii_lowercase();
-        if existing_kind != candidate_kind {
-            continue;
-        }
-
         let existing_name = existing
             .get("name")
             .and_then(Value::as_str)
@@ -7113,55 +7750,159 @@ fn validate_registry_uniqueness(
                     "code": "CONFLICT",
                     "entity": "registry",
                     "reason": "name_or_alias_not_unique",
-                    "latest": existing
+                    "latest": existing.clone()
                 })
             )));
+        }
+    }
+
+    if let Some(candidate_id) = candidate_id.as_ref() {
+        let candidate_parent_ids = normalize_registry_parent_ids(candidate);
+        if candidate_parent_ids
+            .iter()
+            .any(|parent_id| parent_id == candidate_id)
+        {
+            return Err(AppError::Policy(
+                "VALIDATION_ERROR: registry parent graph cannot include self-references"
+                    .to_string(),
+            ));
+        }
+
+        let mut parent_graph: HashMap<String, Vec<String>> = HashMap::new();
+        for existing in &existing_entries {
+            let Some(existing_id) = existing.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            parent_graph.insert(
+                existing_id.to_string(),
+                normalize_registry_parent_ids(existing),
+            );
+        }
+        parent_graph.insert(candidate_id.to_string(), candidate_parent_ids);
+        if registry_graph_has_cycle(&parent_graph) {
+            return Err(AppError::Policy(
+                "VALIDATION_ERROR: registry parent graph cannot contain cycles".to_string(),
+            ));
         }
     }
     Ok(())
 }
 
+fn normalize_registry_parent_ids(value: &Value) -> Vec<String> {
+    let mut parent_ids = Vec::new();
+    let mut seen = HashSet::new();
+    let raw_values = value
+        .get("parentIds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for raw in raw_values {
+        let Some(raw_str) = raw.as_str() else {
+            continue;
+        };
+        let trimmed = raw_str.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            parent_ids.push(trimmed.to_string());
+        }
+    }
+    parent_ids
+}
+
+fn registry_graph_has_cycle(parent_graph: &HashMap<String, Vec<String>>) -> bool {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Color {
+        Visiting,
+        Visited,
+    }
+
+    fn visit(
+        node: &str,
+        parent_graph: &HashMap<String, Vec<String>>,
+        colors: &mut HashMap<String, Color>,
+    ) -> bool {
+        if let Some(color) = colors.get(node) {
+            return *color == Color::Visiting;
+        }
+        colors.insert(node.to_string(), Color::Visiting);
+        if let Some(parents) = parent_graph.get(node) {
+            for parent_id in parents {
+                if parent_graph.contains_key(parent_id) && visit(parent_id, parent_graph, colors) {
+                    return true;
+                }
+            }
+        }
+        colors.insert(node.to_string(), Color::Visited);
+        false
+    }
+
+    let mut colors: HashMap<String, Color> = HashMap::new();
+    for node in parent_graph.keys() {
+        if visit(node, parent_graph, &mut colors) {
+            return true;
+        }
+    }
+    false
+}
+
 fn default_feature_flags() -> Vec<Value> {
     let now = Utc::now().to_rfc3339();
-    [
-        "workspace.blocks_v2",
-        "workspace.placements_v2",
-        "workspace.capture_policy_v2",
-        "workspace.rules_engine",
-        "workspace.scheduler",
-        "workspace.decision_queue",
-        "workspace.notifications",
-        "workspace.projections",
-        "workspace.registry",
-        "workspace.semantic_index",
-        "workspace.decay_engine",
-        "workspace.focus_sessions_v2",
-        "workspace.recurrence",
-        "workspace.recurrence_v2",
-        "workspace.agent_handoff",
-        "workspace.notepad_ui_v2",
-        "workspace.notepad_open_notepad_v2",
-        "workspace.inline_tags",
-        "workspace.notepad_context_menu",
-        "workspace.projects_v1",
-        "workspace.notepad_project_split_ui",
-        "workspace.project_default_views",
-    ]
-    .iter()
-    .map(|key| {
-        json!({
-            "key": key,
-            "enabled": *key == "workspace.notepad_ui_v2"
-                || *key == "workspace.notepad_open_notepad_v2"
-                || *key == "workspace.inline_tags"
-                || *key == "workspace.notepad_context_menu"
-                || *key == "workspace.projects_v1"
-                || *key == "workspace.notepad_project_split_ui"
-                || *key == "workspace.project_default_views",
-            "updatedAt": now
+    FEATURE_FLAG_KEYS
+        .iter()
+        .map(|key| {
+            json!({
+                "key": key,
+                "enabled": default_feature_flag_enabled(key),
+                "updatedAt": now
+            })
         })
-    })
-    .collect()
+        .collect()
+}
+
+const FEATURE_FLAG_KEYS: &[&str] = &[
+    "workspace.blocks_v2",
+    "workspace.placements_v2",
+    "workspace.capture_policy_v2",
+    "workspace.rules_engine",
+    "workspace.scheduler",
+    "workspace.decision_queue",
+    "workspace.notifications",
+    "workspace.projections",
+    "workspace.registry",
+    "workspace.semantic_index",
+    "workspace.decay_engine",
+    "workspace.focus_sessions_v2",
+    "workspace.recurrence",
+    "workspace.recurrence_v2",
+    "workspace.agent_handoff",
+    "workspace.notepad_ui_v2",
+    "workspace.notepad_open_notepad_v2",
+    "workspace.inline_tags",
+    "workspace.notepad_context_menu",
+    "workspace.projects_v1",
+    "workspace.notepad_project_split_ui",
+    "workspace.project_default_views",
+    "workspace.project_context_chips_v1",
+    "workspace.label_registry_ui_v1",
+];
+
+const DEFAULT_ENABLED_FEATURE_FLAG_KEYS: &[&str] = &[
+    "workspace.registry",
+    "workspace.notepad_ui_v2",
+    "workspace.notepad_open_notepad_v2",
+    "workspace.inline_tags",
+    "workspace.notepad_context_menu",
+    "workspace.projects_v1",
+    "workspace.notepad_project_split_ui",
+    "workspace.project_default_views",
+    "workspace.project_context_chips_v1",
+    "workspace.label_registry_ui_v1",
+];
+
+fn default_feature_flag_enabled(key: &str) -> bool {
+    DEFAULT_ENABLED_FEATURE_FLAG_KEYS.contains(&key)
 }
 
 #[cfg(test)]
@@ -7365,6 +8106,7 @@ mod tests {
                     }],
                     capture_defaults: None,
                     layout_mode: "list".to_string(),
+                    archived_at: None,
                 },
             },
         )
@@ -7405,6 +8147,400 @@ mod tests {
     }
 
     #[test]
+    fn project_migration_backfills_missing_projects_for_notepads() {
+        let root = temp_root();
+        let _focus = notepad_save(
+            root.path(),
+            SaveNotepadViewRequest {
+                expected_revision: None,
+                idempotency_key: Some("project-migration-focus-notepad-key".to_string()),
+                definition: crate::models::NotepadViewDefinitionInput {
+                    id: "focus".to_string(),
+                    schema_version: 1,
+                    name: "Focus".to_string(),
+                    description: Some("Focus context".to_string()),
+                    is_system: false,
+                    view_kind: Some("computed".to_string()),
+                    scope_project_id: None,
+                    display_role: None,
+                    filters: NotepadFilter {
+                        categories: Some(vec!["Work".to_string()]),
+                        ..NotepadFilter::default()
+                    },
+                    sorts: vec![NotepadSort {
+                        field: "updatedAt".to_string(),
+                        direction: "desc".to_string(),
+                    }],
+                    capture_defaults: None,
+                    layout_mode: "outline".to_string(),
+                    archived_at: None,
+                },
+            },
+        )
+        .expect("focus notepad saved");
+
+        let plan = migration_plan_create(
+            root.path(),
+            "project".to_string(),
+            1,
+            2,
+            false,
+            Some("project-migration-plan-key".to_string()),
+        )
+        .expect("migration plan create");
+        let run = migration_run_start(
+            root.path(),
+            &plan.id,
+            Some("project-migration-run-key".to_string()),
+        )
+        .expect("migration run start");
+        assert_eq!(run.status, "succeeded");
+        assert!(run
+            .logs
+            .iter()
+            .any(|line| line.contains("projects created")));
+
+        let projects = projects_list(root.path()).expect("projects list");
+        assert!(projects.iter().any(|project| project.id == "project_focus"));
+    }
+
+    #[test]
+    fn registry_entry_rejects_parent_cycles() {
+        let root = temp_root();
+        let first = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"category",
+                    "name":"First",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "registry-cycle-first-save-key",
+            ),
+        )
+        .expect("save first");
+
+        let second = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"category",
+                    "name":"Second",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "registry-cycle-second-save-key",
+            ),
+        )
+        .expect("save second");
+
+        let _ = registry_entry_update(
+            root.path(),
+            &first.id,
+            mutation_with_key(
+                json!({
+                    "expectedRevision": first.revision,
+                    "parentIds":[second.id]
+                }),
+                "registry-cycle-first-update-key",
+            ),
+        )
+        .expect("first update");
+
+        let error = registry_entry_update(
+            root.path(),
+            &second.id,
+            mutation_with_key(
+                json!({
+                    "expectedRevision": second.revision,
+                    "parentIds":[first.id]
+                }),
+                "registry-cycle-second-update-key",
+            ),
+        )
+        .expect_err("cycle should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("registry parent graph cannot contain cycles"));
+    }
+
+    #[test]
+    fn registry_entry_rejects_cross_kind_name_conflicts() {
+        let root = temp_root();
+        let _category = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"category",
+                    "name":"Sales",
+                    "aliases":["Revenue Ops"],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "registry-cross-kind-category-save-key",
+            ),
+        )
+        .expect("save category");
+
+        let error = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"thread",
+                    "name":"sales",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "registry-cross-kind-thread-save-key",
+            ),
+        )
+        .expect_err("cross-kind name conflict should be rejected");
+        assert!(error.to_string().contains("name_or_alias_not_unique"));
+    }
+
+    #[test]
+    fn atoms_list_supports_category_id_descendant_filtering() {
+        let root = temp_root();
+        let parent = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"category",
+                    "name":"Work",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "registry-parent-category-save-key",
+            ),
+        )
+        .expect("save parent category");
+        let child = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"category",
+                    "name":"Hiring",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[parent.id]
+                }),
+                "registry-child-category-save-key",
+            ),
+        )
+        .expect("save child category");
+
+        let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
+        let updated = atom_update(
+            root.path(),
+            &atom.id,
+            UpdateAtomRequest {
+                expected_revision: atom.revision,
+                idempotency_key: Some("atom-category-meta-update-key".to_string()),
+                raw_text: None,
+                facet_data_patch: Some(AtomFacets {
+                    meta: Some(crate::models::MetaFacet {
+                        labels: Some(vec![child.name.clone()]),
+                        categories: Some(vec![child.name.clone()]),
+                    }),
+                    ..AtomFacets::default()
+                }),
+                relations_patch: None,
+                clear_parent_id: None,
+                body_patch: None,
+            },
+        )
+        .expect("update atom categories");
+
+        let no_descendants = atoms_list(
+            root.path(),
+            ListAtomsRequest {
+                filter: Some(NotepadFilter {
+                    category_ids: Some(vec![parent.id.clone()]),
+                    include_category_descendants: Some(false),
+                    ..NotepadFilter::default()
+                }),
+                ..ListAtomsRequest::default()
+            },
+        )
+        .expect("atoms list without descendants");
+        assert!(!no_descendants
+            .items
+            .iter()
+            .any(|item| item.id == updated.id));
+
+        let with_descendants = atoms_list(
+            root.path(),
+            ListAtomsRequest {
+                filter: Some(NotepadFilter {
+                    category_ids: Some(vec![parent.id]),
+                    include_category_descendants: Some(true),
+                    ..NotepadFilter::default()
+                }),
+                ..ListAtomsRequest::default()
+            },
+        )
+        .expect("atoms list with descendants");
+        assert!(with_descendants
+            .items
+            .iter()
+            .any(|item| item.id == updated.id));
+
+        let by_label_id = atoms_list(
+            root.path(),
+            ListAtomsRequest {
+                filter: Some(NotepadFilter {
+                    label_ids: Some(vec![child.id]),
+                    ..NotepadFilter::default()
+                }),
+                ..ListAtomsRequest::default()
+            },
+        )
+        .expect("atoms list by label ids");
+        assert!(by_label_id.items.iter().any(|item| item.id == updated.id));
+    }
+
+    #[test]
+    fn notepad_block_create_applies_capture_label_ids() {
+        let root = temp_root();
+        let category = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"category",
+                    "name":"Finance",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "capture-category-save-key",
+            ),
+        )
+        .expect("save category");
+        let thread = registry_entry_save(
+            root.path(),
+            mutation_with_key(
+                json!({
+                    "kind":"thread",
+                    "name":"Payroll",
+                    "aliases":[],
+                    "status":"active",
+                    "parentIds":[]
+                }),
+                "capture-thread-save-key",
+            ),
+        )
+        .expect("save thread");
+
+        let _ = notepad_save(
+            root.path(),
+            SaveNotepadViewRequest {
+                expected_revision: None,
+                idempotency_key: Some("capture-notepad-save-key".to_string()),
+                definition: crate::models::NotepadViewDefinitionInput {
+                    id: "capture".to_string(),
+                    schema_version: 1,
+                    name: "Capture".to_string(),
+                    description: Some("Capture defaults".to_string()),
+                    is_system: false,
+                    view_kind: Some("computed".to_string()),
+                    scope_project_id: None,
+                    display_role: None,
+                    filters: NotepadFilter::default(),
+                    sorts: vec![NotepadSort {
+                        field: "updatedAt".to_string(),
+                        direction: "desc".to_string(),
+                    }],
+                    capture_defaults: Some(crate::models::NotepadCaptureDefaults {
+                        label_ids: Some(vec![category.id.clone(), thread.id.clone()]),
+                        ..crate::models::NotepadCaptureDefaults::default()
+                    }),
+                    layout_mode: "outline".to_string(),
+                    archived_at: None,
+                },
+            },
+        )
+        .expect("capture notepad saved");
+
+        let block = notepad_block_create(
+            root.path(),
+            CreateBlockInNotepadRequest {
+                notepad_id: "capture".to_string(),
+                project_id: None,
+                raw_text: "Quarterly close".to_string(),
+                body: None,
+                capture_source: Some(crate::models::CaptureSource::Ui),
+                idempotency_key: Some("capture-block-create-key".to_string()),
+            },
+        )
+        .expect("capture block created");
+        let atom_id = block.atom_id.expect("block atom id");
+        let atom = atom_get(root.path(), &atom_id)
+            .expect("atom get")
+            .expect("atom exists");
+        let labels = atom
+            .facet_data
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.labels.clone())
+            .unwrap_or_default();
+        let categories = atom
+            .facet_data
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.categories.clone())
+            .unwrap_or_default();
+        assert!(labels
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(&category.name)));
+        assert!(labels
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(&thread.name)));
+        assert!(categories
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(&category.name)));
+        assert!(!categories
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(&thread.name)));
+        assert!(atom.relations.thread_ids.contains(&thread.id));
+    }
+
+    #[test]
+    fn feature_flags_list_backfills_registry_flag_from_legacy_defaults() {
+        let root = temp_root();
+        ensure_topology(root.path()).expect("workspace topology");
+        write_json_file(
+            &root.path().join("governance/feature-flags.json"),
+            &vec![
+                json!({
+                    "key": "workspace.registry",
+                    "enabled": false,
+                    "updatedAt": "2025-01-01T00:00:00Z"
+                }),
+                json!({
+                    "key": "workspace.label_registry_ui_v1",
+                    "enabled": true,
+                    "updatedAt": "2025-01-01T00:00:00Z"
+                }),
+            ],
+        )
+        .expect("seed feature flags");
+
+        let flags = feature_flags_list(root.path()).expect("feature flags");
+        let registry = flags
+            .iter()
+            .find(|flag| flag.key == "workspace.registry")
+            .expect("registry flag");
+        assert!(registry.enabled);
+        assert!(flags.iter().any(|flag| flag.key == "workspace.projects_v1"));
+    }
+
+    #[test]
     fn notepad_atoms_list_materializes_missing_placements_for_membership_atoms() {
         let root = temp_root();
         let atom = atom_create(root.path(), sample_create_request()).expect("atom created");
@@ -7439,6 +8575,7 @@ mod tests {
                     }],
                     capture_defaults: None,
                     layout_mode: "list".to_string(),
+                    archived_at: None,
                 },
             },
         )

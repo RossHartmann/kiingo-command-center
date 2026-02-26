@@ -221,26 +221,47 @@ fn parse_version(version: &str) -> (u64, u64, u64) {
 }
 
 fn codex_matrix() -> Vec<MatrixEntry> {
-    vec![MatrixEntry {
-        min_version: "0.24.0",
-        max_version: "1.99.99",
-        supported_flags: &[
-            "--model",
-            "--json",
-            "--reasoning-effort",
-            "--ask-for-approval",
-            "--output-schema",
-            "--output-last-message",
-            "--sandbox",
-            "--search",
-            "--add-dir",
-            "--image",
-            "--config",
-            "--skip-git-repo-check",
-            "--ephemeral",
-        ],
-        supports_interactive: true,
-    }]
+    vec![
+        MatrixEntry {
+            min_version: "0.24.0",
+            max_version: "0.100.99",
+            supported_flags: &[
+                "--model",
+                "--json",
+                "--reasoning-effort",
+                "--ask-for-approval",
+                "--output-schema",
+                "--output-last-message",
+                "--sandbox",
+                "--search",
+                "--add-dir",
+                "--image",
+                "--config",
+                "--skip-git-repo-check",
+                "--ephemeral",
+            ],
+            supports_interactive: true,
+        },
+        MatrixEntry {
+            min_version: "0.101.0",
+            max_version: "1.99.99",
+            supported_flags: &[
+                "--model",
+                "--json",
+                "--reasoning-effort",
+                "--output-schema",
+                "--output-last-message",
+                "--sandbox",
+                "--search",
+                "--add-dir",
+                "--image",
+                "--config",
+                "--skip-git-repo-check",
+                "--ephemeral",
+            ],
+            supports_interactive: true,
+        },
+    ]
 }
 
 fn claude_matrix() -> Vec<MatrixEntry> {
@@ -288,6 +309,17 @@ mod tests {
     fn checks_version_range() {
         assert!(version_between("0.30.0", "0.24.0", "1.0.0"));
         assert!(!version_between("0.10.0", "0.24.0", "1.0.0"));
+    }
+
+    #[test]
+    fn codex_0101_drops_legacy_approval_flag() {
+        let entry = super::codex_matrix()
+            .into_iter()
+            .find(|candidate| {
+                version_between("0.101.0", candidate.min_version, candidate.max_version)
+            })
+            .expect("codex 0.101.0 matrix entry");
+        assert!(!entry.supported_flags.contains(&"--ask-for-approval"));
     }
 
     #[test]
