@@ -120,6 +120,26 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
       },
       {
         number: 11,
+        title: "Transmit conviction in every interaction",
+        description:
+          "Every email, meeting, Slack message, and hallway conversation is a broadcast. You're either injecting energy, optimism, and clarity — or you're letting entropy win. Nobody else in the org has the same amplification effect.",
+        redFlag:
+          "You sent an email or walked into a meeting on autopilot and left the energy the same or lower than when you arrived.",
+        spotlight:
+          "Think about your last five interactions today — Slack messages, calls, emails, walk-and-talks. In how many did you consciously bring energy, clarity, and conviction? The CEO's emotional state is contagious in a way nobody else's is. When you show up flat, uncertain, or distracted, that radiates outward fast. This isn't about toxic positivity or cheerleading — it's about the fact that your belief in where the company is going is the fuel that keeps everyone else moving. If you're not transmitting it, nobody is."
+      },
+      {
+        number: 12,
+        title: "Be the accelerant",
+        description:
+          "Most people default to a comfortable pace. Your job is to compress timelines, ask \"why not this week?\" and make the team feel the gap between where they are and where they need to be. Not anxiety — urgency. Urgency comes with clarity about what matters; anxiety comes from confusion about what matters.",
+        redFlag:
+          "Someone said \"we're hoping to have that done by end of month\" and you didn't push back on the timeline.",
+        spotlight:
+          "Look at the three biggest initiatives your team is working on right now. For each one, ask: what would it take to deliver this in half the time? Not as a thought experiment — as a real question with a real answer. Most timelines have slack built in because nobody challenged them. The CEO is the person who makes comfortable pacing feel uncomfortable. Not by creating panic, but by making the cost of delay visible. Every week of drift is a week your competitor isn't drifting."
+      },
+      {
+        number: 13,
         title: "Hire ahead of the curve",
         description:
           "Recruiting is the single highest-leverage CEO activity. You can't delegate outcomes to people you haven't hired yet. Treat your pipeline of people like you treat your pipeline of revenue.",
@@ -134,7 +154,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
     group: "The CEO — Self-Management",
     items: [
       {
-        number: 12,
+        number: 14,
         title: "Work on the company, not in it",
         description:
           "Your competence is your biggest trap. Every hour in execution is an hour not spent on leverage.",
@@ -143,7 +163,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Audit your last week honestly. How many hours did you spend doing work that someone else could do — maybe not as well, but well enough? That gap between \"good enough\" and \"perfect\" is where your leverage dies. Your job isn't to produce the best work — it's to build the system that produces good work without you."
       },
       {
-        number: 13,
+        number: 15,
         title: "Make yourself replaceable",
         description:
           "Every time you do something, ask how someone else does it next time. Your job is to build the machine, not be it.",
@@ -153,7 +173,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Pick one thing you did this week that only you can do. Now ask: is that actually true, or is it just that no one else has been shown how? Before you move on, spend 15 minutes documenting the decision framework or recording a quick Loom. The compound interest on replaceability is enormous — every playbook you write buys back future hours permanently."
       },
       {
-        number: 14,
+        number: 16,
         title: "Protect the compounding stuff",
         description:
           "Relationships, nurture systems, case studies — these compound quietly. Don't sacrifice them for what feels urgent today.",
@@ -163,7 +183,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "The urgent will always crowd out the important unless you defend it structurally. Look at your calendar for the next two weeks. Is there protected time for the things that compound — relationship nurture, content creation, case study collection? If it's not on the calendar, it's not real. The things that compound are invisible until they're not — and by then you've either built the asset or you haven't."
       },
       {
-        number: 15,
+        number: 17,
         title: "Say no to good things",
         description:
           "Killing zombies is easy. The real discipline is declining attractive opportunities that don't fit. Every yes is a no to something else — make the trade-off explicit.",
@@ -173,7 +193,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Think about the last opportunity you said yes to. Now name what you implicitly said no to by taking it on. If you can't name the trade-off, you didn't make a decision — you just accumulated. The discipline isn't saying no to bad ideas. It's saying no to good ideas that don't fit the current bet. Practice the phrase: \"That's a great idea — and we're not doing it this quarter.\""
       },
       {
-        number: 16,
+        number: 18,
         title: "Kill things explicitly",
         description:
           "No zombie projects draining focus. If it's not a yes, make it a declared no.",
@@ -183,7 +203,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Right now, name three initiatives that are technically still alive but haven't received real attention in the last month. Those are your zombies. They're consuming mental bandwidth and giving your team ambiguous signals. Send the message today: \"We're stopping X. Here's why. Here's what we're focusing on instead.\" The clarity is a gift to everyone, including yourself."
       },
       {
-        number: 17,
+        number: 19,
         title: "Protect your energy for decisions",
         description:
           "Decisions compound more than production. Guard your decision-making capacity like the scarce resource it is.",
@@ -234,7 +254,7 @@ export function CeoPrinciplesScreen(): JSX.Element {
       <div className="screen-header">
         <h2>CEO Operating Principles</h2>
         <p>
-          Seventeen principles distilled from coaching — honest, first-principles
+          Nineteen principles distilled from coaching — honest, first-principles
           guidance to return to regularly.
         </p>
       </div>

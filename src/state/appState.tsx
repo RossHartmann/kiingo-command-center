@@ -117,6 +117,7 @@ export type Screen =
   | "metric-admin"
   | "ceo-training"
   | "ceo-principles"
+  | "ceo-questions"
   | "coo-principles"
   | "cmo-principles"
   | "cro-principles"

@@ -155,7 +155,8 @@ export const NAVIGATION: NavGroup[] = [
     icon: "\u2691",
     items: [
       { id: "ceo-training", label: "Training Ground", icon: "\u2691" },
-      { id: "ceo-principles", label: "Principles", icon: "\u2696" }
+      { id: "ceo-principles", label: "Principles", icon: "\u2696" },
+      { id: "ceo-questions", label: "The 14 Questions", icon: "\u2753" }
     ]
   },
   {
@@ -234,6 +235,7 @@ export const SCREEN_META: Record<Screen, ScreenMeta> = {
 
   "ceo-training": { title: "CEO Training Ground", description: "CEO-focused training scenarios and simulations", group: "ceo-training" },
   "ceo-principles": { title: "CEO Principles", description: "Core operating principles and decision frameworks", group: "ceo-training" },
+  "ceo-questions": { title: "The 14 CEO Questions", description: "The questions every CEO should be asking — operating and deeper", group: "ceo-training" },
 
   settings: { title: "Settings", description: "Workspace and app configuration", group: "system" },
   profiles: { title: "Profiles", description: "Manage provider profiles", group: "system" },

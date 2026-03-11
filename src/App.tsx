@@ -15,6 +15,7 @@ import { ProfilesScreen } from "./screens/ProfilesScreen";
 import { QueueScreen } from "./screens/QueueScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { CeoPrinciplesScreen } from "./screens/CeoPrinciplesScreen";
+import { CeoQuestionsScreen } from "./screens/CeoQuestionsScreen";
 import { CooPrinciplesScreen } from "./screens/CooPrinciplesScreen";
 import { CmoPrinciplesScreen } from "./screens/CmoPrinciplesScreen";
 import { CroPrinciplesScreen } from "./screens/CroPrinciplesScreen";
@@ -69,6 +70,8 @@ export default function App(): JSX.Element {
         return <MetricAdminScreen />;
       case "ceo-principles":
         return <CeoPrinciplesScreen />;
+      case "ceo-questions":
+        return <CeoQuestionsScreen />;
       case "coo-principles":
         return <CooPrinciplesScreen />;
       case "cmo-principles":

@@ -3963,8 +3963,8 @@ INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layou
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('15950cea-3433-4105-8601-8fb60cf1bad6', 'pipeline', '6978d569-0b74-452b-b3e7-5de51c90d239', 2, 'wide', 0, 16, 8, 11);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('a6a6de5c-aa50-432f-a522-1c71742f0737', 'pipeline', '5da7296a-4782-45a8-8309-b0b4f9827ce9', 3, 'wide', 0, 27, 8, 11);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('fe6236d3-2e1e-4bf4-b0c7-3a5f252f3a0a', 'pipeline', '5e4a0131-1e16-4ca6-b715-cddf54af01e4', 4, 'wide', 0, 38, 8, 4);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8e2e27b9-1ad9-4f35-b076-f9f8f96fefdd', 'revenue', '35231c42-b088-4da4-b2f2-f25ebce87e36', 0, 'full', 0, 42, 10, 11);
-INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('e586793e-35ae-49d7-a682-6a76604f493f', 'revenue', 'd377f67d-eef4-4820-8041-d230232856e0', 0, 'full', 0, 18, 10, 24);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('8e2e27b9-1ad9-4f35-b076-f9f8f96fefdd', 'revenue', '35231c42-b088-4da4-b2f2-f25ebce87e36', 0, 'full', 0, 42, 10, 15);
+INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('e586793e-35ae-49d7-a682-6a76604f493f', 'revenue', 'd377f67d-eef4-4820-8041-d230232856e0', 0, 'full', 0, 18, 10, 28);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('01731142-5585-4488-9fd2-3417d28e453c', 'revenue', '44aed376-61f4-4b67-820c-7697f1a5179d', 0, 'full', 0, 0, 10, 18);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('43328154-c4e9-4f95-b706-69ed92b4c9a6', 'revenue', '6353801b-e51e-491d-ab5e-a780ed36b62a', 1, 'full', 0, 53, 10, 15);
 INSERT OR REPLACE INTO screen_metrics (id, screen_id, metric_id, position, layout_hint, grid_x, grid_y, grid_w, grid_h) VALUES ('b7130bf3-6da3-4abb-b4ef-6a4c29846dab', 'revenue', '6978d569-0b74-452b-b3e7-5de51c90d239', 2, 'wide', 5, 83, 5, 15);
@@ -4269,21 +4269,20 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </MetricSection>
  );
 })()', 'completed', '2026-02-26T00:28:51.307795+00:00', '2026-02-26T00:43:09.969849+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('85251ffd-ec5c-410b-b8ab-d3856ec98870', '35231c42-b088-4da4-b2f2-f25ebce87e36', '{"currentMonth":207894.47,"ltmCollected":1719451.71,"ltmTotal":1850168.5,"monthlyData":[{"collected":84150,"count":35,"invoiced":87650,"month":"Feb 25"},{"collected":151122.5,"count":66,"invoiced":190174,"month":"Mar 25"},{"collected":117288.5,"count":62,"invoiced":106283,"month":"Apr 25"},{"collected":107692.5,"count":34,"invoiced":125353.5,"month":"May 25"},{"collected":126010.16,"count":61,"invoiced":139671.16,"month":"Jun 25"},{"collected":159150.19,"count":48,"invoiced":98864.19,"month":"Jul 25"},{"collected":89494,"count":51,"invoiced":114698,"month":"Aug 25"},{"collected":146281,"count":56,"invoiced":263724.5,"month":"Sep 25"},{"collected":191139.8,"count":48,"invoiced":197685.27,"month":"Oct 25"},{"collected":204402.97,"count":48,"invoiced":206918.5,"month":"Nov 25"},{"collected":207654.38,"count":60,"invoiced":120578.88,"month":"Dec 25"},{"collected":135065.71,"count":56,"invoiced":198567.5,"month":"Jan 26"},{"collected":162991.38,"count":36,"invoiced":207894.47,"month":"Feb 26"}],"priorMonth":198567.5}', '(() => {
- const data = [{"month":"Feb 25","invoiced":87650,"collected":84150,"count":35},{"month":"Mar 25","invoiced":190174,"collected":151122.5,"count":66},{"month":"Apr 25","invoiced":106283,"collected":117288.5,"count":62},{"month":"May 25","invoiced":125353.5,"collected":107692.5,"count":34},{"month":"Jun 25","invoiced":139671.16,"collected":126010.16,"count":61},{"month":"Jul 25","invoiced":98864.19,"collected":159150.19,"count":48},{"month":"Aug 25","invoiced":114698,"collected":89494,"count":51},{"month":"Sep 25","invoiced":263724.5,"collected":146281,"count":56},{"month":"Oct 25","invoiced":197685.27,"collected":191139.8,"count":48},{"month":"Nov 25","invoiced":206918.5,"collected":204402.97,"count":48},{"month":"Dec 25","invoiced":120578.88,"collected":207654.38,"count":60},{"month":"Jan 26","invoiced":198567.5,"collected":135065.71,"count":56},{"month":"Feb 26","invoiced":207894.47,"collected":162991.38,"count":36}];
- const currentMonth = 207894.47;
- const priorMonth = 198567.5;
- const ltmTotal = 1850168.5;
- const ltmCollected = 1719451.71;
- const fmt = v => v >= 1000000 ? ''$'' + (v / 1000000).toFixed(2) + ''M'' : ''$'' + (v / 1000).toFixed(0) + ''K'';
- const mom = ((currentMonth - priorMonth) / priorMonth * 100).toFixed(1);
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('d5057021-bafd-414c-b0b3-ab6548c909aa', '35231c42-b088-4da4-b2f2-f25ebce87e36', '{"currentMonth":207894,"ltmCollected":1882443,"ltmTotal":2058063,"monthlyData":[{"collected":84150,"count":35,"invoiced":87650,"month":"Feb 25"},{"collected":151123,"count":66,"invoiced":190174,"month":"Mar 25"},{"collected":117289,"count":62,"invoiced":106283,"month":"Apr 25"},{"collected":107693,"count":34,"invoiced":125354,"month":"May 25"},{"collected":126010,"count":61,"invoiced":139671,"month":"Jun 25"},{"collected":159150,"count":48,"invoiced":98864,"month":"Jul 25"},{"collected":89494,"count":51,"invoiced":114698,"month":"Aug 25"},{"collected":146281,"count":56,"invoiced":263725,"month":"Sep 25"},{"collected":191140,"count":48,"invoiced":197685,"month":"Oct 25"},{"collected":204403,"count":48,"invoiced":206919,"month":"Nov 25"},{"collected":207654,"count":60,"invoiced":120579,"month":"Dec 25"},{"collected":135066,"count":56,"invoiced":198568,"month":"Jan 26"},{"collected":162991,"count":36,"invoiced":207894,"month":"Feb 26"}],"priorMonth":198568}', '(() => {
+ const data = [{"month":"Feb 25","invoiced":87650,"collected":84150,"count":35},{"month":"Mar 25","invoiced":190174,"collected":151123,"count":66},{"month":"Apr 25","invoiced":106283,"collected":117289,"count":62},{"month":"May 25","invoiced":125354,"collected":107693,"count":34},{"month":"Jun 25","invoiced":139671,"collected":126010,"count":61},{"month":"Jul 25","invoiced":98864,"collected":159150,"count":48},{"month":"Aug 25","invoiced":114698,"collected":89494,"count":51},{"month":"Sep 25","invoiced":263725,"collected":146281,"count":56},{"month":"Oct 25","invoiced":197685,"collected":191140,"count":48},{"month":"Nov 25","invoiced":206919,"collected":204403,"count":48},{"month":"Dec 25","invoiced":120579,"collected":207654,"count":60},{"month":"Jan 26","invoiced":198568,"collected":135066,"count":56},{"month":"Feb 26","invoiced":207894,"collected":162991,"count":36}];
+ const currentMonth = 207894;
+ const priorMonth = 198568;
+ const ltmTotal = 2058063;
+ const ltmCollected = 1882443;
+
  return (
  <MetricSection>
  <MetricRow>
- <StatCard label="This Month" value={fmt(currentMonth)} subtitle="Invoiced (partial Feb)" trend={''+'' + mom + ''% vs last month''} trendDirection="up" />
- <StatCard label="Last Month" value={fmt(priorMonth)} subtitle="Invoiced (Jan 26)" />
- <StatCard label="LTM Invoiced" value={fmt(ltmTotal)} subtitle="Feb 25 – Jan 26" />
- <StatCard label="LTM Collected" value={fmt(ltmCollected)} subtitle="Feb 25 – Jan 26" />
+ <StatCard label="This Month" value={''$'' + (currentMonth / 1000).toFixed(0) + ''K''} subtitle="Invoiced (Feb 26, partial)" />
+ <StatCard label="Last Month" value={''$'' + (priorMonth / 1000).toFixed(0) + ''K''} subtitle="Invoiced (Jan 26)" />
+ <StatCard label="LTM Invoiced" value={''$'' + (ltmTotal / 1000).toFixed(0) + ''K''} subtitle="Last 12 months" />
+ <StatCard label="LTM Collected" value={''$'' + (ltmCollected / 1000).toFixed(0) + ''K''} subtitle="Cash received, 12 months" />
  </MetricRow>
  <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: 20, border: `1px solid ${theme.line}` }}>
  <ResponsiveContainer width="100%" height="100%">
@@ -4291,17 +4290,17 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
  <XAxis dataKey="month" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={v => ''$'' + (v / 1000).toFixed(0) + ''K''} />
- <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => [''$'' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })]} />
+ <Tooltip contentStyle={{ background: theme.tooltipBg, border: `1px solid ${theme.tooltipBorder}`, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={v => ''$'' + Number(v).toLocaleString()} />
  <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
- <Line type="monotone" dataKey="invoiced" name="Invoiced" stroke={theme.accent} strokeWidth={2.5} dot={{ r: 3, fill: theme.accent }} />
- <Line type="monotone" dataKey="collected" name="Collected" stroke={theme.accentStrong} strokeWidth={2.5} dot={{ r: 3, fill: theme.accentStrong }} strokeDasharray="6 3" />
+ <Line type="monotone" dataKey="invoiced" name="Invoiced" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3, fill: ''#2563eb'' }} />
+ <Line type="monotone" dataKey="collected" name="Collected" stroke="#16a34a" strokeWidth={2.5} dot={{ r: 3, fill: ''#16a34a'' }} strokeDasharray="6 3" />
  </LineChart>
  </ResponsiveContainer>
  </div>
- <MetricNote>Source: QuickBooks — 661 invoices + 610 payments via Kiingo MCP</MetricNote>
+ <MetricNote>Source: QuickBooks Invoices + Payments via Kiingo MCP · 661 invoices, 610 payments · Feb 2025–Feb 2026</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-26T00:28:51.307803+00:00', '2026-02-26T00:45:47.682624+00:00');
+})()', 'completed', '2026-02-26T01:49:55.465174+00:00', '2026-02-26T01:51:36.583351+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('6a8d803c-194b-4a8f-8d16-f8803a5bb437', '381bed73-c1db-4f66-bf31-30a470890988', '{"totalLearners": 2167, "totalCourses": 148, "activeCourses": 4, "completedCourses": 46, "totalGroups": 134, "activeCourseNames": ["AI Bootcamp 02.06.26 Cohort", "Vistage Chair AI Bootcamp February 2025", "Kiingo Asynchronous Content", "AI Bootcamp 04.17.25 Cohort"], "loginsToday": 35, "loginsWeek": 124, "dailyLogins": [{"day": "Wed", "logins": 18}, {"day": "Thu", "logins": 22}, {"day": "Fri", "logins": 15}, {"day": "Sat", "logins": 4}, {"day": "Sun", "logins": 2}, {"day": "Mon", "logins": 28}, {"day": "Tue", "logins": 35}]}', '(() => {
   const totalLearners = 2167;
   const activeCourses = 4;
@@ -5722,7 +5721,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
     </MetricSection>
   );
 })()', 'completed', '2026-02-19T05:43:41+00:00', '2026-02-19T05:43:41+00:00');
-INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('16719190-2122-4bf0-86f5-84fc7f353a93', 'd377f67d-eef4-4820-8041-d230232856e0', '{"avgDealSize":6483,"byService":[{"count":10,"revenue":118850,"service":"Private AI Foundational Bootcamp"},{"count":11,"revenue":20500,"service":"AI Foundational Bootcamp"},{"count":1,"revenue":9000,"service":"AI Agents Bootcamp"},{"count":1,"revenue":749,"service":"AI Champions Group"}],"dealCount":23,"monthLabel":"February 2026","newBizCount":17,"newBizRevenue":123850,"outstandingInvoice":47050,"totalInvoiced":102049,"totalRevenue":149099,"upsellCount":6,"upsellRevenue":25249}', '(() => {
+INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('98befbb8-e048-4c35-9b97-b605e5ff8cd2', 'd377f67d-eef4-4820-8041-d230232856e0', '{"avgDealSize":6483,"byService":[{"count":10,"revenue":118850,"service":"Private AI Foundational Bootcamp"},{"count":11,"revenue":20500,"service":"AI Foundational Bootcamp"},{"count":1,"revenue":9000,"service":"AI Agents Bootcamp"},{"count":1,"revenue":749,"service":"AI Champions Group"}],"dealCount":23,"monthLabel":"February 2026","newBizCount":17,"newBizRevenue":123850,"outstandingInvoice":47050,"totalInvoiced":102049,"totalRevenue":149099,"upsellCount":6,"upsellRevenue":25249}', '(() => {
  const totalRevenue = 149099;
  const totalInvoiced = 102049;
  const outstanding = 47050;
@@ -5736,7 +5735,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  { service: ''Private AI Bootcamp'', count: 10, revenue: 118850 },
  { service: ''AI Foundational Bootcamp'', count: 11, revenue: 20500 },
  { service: ''AI Agents Bootcamp'', count: 1, revenue: 9000 },
- { service: ''AI Champions Group'', count: 1, revenue: 749 },
+ { service: ''AI Champions Group'', count: 1, revenue: 749 }
  ];
  const deals = [
  { client: ''SVN (1st cohort)'', amount: 9600, invoiced: 9600, service: ''Private AI Foundational Bootcamp (24 users)'', type: ''New Biz'', closeDate: ''Feb 2'', payment: '''' },
@@ -5761,10 +5760,11 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  { client: ''Generation Partners'', amount: 0, invoiced: 0, service: ''AI Foundational Bootcamp (2 users) PRO BONO'', type: ''New Biz'', closeDate: ''Feb 23'', payment: '''' },
  { client: ''Blue Runner Foods'', amount: 1250, invoiced: 0, service: ''AI Foundational Bootcamp (1 user)'', type: ''New Biz'', closeDate: ''Feb 23'', payment: '''' },
  { client: ''Hines Homes'', amount: 10000, invoiced: 0, service: ''Private AI Foundational Bootcamp (10 users)'', type: ''New Biz'', closeDate: ''Feb 24'', payment: '''' },
- { client: ''Biogennix'', amount: 2550, invoiced: 2550, service: ''AI Foundational Bootcamp (3 users)'', type: ''Upsell'', closeDate: ''Feb 24'', payment: ''on file'' },
+ { client: ''Biogennix'', amount: 2550, invoiced: 2550, service: ''AI Foundational Bootcamp (3 users)'', type: ''Upsell'', closeDate: ''Feb 24'', payment: ''on file'' }
  ];
  const monthLabel = ''February 2026'';
  const fmt = (n) => ''$'' + (n || 0).toLocaleString();
+
  return (
  <MetricSection>
  <MetricRow>
@@ -5776,17 +5776,19 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  <StatCard label="New Business" value={fmt(newBizRevenue)} subtitle={newBizCount + '' deals''} />
  <StatCard label="Upsells" value={fmt(upsellRevenue)} subtitle={upsellCount + '' deals''} />
  </MetricRow>
+
  <div style={{ height: 280, background: theme.panel, borderRadius: 16, padding: 20, border: ''1px solid '' + theme.line }}>
  <ResponsiveContainer width="100%" height="100%">
  <BarChart data={byService} margin={{ top: 10, right: 10, left: 10, bottom: 40 }}>
  <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} />
- <XAxis dataKey="service" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} angle={-20} textAnchor="end" interval={0} />
+ <XAxis dataKey="service" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 10 }} angle={-25} textAnchor="end" interval={0} />
  <YAxis stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} tickFormatter={(v) => ''$'' + (v / 1000).toFixed(0) + ''K''} />
  <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} formatter={(v) => [''$'' + v.toLocaleString(), ''Revenue'']} />
  <Bar dataKey="revenue" fill={theme.accent} radius={[6, 6, 0, 0]} />
  </BarChart>
  </ResponsiveContainer>
  </div>
+
  <div style={{ marginTop: 16, background: theme.panel, borderRadius: 16, padding: 16, border: ''1px solid '' + theme.line, overflowX: ''auto'' }}>
  <table style={{ width: ''100%'', borderCollapse: ''collapse'', fontSize: 13 }}>
  <thead>
@@ -5803,7 +5805,7 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  {deals.map((d, i) => (
  <tr key={i} style={{ borderBottom: ''1px solid '' + theme.line }}>
  <td style={{ padding: ''8px 12px'', color: theme.ink }}>{d.client}</td>
- <td style={{ padding: ''8px 12px'', color: theme.ink, textAlign: ''right'', fontVariantNumeric: ''tabular-nums'' }}>{fmt(d.amount)}</td>
+ <td style={{ padding: ''8px 12px'', color: theme.ink, textAlign: ''right'', fontVariantNumeric: ''tabular-nums'' }}>{d.amount > 0 ? fmt(d.amount) : <span style={{ color: theme.inkMuted }}>PRO BONO</span>}</td>
  <td style={{ padding: ''8px 12px'', color: d.invoiced ? theme.ink : theme.inkMuted, textAlign: ''right'', fontVariantNumeric: ''tabular-nums'' }}>{d.invoiced ? fmt(d.invoiced) : ''—''}</td>
  <td style={{ padding: ''8px 12px'', color: theme.inkMuted, fontSize: 12 }}>{d.service}</td>
  <td style={{ padding: ''8px 12px'' }}><span style={{ padding: ''2px 8px'', borderRadius: 8, fontSize: 11, fontWeight: 600, background: d.type === ''New Biz'' ? theme.accent + ''22'' : theme.accentStrong + ''22'', color: d.type === ''New Biz'' ? theme.accent : theme.accentStrong }}>{d.type}</span></td>
@@ -5813,10 +5815,11 @@ INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_ht
  </tbody>
  </table>
  </div>
- <MetricNote>Source: Revenue Tracker 2026.xlsx (Sohrab Azad, OneDrive) · 1 cancelled deal excluded (Oxford Road) · Last modified Feb 25 by Kym Parodo</MetricNote>
+
+ <MetricNote>Source: Revenue Tracker 2026.xlsx (Sohrab Azad, OneDrive) via Kiingo MCP</MetricNote>
  </MetricSection>
  );
-})()', 'completed', '2026-02-26T00:28:52.496203+00:00', '2026-02-26T00:38:58.326311+00:00');
+})()', 'completed', '2026-02-26T01:49:55.468297+00:00', '2026-02-26T01:54:33.477860+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('df922d65-5adb-4ee6-858e-297771c600c4', 'd6fe7a31-00ad-41e4-9379-b4ec83a346b7', '{"teamWorkload":[{"dueThisWeek":8,"name":"Becky Clark","open":33,"overdue":3},{"dueThisWeek":10,"name":"Isabelle Coloma","open":101,"overdue":5},{"dueThisWeek":25,"name":"James Hill-Jiang","open":98,"overdue":9},{"dueThisWeek":15,"name":"Jordan McDaniel","open":112,"overdue":15},{"dueThisWeek":5,"name":"Josh Sullivan","open":113,"overdue":4},{"dueThisWeek":3,"name":"Ross Hartmann","open":107,"overdue":1},{"dueThisWeek":27,"name":"Sohrab Azad","open":130,"overdue":1},{"dueThisWeek":0,"name":"Andy Woods","open":0,"overdue":0},{"dueThisWeek":0,"name":"David Rodriguez","open":0,"overdue":0},{"dueThisWeek":0,"name":"Jess Hartmann","open":1,"overdue":0},{"dueThisWeek":0,"name":"Kym Parodo","open":2,"overdue":2},{"dueThisWeek":0,"name":"Liesel Hartmann","open":0,"overdue":0},{"dueThisWeek":0,"name":"mich@kiingo.com","open":0,"overdue":0},{"dueThisWeek":0,"name":"Michael Glaser","open":0,"overdue":0},{"dueThisWeek":0,"name":"Ryan Keiper","open":0,"overdue":0},{"dueThisWeek":0,"name":"Schuyler Dragoo","open":0,"overdue":0},{"dueThisWeek":0,"name":"Taylor Hartmann","open":0,"overdue":0}],"totalOpenTasks":697,"totalOverdue":40}', '(() => { const data = [{"name":"Sohrab Azad","open":130,"dueThisWeek":27,"overdue":1},{"name":"Josh Sullivan","open":113,"dueThisWeek":5,"overdue":4},{"name":"Jordan McDaniel","open":112,"dueThisWeek":15,"overdue":15},{"name":"Ross Hartmann","open":107,"dueThisWeek":3,"overdue":1},{"name":"Isabelle Coloma","open":101,"dueThisWeek":10,"overdue":5},{"name":"James Hill-Jiang","open":98,"dueThisWeek":25,"overdue":9},{"name":"Becky Clark","open":33,"dueThisWeek":8,"overdue":3},{"name":"Kym Parodo","open":2,"dueThisWeek":0,"overdue":2},{"name":"Jess Hartmann","open":1,"dueThisWeek":0,"overdue":0}].filter(d => d.open > 0); const totalOpen = 697; const totalOverdue = 40; return ( <MetricSection> <MetricRow> <StatCard label="Total Open Tasks" value={totalOpen} subtitle="Across team" /> <StatCard label="Overdue" value={totalOverdue} subtitle="Past due date" trendDirection={totalOverdue > 5 ? ''down'' : ''flat''} /> </MetricRow> <div style={{ height: 320, background: theme.panel, borderRadius: 16, padding: ''16px 20px'', border: ''1px solid '' + theme.line, marginTop: 8 }}> <ResponsiveContainer width="100%" height="100%"> <BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 110, bottom: 5 }}> <CartesianGrid strokeDasharray="3 3" stroke={theme.gridStroke} /> <XAxis type="number" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} /> <YAxis type="category" dataKey="name" stroke={theme.axisStroke} tick={{ fill: theme.inkMuted, fontSize: 11 }} width={105} /> <Tooltip contentStyle={{ background: theme.tooltipBg, border: ''1px solid '' + theme.tooltipBorder, color: theme.tooltipText, borderRadius: 8, fontSize: 13 }} /> <Bar dataKey="open" name="Open" fill={theme.accent} radius={[0,4,4,0]} /> <Bar dataKey="overdue" name="Overdue" fill={theme.danger} radius={[0,4,4,0]} /> </BarChart> </ResponsiveContainer> </div> <MetricNote>Source: Asana Tasks via Kiingo MCP • As of Feb 15, 2026</MetricNote> </MetricSection> ); })()', 'completed', '2026-02-15T19:28:47.450515+00:00', '2026-02-15T19:29:43.477586+00:00');
 INSERT OR REPLACE INTO metric_snapshots (id, metric_id, values_json, rendered_html, status, created_at, completed_at) VALUES ('995c7079-0812-4933-b9e4-82b0dcb5cb40', 'e199206d-01bd-40af-838e-f82ff1541a40', '{"instructors": [{"name": "Isabelle", "role": "Session Runner", "active": 3, "scheduled": 0, "completed": 4, "total": 7}, {"name": "Josh", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 43, "total": 43}, {"name": "James", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 27, "total": 27}, {"name": "Jordan", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 12, "total": 12}, {"name": "Ross", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 5, "total": 5}], "totalTeamMembers": 5, "totalActiveCohorts": 3, "cohortsWithCoordinator": 3, "cohortTeams": [{"cohort": "DealNews Cohort 3", "lead": "\u2014", "coordinator": "Isabelle"}, {"cohort": "Total Package HR", "lead": "\u2014", "coordinator": "Isabelle"}, {"cohort": "SPMB Cohort 3", "lead": "\u2014", "coordinator": "Isabelle"}]}', '(() => {
   const instructors = [{"name": "Isabelle", "role": "Session Runner", "active": 3, "scheduled": 0, "completed": 4, "total": 7}, {"name": "Josh", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 43, "total": 43}, {"name": "James", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 27, "total": 27}, {"name": "Jordan", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 12, "total": 12}, {"name": "Ross", "role": "Lead Instructor", "active": 0, "scheduled": 0, "completed": 5, "total": 5}];
