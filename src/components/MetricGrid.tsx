@@ -176,6 +176,9 @@ export function MetricGrid({ views, editMode, compact, onLayoutChange, onRemoveW
   // Grid needs enough height to be a valid drop target even when empty
   const gridStyle = editMode ? { minHeight: "calc(100vh - 100px)" } : undefined;
   const rootRef = containerRef as RefObject<HTMLDivElement>;
+  const activeCompactor = editMode
+    ? (compact ? verticalCompactor : noCompactor)
+    : verticalCompactor;
 
   return (
     <div ref={rootRef}>
@@ -198,7 +201,7 @@ export function MetricGrid({ views, editMode, compact, onLayoutChange, onRemoveW
               ? { enabled: true, handles: ["se", "s", "e"] as const }
               : { enabled: false }
           }
-          compactor={compact ? verticalCompactor : noCompactor}
+          compactor={activeCompactor}
           margin={[MARGIN, MARGIN] as const}
           onLayoutChange={handleLayoutChange}
         >

@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppActions, useAppState } from "../state/appState";
 import { MetricGrid } from "../components/MetricGrid";
 import { OMNI_SCROLL_TO_METRIC } from "../components/OmniSearch";
-import type { MetricLayoutHint, ScreenMetricLayoutItem } from "../lib/types";
+import type { MetricLayoutHint, ScreenMetricLayoutItem, ScreenMetricView } from "../lib/types";
 
 interface DashboardScreenProps {
   screenId: string;
@@ -17,6 +17,7 @@ const GRID_DEFAULTS: Record<string, { gridW: number; gridH: number }> = {
 // Must match MetricGrid's ResponsiveGridLayout config
 const GRID_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480 };
 const GRID_COLS = { lg: 12, md: 10, sm: 6, xs: 4 };
+const AUTO_REFRESH_BATCH_SIZE = 3;
 
 function getColsForWidth(width: number): number {
   if (width >= GRID_BREAKPOINTS.lg) return GRID_COLS.lg;
@@ -25,14 +26,25 @@ function getColsForWidth(width: number): number {
   return GRID_COLS.xs;
 }
 
+function compareMetricViewPosition(a: ScreenMetricView, b: ScreenMetricView): number {
+  if (a.binding.gridY !== b.binding.gridY) return a.binding.gridY - b.binding.gridY;
+  if (a.binding.gridX !== b.binding.gridX) return a.binding.gridX - b.binding.gridX;
+  return a.binding.position - b.binding.position;
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return count === 1 ? singular : plural;
+}
+
 export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element {
   const state = useAppState();
   const actions = useAppActions();
   const views = state.screenMetricViews[screenId] ?? [];
+  const metricRefreshErrors = state.metricRefreshErrors ?? {};
   const [editMode, setEditMode] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [compact, setCompact] = useState(false);
+  const [compact, setCompact] = useState(true);
   const [showToolsPanel, setShowToolsPanel] = useState(false);
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
@@ -46,23 +58,80 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
     }
   }, [actions, state.metricDefinitions.length]);
 
-  // Track which metrics we've already kicked off a refresh for so that
-  // view reloads (which create a new `views` reference) don't re-trigger
-  // duplicate refresh attempts in a cascade.
-  const refreshedRef = useRef(new Set<string>());
+  const autoRefreshTrackedRef = useRef(new Set<string>());
+  const [autoRefreshTrackedIds, setAutoRefreshTrackedIds] = useState<string[]>([]);
   useEffect(() => {
-    refreshedRef.current = new Set<string>();
+    autoRefreshTrackedRef.current = new Set<string>();
+    setAutoRefreshTrackedIds([]);
   }, [screenId]);
 
+  const orderedViews = useMemo(() => [...views].sort(compareMetricViewPosition), [views]);
+  const autoRefreshTrackedSet = useMemo(() => new Set(autoRefreshTrackedIds), [autoRefreshTrackedIds]);
+  const blockedRefreshCount = orderedViews.filter(
+    (view) =>
+      view.isStale &&
+      !view.refreshInProgress &&
+      (view.latestSnapshot?.status === "failed" || Boolean(metricRefreshErrors[view.definition.id]))
+  ).length;
+  const pendingScheduledCount = orderedViews.filter(
+    (view) =>
+      view.isStale &&
+      !view.refreshInProgress &&
+      autoRefreshTrackedSet.has(view.definition.id) &&
+      view.latestSnapshot?.status !== "failed" &&
+      !metricRefreshErrors[view.definition.id]
+  ).length;
+  const activeRefreshCount = orderedViews.filter((view) => view.refreshInProgress).length;
+  const waitingRefreshCount = orderedViews.filter(
+    (view) => view.isStale && !view.refreshInProgress && !autoRefreshTrackedSet.has(view.definition.id)
+  ).length;
+  const visibleLoadingCount = activeRefreshCount + pendingScheduledCount;
+  const freshWidgetCount = Math.max(0, orderedViews.length - visibleLoadingCount - waitingRefreshCount - blockedRefreshCount);
+  const hasUnsettledWidgets = orderedViews.some((view) => view.refreshInProgress || view.isStale);
+
   useEffect(() => {
-    if (views.length === 0) return;
-    const staleMetrics = views.filter((v) => v.isStale && !v.refreshInProgress);
-    for (const view of staleMetrics) {
-      if (refreshedRef.current.has(view.definition.id)) continue;
-      refreshedRef.current.add(view.definition.id);
+    if (orderedViews.length === 0) return;
+
+    const nextTracked = new Set(autoRefreshTrackedRef.current);
+    let changed = false;
+
+    for (const view of orderedViews) {
+      const metricId = view.definition.id;
+      if (view.refreshInProgress) {
+        if (!nextTracked.has(metricId)) {
+          nextTracked.add(metricId);
+          changed = true;
+        }
+        continue;
+      }
+      if (!view.isStale && nextTracked.delete(metricId)) {
+        changed = true;
+      }
+    }
+
+    const availableSlots = Math.max(0, AUTO_REFRESH_BATCH_SIZE - orderedViews.filter((view) => view.refreshInProgress).length);
+    const nextBatch = availableSlots > 0
+      ? orderedViews
+        .filter((view) => view.isStale && !view.refreshInProgress && !nextTracked.has(view.definition.id))
+        .slice(0, availableSlots)
+      : [];
+
+    if (nextBatch.length > 0) {
+      changed = true;
+      for (const view of nextBatch) {
+        nextTracked.add(view.definition.id);
+      }
+    }
+
+    if (!changed) return;
+
+    autoRefreshTrackedRef.current = nextTracked;
+    setAutoRefreshTrackedIds([...nextTracked]);
+
+    for (const view of nextBatch) {
       void actions.refreshMetric(view.definition.id).catch(() => {});
     }
-  }, [views, actions]);
+  }, [orderedViews, actions]);
 
   // Scroll-to-metric when triggered from OmniSearch
   useEffect(() => {
@@ -299,6 +368,23 @@ export function DashboardScreen({ screenId }: DashboardScreenProps): JSX.Element
           </>
         )}
       </div>
+
+      {hasUnsettledWidgets && (
+        <div className="dashboard-load-status" role="status" aria-live="polite">
+          <strong>Widget load</strong>
+          <span>
+            {visibleLoadingCount} loading now, {waitingRefreshCount} left to load, {freshWidgetCount} ready.
+            {" "}
+            Batching {AUTO_REFRESH_BATCH_SIZE} at a time from top to bottom.
+            {blockedRefreshCount > 0 && (
+              <>
+                {" "}
+                {blockedRefreshCount} {pluralize(blockedRefreshCount, "widget")} need manual retry.
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
       {editMode && showToolsPanel && (
         <div className="dashboard-toolbar-panel">

@@ -115,7 +115,7 @@ const QUESTIONS: { group: string; layer: "operating" | "deeper"; items: CeoQuest
         number: 11,
         title: "The Compound Effect",
         coreQuestion: "Of everything I'm doing this week, what will still be producing value in a year?",
-        sharpenerQuestion: "What am I doing this week that will still be producing value in a year?",
+        sharpenerQuestion: "What percentage of my week is spent on things that compound vs. things that expire?",
         context:
           "Some activities produce value today and that's it. Some produce value that grows over time. A talk is linear — you give it and it's done. A case study is compounding — every one makes the next sale easier. A second leader is compounding — every hour invested pays dividends for years. Ruthlessly shift time toward compounding activities.",
         layer: "deeper"

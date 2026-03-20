@@ -140,6 +140,26 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
       },
       {
         number: 13,
+        title: "Make the scoreboard visible",
+        description:
+          "If nobody on your team can tell whether they're winning or losing on any given week, you haven't defined the game. Clear metrics and rocks turn ambiguity into accountability — and let good people self-correct before you have to intervene.",
+        redFlag:
+          "You ask someone how their quarter is going and they answer with activity instead of outcomes.",
+        spotlight:
+          "Ask each of your direct reports this week: \"Are you winning or losing right now?\" If they hesitate, or answer with what they've been busy doing instead of where they stand against a clear target, the scoreboard is broken. People can't perform at their best when the goal is fuzzy. Define the three to five numbers that matter for each role, make them visible, and review them weekly. The scoreboard doesn't create pressure — it creates clarity. And clarity is a gift."
+      },
+      {
+        number: 14,
+        title: "Ask for what you need",
+        description:
+          "Your growth rate is limited by your willingness to ask. Ask customers for referrals, testimonials, and case studies. Ask your team for more. Ask partners to commit. The value you deliver earns you the right to ask — but only if you actually do it.",
+        redFlag:
+          "A customer told you they loved the work and you said \"thanks\" instead of \"would you introduce me to someone who needs this?\"",
+        spotlight:
+          "Think about your last ten client interactions. In how many did you make a specific ask — a referral, a testimonial, a case study, an introduction? If the number is low, you're leaving compound growth on the table. You're comfortable delivering value. The muscle you need to build is requesting value back. Not aggressively — but consistently and unapologetically. Every unasked ask is a missed flywheel turn."
+      },
+      {
+        number: 15,
         title: "Hire ahead of the curve",
         description:
           "Recruiting is the single highest-leverage CEO activity. You can't delegate outcomes to people you haven't hired yet. Treat your pipeline of people like you treat your pipeline of revenue.",
@@ -154,7 +174,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
     group: "The CEO — Self-Management",
     items: [
       {
-        number: 14,
+        number: 16,
         title: "Work on the company, not in it",
         description:
           "Your competence is your biggest trap. Every hour in execution is an hour not spent on leverage.",
@@ -163,7 +183,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Audit your last week honestly. How many hours did you spend doing work that someone else could do — maybe not as well, but well enough? That gap between \"good enough\" and \"perfect\" is where your leverage dies. Your job isn't to produce the best work — it's to build the system that produces good work without you."
       },
       {
-        number: 15,
+        number: 17,
         title: "Make yourself replaceable",
         description:
           "Every time you do something, ask how someone else does it next time. Your job is to build the machine, not be it.",
@@ -173,7 +193,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Pick one thing you did this week that only you can do. Now ask: is that actually true, or is it just that no one else has been shown how? Before you move on, spend 15 minutes documenting the decision framework or recording a quick Loom. The compound interest on replaceability is enormous — every playbook you write buys back future hours permanently."
       },
       {
-        number: 16,
+        number: 18,
         title: "Protect the compounding stuff",
         description:
           "Relationships, nurture systems, case studies — these compound quietly. Don't sacrifice them for what feels urgent today.",
@@ -183,7 +203,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "The urgent will always crowd out the important unless you defend it structurally. Look at your calendar for the next two weeks. Is there protected time for the things that compound — relationship nurture, content creation, case study collection? If it's not on the calendar, it's not real. The things that compound are invisible until they're not — and by then you've either built the asset or you haven't."
       },
       {
-        number: 17,
+        number: 19,
         title: "Say no to good things",
         description:
           "Killing zombies is easy. The real discipline is declining attractive opportunities that don't fit. Every yes is a no to something else — make the trade-off explicit.",
@@ -193,7 +213,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Think about the last opportunity you said yes to. Now name what you implicitly said no to by taking it on. If you can't name the trade-off, you didn't make a decision — you just accumulated. The discipline isn't saying no to bad ideas. It's saying no to good ideas that don't fit the current bet. Practice the phrase: \"That's a great idea — and we're not doing it this quarter.\""
       },
       {
-        number: 18,
+        number: 20,
         title: "Kill things explicitly",
         description:
           "No zombie projects draining focus. If it's not a yes, make it a declared no.",
@@ -203,7 +223,7 @@ const PRINCIPLES: { group: string; items: Principle[] }[] = [
           "Right now, name three initiatives that are technically still alive but haven't received real attention in the last month. Those are your zombies. They're consuming mental bandwidth and giving your team ambiguous signals. Send the message today: \"We're stopping X. Here's why. Here's what we're focusing on instead.\" The clarity is a gift to everyone, including yourself."
       },
       {
-        number: 19,
+        number: 21,
         title: "Protect your energy for decisions",
         description:
           "Decisions compound more than production. Guard your decision-making capacity like the scarce resource it is.",
@@ -254,7 +274,7 @@ export function CeoPrinciplesScreen(): JSX.Element {
       <div className="screen-header">
         <h2>CEO Operating Principles</h2>
         <p>
-          Nineteen principles distilled from coaching — honest, first-principles
+          Twenty-one principles distilled from coaching — honest, first-principles
           guidance to return to regularly.
         </p>
       </div>

@@ -1545,9 +1545,32 @@ button.primary {
 .metric-link-btn:hover { color: var(--accent-strong); }
 
 .dashboard-screen {
-  gap: 0;
+  gap: 0.75rem;
   position: relative;
   min-height: 100%;
+}
+
+.dashboard-load-status {
+  margin-right: 7rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--panel), var(--bg));
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  line-height: 1.4;
+}
+
+.dashboard-load-status strong {
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .dashboard-toolbar {
@@ -1592,6 +1615,13 @@ button.primary {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+@media (max-width: 720px) {
+  .dashboard-load-status {
+    margin-right: 0;
+    padding-right: 4.25rem;
+  }
 }
 
 /* Metric library drawer — overlays from right, doesn't affect grid width */
