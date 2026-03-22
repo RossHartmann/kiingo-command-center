@@ -1681,6 +1681,45 @@ fn migration_run_rollback(
         .map_err(to_client_error)
 }
 
+#[tauri::command]
+async fn tailscale_send_db(
+    state: tauri::State<'_, AppState>,
+    peer: String,
+) -> Result<String, String> {
+    let db_path = state.runner.app_data_dir().join("state.sqlite");
+    let backup_path = std::env::temp_dir().join("kiingo-state-transfer.sqlite");
+
+    // Create a safe backup using SQLite's .backup command
+    let backup_status = tokio::process::Command::new("sqlite3")
+        .arg(&db_path)
+        .arg(format!(".backup '{}'", backup_path.display()))
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run sqlite3 backup: {e}"))?;
+
+    if !backup_status.status.success() {
+        let stderr = String::from_utf8_lossy(&backup_status.stderr);
+        return Err(format!("SQLite backup failed: {stderr}"));
+    }
+
+    // Send via Tailscale file transfer
+    let send_status = tokio::process::Command::new("tailscale")
+        .args(["file", "cp", backup_path.to_str().unwrap(), &format!("{peer}:")])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run tailscale file cp: {e}"))?;
+
+    // Clean up backup
+    let _ = std::fs::remove_file(&backup_path);
+
+    if !send_status.status.success() {
+        let stderr = String::from_utf8_lossy(&send_status.stderr);
+        return Err(format!("Tailscale transfer failed: {stderr}"));
+    }
+
+    Ok("Database sent successfully".to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -1895,7 +1934,8 @@ pub fn run() {
             migration_plan_create,
             migration_run_start,
             migration_run_get,
-            migration_run_rollback
+            migration_run_rollback,
+            tailscale_send_db
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");

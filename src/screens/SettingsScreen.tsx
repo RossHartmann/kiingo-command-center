@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { clearProviderToken, hasProviderToken, saveProviderToken } from "../lib/tauriClient";
+import { clearProviderToken, hasProviderToken, saveProviderToken, tailscaleSendDb } from "../lib/tauriClient";
 import { useAppActions, useAppState } from "../state/appState";
 
 export function SettingsScreen(): JSX.Element {
@@ -14,6 +14,9 @@ export function SettingsScreen(): JSX.Element {
   });
   const [tokenMessage, setTokenMessage] = useState<string>();
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [tailscalePeer, setTailscalePeer] = useState("prometheus");
+  const [transferStatus, setTransferStatus] = useState<{ message: string; isError: boolean } | null>(null);
+  const [transferring, setTransferring] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -118,6 +121,42 @@ export function SettingsScreen(): JSX.Element {
           </label>
         </div>
         {tokenMessage && <div className="banner info">{tokenMessage}</div>}
+      </div>
+
+      {/* Database Transfer */}
+      <div className="settings-section">
+        <h3>Database Transfer</h3>
+        <p className="settings-hint">
+          Send the SQLite database to another machine via Tailscale.
+          The recipient must accept the file via the Tailscale tray icon, then place it at
+          the app data directory (e.g. <code>C:\Users\Ross\AppData\Roaming\com.kiingo.localcli\state.sqlite</code> on Windows).
+        </p>
+        <div className="settings-inline">
+          <input
+            placeholder="Tailscale peer name"
+            value={tailscalePeer}
+            onChange={(event) => setTailscalePeer(event.target.value)}
+          />
+          <button
+            type="button"
+            disabled={transferring || !tailscalePeer.trim()}
+            onClick={() => {
+              setTransferring(true);
+              setTransferStatus(null);
+              void tailscaleSendDb(tailscalePeer.trim())
+                .then((msg) => setTransferStatus({ message: msg, isError: false }))
+                .catch((err: unknown) => setTransferStatus({ message: String(err), isError: true }))
+                .finally(() => setTransferring(false));
+            }}
+          >
+            {transferring ? "Sending..." : "Send database"}
+          </button>
+        </div>
+        {transferStatus && (
+          <div className={`banner ${transferStatus.isError ? "error" : "info"}`}>
+            {transferStatus.message}
+          </div>
+        )}
       </div>
 
       {/* Advanced toggle */}

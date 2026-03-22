@@ -5403,3 +5403,11 @@ export async function migrationRunRollback(runId: EntityId, reason?: string, ide
   persistMockStore();
   return run;
 }
+
+// ── Tailscale database transfer ──────────────────────────────────────
+export async function tailscaleSendDb(peer: string): Promise<string> {
+  if (IS_TAURI) {
+    return tauriInvoke("tailscale_send_db", { peer });
+  }
+  return "Mock: database sent";
+}

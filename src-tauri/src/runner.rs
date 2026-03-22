@@ -244,6 +244,10 @@ impl RunnerCore {
         Ok(this)
     }
 
+    pub fn app_data_dir(&self) -> &Path {
+        &self.app_data_dir
+    }
+
     pub fn start_scheduler(&self) {
         self.scheduler.start();
     }
